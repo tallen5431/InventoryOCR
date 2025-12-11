@@ -1,0 +1,17 @@
+# Core app
+dash~=2.17
+dash-bootstrap-components~=1.6
+
+# Image processing
+Pillow~=10.4
+numpy>=1.26,<3.0
+opencv-python~=4.10
+
+# OCR (Python bindings; needs Tesseract-OCR installed separately)
+pytesseract~=0.3.13
+
+# Prod server (optional; your StartApp.bat supports it)
+waitress~=2.1
+
+# Compatibility for older Python versions
+typing-extensions>=4.8 ; python_version < "3.11"
