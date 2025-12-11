@@ -131,13 +131,14 @@ def dashboard_layout():
     return dbc.Container(
         [
             dcc.Store(id="refresh-seq"),
-            html.H2("📦 Inventory Tracker", className="mt-2 mb-2 text-center app-title"),
+            html.H2("📦 Inventory Tracker", className="mt-2 mb-3 text-center app-title"),
             kpi_bar(),
             dbc.Row(
                 [
-                    dbc.Col(sidebar_form(), width=4, className="pe-2"),
-                    dbc.Col([inventory_table()], width=8, className="ps-2"),
-                ]
+                    dbc.Col(sidebar_form(), xs=12, sm=12, md=12, lg=4, xl=4, className="mb-3 mb-lg-0"),
+                    dbc.Col([inventory_table()], xs=12, sm=12, md=12, lg=8, xl=8),
+                ],
+                className="g-3",
             ),
             dbc.Row([dbc.Col(detail_panel(), width=12)], className="mt-4"),
         ],

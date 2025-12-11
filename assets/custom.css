@@ -1,0 +1,342 @@
+/* Mobile-First Responsive Improvements for Inventory OCR */
+
+/* ============================================
+   GENERAL MOBILE OPTIMIZATIONS
+   ============================================ */
+
+/* Better touch targets for mobile */
+@media (max-width: 768px) {
+    /* Increase button touch targets */
+    .btn {
+        min-height: 44px;
+        padding: 10px 16px !important;
+        font-size: 16px !important;
+    }
+
+    /* Improve input field sizing */
+    input, textarea, select {
+        min-height: 44px;
+        font-size: 16px !important; /* Prevents iOS zoom on input focus */
+    }
+
+    /* Better spacing on mobile */
+    .container-fluid {
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+    }
+
+    /* Optimize card spacing */
+    .card {
+        margin-bottom: 1rem;
+    }
+
+    .card-body {
+        padding: 1rem;
+    }
+
+    /* Better navbar on mobile */
+    .navbar {
+        padding: 0.5rem 1rem;
+    }
+
+    .navbar-brand {
+        font-size: 1.1rem;
+    }
+}
+
+/* ============================================
+   KPI CARDS
+   ============================================ */
+
+/* Improve KPI card readability on mobile */
+.kpi-number {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.kpi-sub {
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+@media (max-width: 576px) {
+    .kpi-number {
+        font-size: 1.75rem;
+    }
+
+    .kpi-sub {
+        font-size: 0.85rem;
+    }
+}
+
+/* ============================================
+   INVENTORY TABLE OPTIMIZATIONS
+   ============================================ */
+
+/* Better table scrolling on mobile */
+.dash-table-container {
+    -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 768px) {
+    /* Reduce table padding on mobile */
+    .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner td,
+    .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner th {
+        padding: 8px 6px !important;
+        font-size: 13px !important;
+    }
+
+    /* Make images smaller on mobile */
+    .dash-table-container img {
+        max-width: 60px !important;
+        height: auto;
+    }
+
+    /* Adjust table height for mobile */
+    .dash-table-container .dash-spreadsheet-container {
+        max-height: 60vh !important;
+    }
+}
+
+@media (max-width: 576px) {
+    /* Even more compact on small phones */
+    .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner td,
+    .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner th {
+        padding: 6px 4px !important;
+        font-size: 12px !important;
+    }
+}
+
+/* ============================================
+   FORM IMPROVEMENTS
+   ============================================ */
+
+/* Better label spacing */
+label {
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+}
+
+/* Upload area improvements */
+@media (max-width: 768px) {
+    #image-upload {
+        min-height: 80px !important;
+    }
+
+    #ocr-lab-upload {
+        min-height: 80px !important;
+    }
+}
+
+/* Image preview sizing */
+#image-preview {
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* ============================================
+   OCR LAB OPTIMIZATIONS
+   ============================================ */
+
+/* Better slider controls on mobile */
+@media (max-width: 768px) {
+    .rc-slider {
+        margin: 10px 0 15px 0;
+    }
+
+    .rc-slider-handle {
+        width: 20px;
+        height: 20px;
+        margin-top: -8px;
+    }
+
+    /* Tab improvements */
+    .tab {
+        padding: 12px 16px !important;
+        font-size: 14px !important;
+    }
+}
+
+/* OCR Lab sticky footer on mobile */
+@media (max-width: 768px) {
+    .navbar[class*="fixed-bottom"] {
+        padding: 8px 0;
+    }
+
+    .navbar[class*="fixed-bottom"] .btn {
+        margin: 4px 2px;
+        font-size: 13px !important;
+        padding: 8px 12px !important;
+        min-height: 38px;
+    }
+
+    .navbar[class*="fixed-bottom"] .container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        justify-content: center;
+    }
+}
+
+/* OCR Lab image preview cards */
+@media (max-width: 768px) {
+    #ocr-lab-original,
+    #ocr-lab-preview {
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+}
+
+/* ============================================
+   MODAL IMPROVEMENTS
+   ============================================ */
+
+/* Better modal sizing on mobile */
+@media (max-width: 768px) {
+    .modal-dialog {
+        margin: 0.5rem;
+        max-width: calc(100% - 1rem);
+    }
+
+    .modal-content {
+        border-radius: 12px;
+    }
+
+    .modal-body img {
+        width: 100%;
+        height: auto;
+    }
+}
+
+/* ============================================
+   UTILITY CLASSES
+   ============================================ */
+
+/* Mobile-specific utilities */
+@media (max-width: 768px) {
+    .mobile-hidden {
+        display: none !important;
+    }
+
+    .mobile-full-width {
+        width: 100% !important;
+    }
+
+    .mobile-text-center {
+        text-align: center !important;
+    }
+}
+
+/* ============================================
+   TOAST NOTIFICATIONS
+   ============================================ */
+
+/* Better toast positioning on mobile */
+@media (max-width: 768px) {
+    .toast {
+        top: 10px !important;
+        right: 10px !important;
+        left: 10px !important;
+        max-width: calc(100% - 20px) !important;
+    }
+}
+
+/* ============================================
+   ACCESSIBILITY & USABILITY
+   ============================================ */
+
+/* Improve focus states for keyboard navigation */
+button:focus,
+input:focus,
+select:focus,
+textarea:focus,
+a:focus {
+    outline: 2px solid #0d6efd;
+    outline-offset: 2px;
+}
+
+/* Better checkbox and radio button sizing */
+input[type="checkbox"],
+input[type="radio"] {
+    min-width: 18px;
+    min-height: 18px;
+}
+
+/* Switch toggle improvements */
+.form-switch .form-check-input {
+    width: 3em;
+    height: 1.5em;
+}
+
+/* ============================================
+   DARK MODE ADJUSTMENTS
+   ============================================ */
+
+/* Ensure proper contrast in dark mode */
+[data-bs-theme="dark"] .dash-table-container,
+[data-bs-theme="dark"] .card {
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ============================================
+   PERFORMANCE OPTIMIZATIONS
+   ============================================ */
+
+/* GPU acceleration for smooth scrolling */
+.dash-table-container,
+.modal-dialog,
+.navbar {
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+    will-change: transform;
+}
+
+/* Smooth transitions */
+.btn,
+.card,
+.form-control,
+.modal-content {
+    transition: all 0.2s ease-in-out;
+}
+
+/* ============================================
+   LANDSCAPE MODE OPTIMIZATIONS
+   ============================================ */
+
+@media (max-width: 768px) and (orientation: landscape) {
+    /* Reduce vertical spacing in landscape */
+    .mb-3 {
+        margin-bottom: 1rem !important;
+    }
+
+    .mt-3 {
+        margin-top: 1rem !important;
+    }
+
+    /* Adjust table height for landscape */
+    .dash-table-container .dash-spreadsheet-container {
+        max-height: 50vh !important;
+    }
+}
+
+/* ============================================
+   SMALL PHONE OPTIMIZATIONS (< 375px)
+   ============================================ */
+
+@media (max-width: 375px) {
+    /* Ultra-compact mode for very small screens */
+    h2 {
+        font-size: 1.3rem !important;
+    }
+
+    .btn {
+        font-size: 14px !important;
+        padding: 8px 12px !important;
+    }
+
+    .card-header {
+        font-size: 1rem;
+        padding: 0.75rem;
+    }
+}

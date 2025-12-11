@@ -1,5 +1,6 @@
 Tesseract-OCR/
 assets/
+!assets/*.css
 logs/
 *.csv
 *.json

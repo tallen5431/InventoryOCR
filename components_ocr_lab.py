@@ -49,6 +49,51 @@ def ocr_lab_layout():
 
             dbc.Row(
                 [
+                    # Sticky Preview (shown first on mobile)
+                    dbc.Col(
+                        [
+                            html.Div(
+                                _card(
+                                    "Images",
+                                    dcc.Loading(
+                                        type="default",
+                                        children=dbc.Row(
+                                            [
+                                                dbc.Col(
+                                                    [
+                                                        html.Div("Original", className="text-muted small mb-2"),
+                                                        html.Img(id="ocr-lab-original", style={"width": "100%", "borderRadius": "10px"}),
+                                                    ],
+                                                    xs=12,
+                                                    sm=6,
+                                                    md=6,
+                                                    className="mb-3",
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        html.Div(["Preview ", html.Span(id="ocr-lab-timing", className="ms-2 text-muted small")], className="mb-2"),
+                                                        html.Img(id="ocr-lab-preview", style={"width": "100%", "borderRadius": "10px"}),
+                                                    ],
+                                                    xs=12,
+                                                    sm=6,
+                                                    md=6,
+                                                ),
+                                            ],
+                                            className="g-3",
+                                        ),
+                                    ),
+                                ),
+                                style={"position": "sticky", "top": "70px", "zIndex": 1000},
+                                className="mb-3 mb-lg-0",
+                            ),
+                        ],
+                        xs=12,
+                        sm=12,
+                        md=12,
+                        lg=8,
+                        xl=8,
+                        className="order-1 order-lg-2",
+                    ),
                     # Controls + Text
                     dbc.Col(
                         [
@@ -77,22 +122,25 @@ def ocr_lab_layout():
                                                             value=None,
                                                             inline=True,
                                                         ),
+                                                        xs=12,
                                                         md=8,
+                                                        className="mb-2 mb-md-0",
                                                     ),
                                                     dbc.Col(
                                                         html.Div(
                                                             [
-                                                                dbc.Button("↻ Update preview", id="ocr-preview-refresh",
-                                                                           color="secondary", size="sm", className="me-2"),
+                                                                dbc.Button("↻ Update", id="ocr-preview-refresh",
+                                                                           color="secondary", size="sm", className="me-2 w-auto"),
                                                                 dbc.Button("Reset", id="ocr-reset",
-                                                                           color="outline-secondary", size="sm"),
+                                                                           color="outline-secondary", size="sm", className="w-auto"),
                                                             ],
-                                                            className="d-flex justify-content-end",
+                                                            className="d-flex justify-content-end flex-wrap gap-1",
                                                         ),
+                                                        xs=12,
                                                         md=4,
                                                     ),
                                                 ],
-                                                className="g-2 mb-2 align-items-center",
+                                                className="g-2 mb-3 align-items-center",
                                             ),
                                             # Live toggle
                                             dbc.Checklist(
@@ -222,7 +270,10 @@ def ocr_lab_layout():
                                                             value="fast",
                                                             inline=True,
                                                         ),
+                                                        xs=12,
+                                                        sm=6,
                                                         md=8,
+                                                        className="mb-2 mb-sm-0",
                                                     ),
                                                     dbc.Col(
                                                         dcc.Dropdown(
@@ -236,10 +287,12 @@ def ocr_lab_layout():
                                                             value="eng",
                                                             clearable=False,
                                                         ),
+                                                        xs=12,
+                                                        sm=6,
                                                         md=4,
                                                     ),
                                                 ],
-                                                className="g-2 mb-2",
+                                                className="g-2 mb-3",
                                             ),
                                             dcc.Dropdown(
                                                 id="ocr-psm",
@@ -292,44 +345,12 @@ def ocr_lab_layout():
                                 ],
                             ),
                         ],
-                        md=4,
-                        className="order-2 order-md-1",
-                    ),
-
-                    # Sticky Preview
-                    dbc.Col(
-                        [
-                            html.Div(
-                                _card(
-                                    "Images",
-                                    dcc.Loading(
-                                        type="default",
-                                        children=dbc.Row(
-                                            [
-                                                dbc.Col(
-                                                    [
-                                                        html.Div("Original", className="text-muted small"),
-                                                        html.Img(id="ocr-lab-original", style={"width": "100%", "borderRadius": "10px"}),
-                                                    ],
-                                                    md=6,
-                                                    className="mb-3",
-                                                ),
-                                                dbc.Col(
-                                                    [
-                                                        html.Div(["Preview ", html.Span(id="ocr-lab-timing", className="ms-2 text-muted small")]),
-                                                        html.Img(id="ocr-lab-preview", style={"width": "100%", "borderRadius": "10px"}),
-                                                    ],
-                                                    md=6,
-                                                ),
-                                            ]
-                                        ),
-                                    ),
-                                ),
-                                style={"position": "sticky", "top": "70px", "zIndex": 1000},
-                            ),
-                        ],
-                        md=8,
-                        className="order-1 order-md-2",
+                        xs=12,
+                        sm=12,
+                        md=12,
+                        lg=4,
+                        xl=4,
+                        className="order-2 order-lg-1",
                     ),
                 ],
                 className="g-3",

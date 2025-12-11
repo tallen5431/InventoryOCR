@@ -14,14 +14,18 @@ def kpi_bar():
                                 [
                                     html.I(className="bi bi-box-seam me-2 text-primary"),
                                     html.Span("Total Items", className="kpi-sub"),
-                                ]
+                                ],
+                                className="d-flex align-items-center",
                             ),
                             html.Div(id="kpi-total", className="kpi-number mt-1 text-primary"),
                         ]
                     ),
                     className="h-100 shadow-sm",
                 ),
+                xs=12,
+                sm=6,
                 md=6,
+                lg=6,
                 className="mb-3",
             ),
             dbc.Col(
@@ -32,18 +36,22 @@ def kpi_bar():
                                 [
                                     html.I(className="bi bi-exclamation-triangle-fill me-2 text-warning"),
                                     html.Span(f"Low Stock (< {LOW_STOCK_THRESHOLD})", className="kpi-sub"),
-                                ]
+                                ],
+                                className="d-flex align-items-center",
                             ),
                             html.Div(id="kpi-low", className="kpi-number mt-1 text-warning"),
                         ]
                     ),
                     className="h-100 shadow-sm",
                 ),
+                xs=12,
+                sm=6,
                 md=6,
+                lg=6,
                 className="mb-3",
             ),
         ],
-        className="g-3",
+        className="g-3 mb-2",
     )
 
 def sidebar_form():
@@ -81,23 +89,33 @@ def sidebar_form():
                                 [
                                     dbc.Col(
                                         dbc.Button(
-                                            "Save", id="save-button", color="primary", className="w-100 mt-3"
+                                            "💾 Save", id="save-button", color="primary", className="w-100 mt-3"
                                         ),
-                                        width=6,
+                                        xs=12,
+                                        sm=12,
+                                        md=6,
+                                        lg=6,
                                     ),
                                     dbc.Col(
                                         dbc.Button(
-                                            "Delete", id="delete-button", color="danger", className="w-100 mt-3"
+                                            "🗑️ Delete", id="delete-button", color="danger", className="w-100 mt-3"
                                         ),
-                                        width=3,
+                                        xs=6,
+                                        sm=6,
+                                        md=3,
+                                        lg=3,
                                     ),
                                     dbc.Col(
                                         dbc.Button(
-                                            "Cancel", id="cancel-button", color="secondary", className="w-100 mt-3"
+                                            "✖️ Cancel", id="cancel-button", color="secondary", className="w-100 mt-3"
                                         ),
-                                        width=3,
+                                        xs=6,
+                                        sm=6,
+                                        md=3,
+                                        lg=3,
                                     ),
-                                ]
+                                ],
+                                className="g-2",
                             ),
                         ]
                     ),
@@ -128,9 +146,9 @@ def inventory_table():
         {"name": "", "id": "select", "presentation": "markdown"},
         {"name": "Image", "id": "image", "presentation": "markdown"},
         {"name": "Name", "id": "name"},
-        {"name": "Description", "id": "description"},
+        {"name": "Description", "id": "description", "hideable": True},
         {"name": "Qty", "id": "qty", "type": "numeric"},
-        {"name": "OCR Text", "id": "ocr_text"},
+        {"name": "OCR Text", "id": "ocr_text", "hideable": True},
         {"name": "id", "id": "id", "hideable": True},
         {"name": "image_filename", "id": "image_filename", "hideable": True},
         {"name": "full_src", "id": "full_src", "hideable": True},
@@ -146,6 +164,7 @@ def inventory_table():
         tooltip_duration=None,
         sort_action="native",
         filter_action="native",
+        hidden_columns=["id", "image_filename", "full_src"],
         style_table={
             "height": "70vh",
             "overflowY": "auto",
@@ -160,30 +179,36 @@ def inventory_table():
             "backgroundColor": "var(--bs-tertiary-bg)",
             "fontWeight": "700",
             "borderBottom": "1px solid var(--bs-border-color)",
+            "padding": "12px 8px",
         },
         style_cell={
-            "padding": "10px",
-            "fontSize": 15,
+            "padding": "12px 8px",
+            "fontSize": 14,
             "whiteSpace": "normal",
             "height": "auto",
             "textAlign": "left",
             "color": "var(--bs-body-color)",
             "backgroundColor": "var(--bs-body-bg)",
             "borderColor": "var(--bs-border-color)",
+            "minWidth": "80px",
         },
         style_cell_conditional=[
-            {"if": {"column_id": "select"}, "textAlign": "center", "width": 70, "minWidth": 70, "maxWidth": 70},
-            {"if": {"column_id": "description"}, "maxWidth": 300, "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
-            {"if": {"column_id": "ocr_text"}, "maxWidth": 500, "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
-            {"if": {"column_id": "image"}, "maxWidth": 150, "textAlign": "center"},
-            {"if": {"column_id": "qty"}, "textAlign": "center", "width": 80},
+            {"if": {"column_id": "select"}, "textAlign": "center", "width": "60px", "minWidth": "60px", "maxWidth": "60px"},
+            {"if": {"column_id": "name"}, "minWidth": "120px", "maxWidth": "250px", "fontWeight": "500"},
+            {"if": {"column_id": "description"}, "minWidth": "150px", "maxWidth": "300px", "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
+            {"if": {"column_id": "ocr_text"}, "minWidth": "150px", "maxWidth": "400px", "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
+            {"if": {"column_id": "image"}, "width": "100px", "minWidth": "80px", "maxWidth": "120px", "textAlign": "center"},
+            {"if": {"column_id": "qty"}, "textAlign": "center", "width": "70px", "minWidth": "70px", "maxWidth": "90px"},
         ],
         style_data_conditional=[
             {"if": {"row_index": "odd"}, "backgroundColor": "var(--bs-table-striped-bg)"},
         ],
-        css=[{"selector": "td div", "rule": "overflow: visible; white-space: normal;"}],
+        css=[
+            {"selector": "td div", "rule": "overflow: visible; white-space: normal;"},
+            {"selector": ".dash-table-container", "rule": "font-size: 14px;"},
+        ],
     )
-    return html.Div([table])
+    return html.Div([table], className="table-responsive")
 
 def detail_panel():
     return html.Div(
