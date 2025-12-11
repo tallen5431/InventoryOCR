@@ -3,7 +3,7 @@ import os, time
 from dash import Input, Output, State, ctx, no_update
 from dash.exceptions import PreventUpdate
 import data
-from utils import save_image, get_thumbnail_url
+from utils import save_image, get_thumbnail_url, get_image_url
 from config import LOW_STOCK_THRESHOLD, ASSET_IMAGE_PATH, OCR_TEXT_MAX_CHARS
 
 URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").rstrip("/")
@@ -24,16 +24,26 @@ def _build_rows(filtered):
         row = dict(r)
         row["select"] = "🔘"
 
-        # Always recompute thumbnail URL so we pick up the correct /inventory prefix
-        image_filename = row.get("image_filename")
-        thumb_url = get_thumbnail_url(image_filename)
-        row["image"] = f"![thumb]({thumb_url})" if thumb_url else ""
+        # Handle images array (new) or single image_filename (backward compatibility)
+        images = row.get("images", [])
+        if not images:
+            # Check for old single image_filename field
+            old_img = row.get("image_filename")
+            if old_img:
+                images = [old_img]
 
-        # Full-size image URL uses the same /inventory/assets/... base
-        if image_filename:
-            row["full_src"] = f"{ASSET_URL_BASE}/images/{image_filename}"
+        # Show primary (first) image thumbnail in table
+        if images:
+            primary_img = images[0]
+            thumb_url = get_thumbnail_url(primary_img)
+            img_count = len(images)
+            badge = f" ({img_count})" if img_count > 1 else ""
+            row["image"] = f"![thumb]({thumb_url}){badge}" if thumb_url else ""
+            # Store all image URLs for modal
+            row["all_images"] = [get_image_url(img) for img in images]
         else:
-            row["full_src"] = ""
+            row["image"] = ""
+            row["all_images"] = []
 
         full_ocr = (row.get("ocr_text") or "").strip()
         if len(full_ocr) > OCR_TEXT_MAX_CHARS:
@@ -56,6 +66,7 @@ def register_callbacks(app):
             Output("item-desc", "value"),
             Output("item-qty", "value"),
             Output("editing-id", "data"),
+            Output("current-images", "data"),
             Output("action-toast", "is_open"),
             Output("action-toast", "header"),
             Output("action-toast", "icon"),
@@ -75,17 +86,18 @@ def register_callbacks(app):
             State("item-desc", "value"),
             State("item-qty", "value"),
             State("image-upload", "contents"),
+            State("current-images", "data"),
             State("editing-id", "data"),
             State("inventory-table", "data"),
         ],
         prevent_initial_call=False,
     )
     def manage_table(pathname, save_clicks, delete_clicks, sel_rows, cancel_clicks,
-                     search, _refresh_seq, name, desc, qty, img, editing_id, current_rows):
+                     search, _refresh_seq, name, desc, qty, img_contents, current_images, editing_id, current_rows):
         triggered = (ctx.triggered_id or "")
         toast_open, toast_header, toast_icon, toast_msg = False, "", "info", ""
         next_sel = sel_rows or []
-        next_name = next_desc = next_qty = next_editing = no_update
+        next_name = next_desc = next_qty = next_editing = next_images = no_update
 
         # Always load latest items
         items = data.inventory()
@@ -99,31 +111,34 @@ def register_callbacks(app):
                 ds = (desc or "").strip()
                 nqty = _parse_qty(qty)
 
-                # keep current image if not uploading a new one
-                img_fname = None
-                if img:
-                    saved = save_image(img, ASSET_IMAGE_PATH, base_name=nm)
-                    img_fname = saved["filename"]
-                elif editing_id:
-                    existing = next((r for r in (current_rows or []) if r.get("id") == editing_id), None)
-                    img_fname = (existing or {}).get("image_filename")
+                # Handle multiple image uploads
+                img_filenames = current_images or []
+                if img_contents:
+                    # Support both single and multiple uploads
+                    if isinstance(img_contents, list):
+                        for img_content in img_contents:
+                            saved = save_image(img_content, ASSET_IMAGE_PATH, base_name=nm)
+                            img_filenames.append(saved["filename"])
+                    else:
+                        saved = save_image(img_contents, ASSET_IMAGE_PATH, base_name=nm)
+                        img_filenames.append(saved["filename"])
 
                 try:
                     if editing_id:
                         # preserve existing ocr_text if not part of this form
                         existing_row = next((r for r in items if r.get("id") == editing_id), {})
                         existing_ocr = existing_row.get("ocr_text", "")
-                        data.update_item(editing_id, nm, ds, nqty, img_fname, existing_ocr)
-                        toast_header, toast_icon, toast_msg = "Item Updated", "success", f"“{nm}” updated."
+                        data.update_item(editing_id, nm, ds, nqty, img_filenames, existing_ocr)
+                        toast_header, toast_icon, toast_msg = "Item Updated", "success", f""{nm}" updated."
                     else:
-                        data.add_item(nm, ds, nqty, img_fname, "")
-                        toast_header, toast_icon, toast_msg = "Item Added", "success", f"“{nm}” added."
+                        data.add_item(nm, ds, nqty, img_filenames, "")
+                        toast_header, toast_icon, toast_msg = "Item Added", "success", f""{nm}" added."
                 except ValueError as e:
                     toast_header, toast_icon, toast_msg = "Duplicate Name", "danger", str(e)
 
                 toast_open = True
                 # clear form
-                next_sel, next_name, next_desc, next_qty, next_editing = [], "", "", None, None
+                next_sel, next_name, next_desc, next_qty, next_editing, next_images = [], "", "", None, None, []
                 # refresh items for table build
                 items = data.inventory()
 
@@ -132,13 +147,13 @@ def register_callbacks(app):
             if editing_id:
                 removed = data.remove_item(editing_id)
                 if removed:
-                    toast_open, toast_header, toast_icon, toast_msg = True, "Item Deleted", "danger", f"“{removed.get('name','')}” deleted."
-                next_sel, next_name, next_desc, next_qty, next_editing = [], "", "", None, None
+                    toast_open, toast_header, toast_icon, toast_msg = True, "Item Deleted", "danger", f""{removed.get('name','')}" deleted."
+                next_sel, next_name, next_desc, next_qty, next_editing, next_images = [], "", "", None, None, []
                 items = data.inventory()
 
         # Cancel clears form
         elif triggered == "cancel-button":
-            next_sel, next_name, next_desc, next_qty, next_editing = [], "", "", None, None
+            next_sel, next_name, next_desc, next_qty, next_editing, next_images = [], "", "", None, None, []
 
         # Selecting a row populates form
         elif triggered == "inventory-table":
@@ -148,34 +163,95 @@ def register_callbacks(app):
                     row = (current_rows or [])[idx]
                     next_name, next_desc = row.get("name", ""), row.get("description", "")
                     next_qty, next_editing = row.get("qty", None), row.get("id")
+                    # Load images from the actual data
+                    actual_row = next((r for r in items if r.get("id") == row.get("id")), {})
+                    next_images = actual_row.get("images", [])
 
         # Filter/search
         filtered = data.search(search) if search else items
         out_rows = _build_rows(filtered)
 
         return [
-            out_rows, next_sel, next_name, next_desc, next_qty, next_editing,
+            out_rows, next_sel, next_name, next_desc, next_qty, next_editing, next_images,
             toast_open, toast_header, toast_icon, toast_msg
         ]
 
-    # ---------- Image preview (upload -> preview + bridge) ----------
+    # ---------- Image gallery display ----------
     @app.callback(
-        Output("image-preview", "src"),
-        Output("image-preview", "style"),
-        Output("image-contents", "data"),
+        Output("image-gallery", "children"),
+        Output("current-images", "data", allow_duplicate=True),
+        Input("current-images", "data"),
         Input("image-upload", "contents"),
+        State("current-images", "data"),
         prevent_initial_call=False,
     )
-    def preview_image(contents):
-        if not contents:
+    def update_image_gallery(current_imgs, upload_contents, existing_imgs):
+        from dash import html as h
+        from utils import get_thumbnail_url
+
+        # Start with existing images
+        img_list = existing_imgs or []
+
+        # If this was triggered by upload, add new images
+        if ctx.triggered_id == "image-upload" and upload_contents:
+            # Note: We don't save here, just show preview
+            # Actual saving happens in save-button callback
+            pass
+
+        if not img_list:
+            return h.Div("No images yet", className="text-muted small"), img_list
+
+        # Create gallery of thumbnails with delete buttons
+        gallery_items = []
+        for i, img_filename in enumerate(img_list):
+            thumb_url = get_thumbnail_url(img_filename)
+            if thumb_url:
+                gallery_items.append(
+                    h.Div(
+                        [
+                            h.Img(src=thumb_url, className="gallery-thumb"),
+                            h.Button(
+                                "×",
+                                id={"type": "delete-image", "index": i},
+                                className="btn btn-sm btn-danger delete-img-btn",
+                                title="Remove image",
+                            ),
+                            h.Div(f"Image {i+1}", className="text-muted small text-center"),
+                        ],
+                        className="gallery-item",
+                    )
+                )
+
+        return h.Div(gallery_items, className="image-gallery-grid"), img_list
+
+    # ---------- Remove image from gallery ----------
+    @app.callback(
+        Output("current-images", "data", allow_duplicate=True),
+        Input({"type": "delete-image", "index": dash.ALL}, "n_clicks"),
+        State("current-images", "data"),
+        prevent_initial_call=True,
+    )
+    def remove_image_from_gallery(n_clicks_list, current_imgs):
+        import json
+        if not ctx.triggered or not current_imgs:
             raise PreventUpdate
-        return contents, {"maxWidth": "100%", "marginTop": "10px", "display": "block"}, contents
+
+        # Find which button was clicked
+        triggered_id = ctx.triggered_id
+        if triggered_id and isinstance(triggered_id, dict):
+            index = triggered_id.get("index")
+            if index is not None and 0 <= index < len(current_imgs):
+                current_imgs = current_imgs.copy()
+                del current_imgs[index]
+                return current_imgs
+
+        raise PreventUpdate
 
     # ---------- Full image modal ----------
     @app.callback(
         Output("image-modal", "is_open"),
         Output("image-modal-title", "children"),
-        Output("image-modal-img", "src"),
+        Output("image-carousel", "items"),
         Input("inventory-table", "active_cell"),
         State("inventory-table", "data"),
         State("image-modal", "is_open"),
@@ -188,10 +264,21 @@ def register_callbacks(app):
         if ridx is None or ridx >= len(rows or []):
             raise PreventUpdate
         row = (rows or [])[ridx]
-        src = row.get("full_src") or ""
-        if not src:
+        all_images = row.get("all_images", [])
+        if not all_images:
             raise PreventUpdate
-        return True, row.get("name", ""), src
+
+        # Create carousel items
+        carousel_items = [
+            {
+                "key": str(i),
+                "src": img_url,
+                "img_style": {"maxHeight": "70vh", "objectFit": "contain"},
+            }
+            for i, img_url in enumerate(all_images)
+        ]
+
+        return True, row.get("name", ""), carousel_items
 
     @app.callback(
         Output("image-modal", "is_open", allow_duplicate=True),
@@ -239,7 +326,7 @@ def register_callbacks(app):
                     name=match.get("name", ""),
                     description=match.get("description", ""),
                     qty=match.get("qty", 0),
-                    image_filename=match.get("image_filename"),
+                    images=match.get("images", []),
                     ocr_text=(text or ""),
                 )
         except Exception:

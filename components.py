@@ -69,11 +69,11 @@ def sidebar_form():
                             dbc.Textarea(id="item-desc", placeholder="Optional details…", rows=3),
                             dbc.Label("Quantity", className="mt-2"),
                             dbc.Input(id="item-qty", type="number", min=0, step=1),
-                            dbc.Label("Image", className="mt-3"),
+                            dbc.Label("Images", className="mt-3"),
                             dcc.Upload(
                                 id="image-upload",
-                                children=html.Div(["Drag & drop or ", html.A("browse")]),
-                                multiple=False,
+                                children=html.Div(["📸 Drag & drop or ", html.A("browse"), " (multiple images supported)"]),
+                                multiple=True,
                                 style={
                                     "border": "1px dashed #999",
                                     "padding": "12px",
@@ -81,10 +81,8 @@ def sidebar_form():
                                     "borderRadius": "8px",
                                 },
                             ),
-                            html.Img(
-                                id="image-preview",
-                                style={"maxWidth": "100%", "marginTop": "10px", "display": "none"},
-                            ),
+                            html.Div(id="image-gallery", className="mt-2"),
+                            dcc.Store(id="current-images", data=[]),
                             dbc.Row(
                                 [
                                     dbc.Col(
@@ -150,8 +148,7 @@ def inventory_table():
         {"name": "Qty", "id": "qty", "type": "numeric"},
         {"name": "OCR Text", "id": "ocr_text", "hideable": True},
         {"name": "id", "id": "id", "hideable": True},
-        {"name": "image_filename", "id": "image_filename", "hideable": True},
-        {"name": "full_src", "id": "full_src", "hideable": True},
+        {"name": "all_images", "id": "all_images", "hideable": True},
     ]
     table = dash_table.DataTable(
         id="inventory-table",
@@ -164,7 +161,7 @@ def inventory_table():
         tooltip_duration=None,
         sort_action="native",
         filter_action="native",
-        hidden_columns=["id", "image_filename", "full_src"],
+        hidden_columns=["id", "all_images"],
         style_table={
             "height": "70vh",
             "overflowY": "auto",
@@ -216,12 +213,21 @@ def detail_panel():
             dbc.Modal(
                 [
                     dbc.ModalHeader(dbc.ModalTitle(id="image-modal-title")),
-                    dbc.ModalBody(html.Img(id="image-modal-img", style={"maxWidth": "100%"})),
+                    dbc.ModalBody(
+                        dbc.Carousel(
+                            id="image-carousel",
+                            items=[],
+                            controls=True,
+                            indicators=True,
+                            interval=None,
+                            ride=False,
+                        )
+                    ),
                     dbc.ModalFooter(dbc.Button("Close", id="close-image-modal", className="ms-auto", n_clicks=0)),
                 ],
                 id="image-modal",
                 is_open=False,
-                size="lg",
+                size="xl",
                 centered=True,
                 backdrop="static",
             ),

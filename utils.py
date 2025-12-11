@@ -122,3 +122,24 @@ def get_thumbnail_url(filename: str | None) -> str:
             img.thumbnail((320, 320))
             _save_image_bytes(img, t)
     return _asset_url("thumbnails", filename) if t.exists() else ""
+
+
+def get_image_url(filename: str | None) -> str:
+    """Get the full-size image URL."""
+    if not filename:
+        return ""
+    return _asset_url("images", filename)
+
+
+def get_all_thumbnail_urls(filenames: list[str] | None) -> list[str]:
+    """Get thumbnail URLs for a list of filenames."""
+    if not filenames:
+        return []
+    return [get_thumbnail_url(f) for f in filenames if f]
+
+
+def get_all_image_urls(filenames: list[str] | None) -> list[str]:
+    """Get full-size image URLs for a list of filenames."""
+    if not filenames:
+        return []
+    return [get_image_url(f) for f in filenames if f]

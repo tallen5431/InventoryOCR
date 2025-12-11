@@ -494,7 +494,7 @@ def register_ocr_lab_callbacks(app):
                 name=cur.get("name", ""),
                 description=cur.get("description", ""),
                 qty=int(cur.get("qty", 0)),
-                image_filename=cur.get("image_filename", ""),
+                images=cur.get("images", []),
                 ocr_text=(text_val or "").strip(),
             )
             return html.Div(["Saved OCR text back to item “", html.Code(cur.get("name", "")), "”."])

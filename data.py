@@ -30,12 +30,20 @@ def inventory() -> List[Dict[str, Any]]:
     # Normalize schema
     norm = []
     for r in rows:
+        # Backward compatibility: convert single image_filename to images array
+        images = r.get("images", [])
+        if not images:
+            # Check for old single image_filename field
+            old_img = r.get("image_filename")
+            if old_img:
+                images = [old_img]
+
         norm.append({
             "id": r.get("id"),
             "name": r.get("name", ""),
             "description": r.get("description", ""),
             "qty": int(r.get("qty") or 0),
-            "image_filename": r.get("image_filename"),
+            "images": images if isinstance(images, list) else [],
             "ocr_text": r.get("ocr_text", ""),
             "thumb_url": r.get("thumb_url", ""),
         })
@@ -50,33 +58,47 @@ def _next_id(rows: List[Dict[str, Any]]) -> int:
             pass
     return mx + 1
 
-def add_item(name: str, description: str, qty: Optional[int], image_filename: Optional[str], ocr_text: str) -> Dict[str, Any]:
+def add_item(name: str, description: str, qty: Optional[int], images: Optional[List[str]], ocr_text: str) -> Dict[str, Any]:
     rows = inventory()
     # Unique by name
     key = name.strip().lower()
     if any((r.get("name","").strip().lower() == key) for r in rows):
         raise ValueError("An item with this name already exists.")
+
+    # Ensure images is a list
+    if images is None:
+        images = []
+    elif isinstance(images, str):
+        images = [images] if images else []
+
     row = {
         "id": _next_id(rows),
         "name": name.strip(),
         "description": (description or "").strip(),
         "qty": int(qty or 0),
-        "image_filename": image_filename,
+        "images": images,
         "ocr_text": ocr_text or "",
     }
     rows.append(row)
     _save(rows)
     return row
 
-def update_item(item_id: int, name: str, description: str, qty: Optional[int], image_filename: Optional[str], ocr_text: str) -> Dict[str, Any]:
+def update_item(item_id: int, name: str, description: str, qty: Optional[int], images: Optional[List[str]], ocr_text: str) -> Dict[str, Any]:
     rows = inventory()
     found = None
+
+    # Ensure images is a list
+    if images is None:
+        images = []
+    elif isinstance(images, str):
+        images = [images] if images else []
+
     for r in rows:
         if int(r.get("id") or 0) == int(item_id):
             r["name"] = (name or "").strip()
             r["description"] = (description or "").strip()
             r["qty"] = int(qty or 0)
-            r["image_filename"] = image_filename
+            r["images"] = images
             r["ocr_text"] = ocr_text or ""
             found = r
             break
@@ -96,6 +118,42 @@ def remove_item(item_id: int) -> Optional[Dict[str, Any]]:
             new.append(r)
     _save(new)
     return removed
+
+def add_image_to_item(item_id: int, image_filename: str) -> Dict[str, Any]:
+    """Add an image to an existing item's image list."""
+    rows = inventory()
+    found = None
+    for r in rows:
+        if int(r.get("id") or 0) == int(item_id):
+            images = r.get("images", [])
+            if not isinstance(images, list):
+                images = []
+            if image_filename not in images:
+                images.append(image_filename)
+            r["images"] = images
+            found = r
+            break
+    if found is None:
+        raise ValueError("Item not found.")
+    _save(rows)
+    return found
+
+def remove_image_from_item(item_id: int, image_filename: str) -> Dict[str, Any]:
+    """Remove a specific image from an item's image list."""
+    rows = inventory()
+    found = None
+    for r in rows:
+        if int(r.get("id") or 0) == int(item_id):
+            images = r.get("images", [])
+            if isinstance(images, list) and image_filename in images:
+                images.remove(image_filename)
+            r["images"] = images
+            found = r
+            break
+    if found is None:
+        raise ValueError("Item not found.")
+    _save(rows)
+    return found
 
 def search(q: str) -> List[Dict[str, Any]]:
     q = (q or "").strip().lower()
