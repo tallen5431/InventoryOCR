@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os, time
-from dash import Input, Output, State, ctx, no_update
+from dash import Input, Output, State, ctx, no_update, ALL
 from dash.exceptions import PreventUpdate
 import data
 from utils import save_image, get_thumbnail_url, get_image_url
@@ -226,7 +226,7 @@ def register_callbacks(app):
     # ---------- Remove image from gallery ----------
     @app.callback(
         Output("current-images", "data", allow_duplicate=True),
-        Input({"type": "delete-image", "index": dash.ALL}, "n_clicks"),
+        Input({"type": "delete-image", "index": ALL}, "n_clicks"),
         State("current-images", "data"),
         prevent_initial_call=True,
     )
