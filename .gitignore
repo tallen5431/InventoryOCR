@@ -4,3 +4,6 @@ assets/
 logs/
 *.csv
 *.json
+__pycache__/
+*.pyc
+*.pyo
