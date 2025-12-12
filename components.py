@@ -141,7 +141,6 @@ def sidebar_form():
 
 def inventory_table():
     columns = [
-        {"name": "", "id": "select", "presentation": "markdown"},
         {"name": "Image", "id": "image", "presentation": "markdown"},
         {"name": "Name", "id": "name"},
         {"name": "Description", "id": "description", "hideable": True},
@@ -190,11 +189,10 @@ def inventory_table():
             "minWidth": "80px",
         },
         style_cell_conditional=[
-            {"if": {"column_id": "select"}, "textAlign": "center", "width": "60px", "minWidth": "60px", "maxWidth": "60px"},
             {"if": {"column_id": "name"}, "minWidth": "120px", "maxWidth": "250px", "fontWeight": "500"},
             {"if": {"column_id": "description"}, "minWidth": "150px", "maxWidth": "300px", "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
             {"if": {"column_id": "ocr_text"}, "minWidth": "150px", "maxWidth": "400px", "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
-            {"if": {"column_id": "image"}, "width": "100px", "minWidth": "80px", "maxWidth": "120px", "textAlign": "center"},
+            {"if": {"column_id": "image"}, "width": "180px", "minWidth": "150px", "maxWidth": "200px", "textAlign": "center"},
             {"if": {"column_id": "qty"}, "textAlign": "center", "width": "70px", "minWidth": "70px", "maxWidth": "90px"},
         ],
         style_data_conditional=[

@@ -22,7 +22,6 @@ def _build_rows(filtered):
     out_rows = []
     for r in filtered:
         row = dict(r)
-        row["select"] = "🔘"
 
         # Handle images array (new) or single image_filename (backward compatibility)
         images = row.get("images", [])
@@ -303,6 +302,74 @@ def register_callbacks(app):
         total = len(rows)
         low = sum(1 for r in rows if (r.get("qty") or 0) < LOW_STOCK_THRESHOLD)
         return total, low
+
+    # ---------- Load selected item image into OCR Lab ----------
+    @app.callback(
+        Output("ocr-target", "data"),
+        Output("image-contents", "data"),
+        Input("inventory-table", "selected_rows"),
+        State("inventory-table", "data"),
+        prevent_initial_call=True,
+    )
+    def load_image_to_ocr_lab(selected_rows, table_data):
+        import base64
+        from pathlib import Path
+
+        if not selected_rows or not table_data:
+            raise PreventUpdate
+
+        # Get the selected row
+        row_idx = selected_rows[0]
+        if row_idx >= len(table_data):
+            raise PreventUpdate
+
+        row = table_data[row_idx]
+        item_id = row.get("id")
+
+        if not item_id:
+            raise PreventUpdate
+
+        # Set ocr-target with item_id
+        ocr_target = {"item_id": item_id}
+
+        # Load the first image if it exists
+        all_items = data.inventory()
+        item = next((r for r in all_items if r.get("id") == item_id), None)
+
+        if not item:
+            return ocr_target, no_update
+
+        images = item.get("images", [])
+        if not images:
+            return ocr_target, no_update
+
+        # Load the first image file and convert to data URL
+        first_image = images[0]
+        image_path = ASSET_IMAGE_PATH / first_image
+
+        if not image_path.exists():
+            return ocr_target, no_update
+
+        try:
+            # Read image and convert to base64 data URL
+            image_bytes = image_path.read_bytes()
+            b64_str = base64.b64encode(image_bytes).decode('utf-8')
+
+            # Determine mime type from extension
+            ext = image_path.suffix.lower()
+            if ext in ['.jpg', '.jpeg']:
+                mime = 'image/jpeg'
+            elif ext == '.png':
+                mime = 'image/png'
+            elif ext == '.webp':
+                mime = 'image/webp'
+            else:
+                mime = 'image/png'
+
+            data_url = f"data:{mime};base64,{b64_str}"
+            return ocr_target, data_url
+        except Exception:
+            return ocr_target, no_update
 
     # ---------- OCR Lab → table (NO duplicate Outputs anymore) ----------
     @app.callback(
