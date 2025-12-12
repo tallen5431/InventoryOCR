@@ -182,7 +182,7 @@ def register_callbacks(app):
         Input("current-images", "data"),
         Input("image-upload", "contents"),
         State("current-images", "data"),
-        prevent_initial_call=False,
+        prevent_initial_call='initial_duplicate',
     )
     def update_image_gallery(current_imgs, upload_contents, existing_imgs):
         from dash import html as h
