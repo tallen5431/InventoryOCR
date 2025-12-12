@@ -181,27 +181,40 @@ def register_callbacks(app):
         Output("current-images", "data", allow_duplicate=True),
         Input("current-images", "data"),
         Input("image-upload", "contents"),
+        State("image-upload", "filename"),
         State("current-images", "data"),
         prevent_initial_call='initial_duplicate',
     )
-    def update_image_gallery(current_imgs, upload_contents, existing_imgs):
+    def update_image_gallery(current_imgs, upload_contents, upload_filenames, existing_imgs):
         from dash import html as h
         from utils import get_thumbnail_url
+        import base64
+        from io import BytesIO
+        from PIL import Image
 
         # Start with existing images
         img_list = existing_imgs or []
+        preview_data = []  # For showing upload previews before save
 
-        # If this was triggered by upload, add new images
+        # If this was triggered by upload, process the uploads for preview
         if ctx.triggered_id == "image-upload" and upload_contents:
-            # Note: We don't save here, just show preview
-            # Actual saving happens in save-button callback
-            pass
+            # Support both single and multiple uploads
+            uploads = upload_contents if isinstance(upload_contents, list) else [upload_contents]
+            filenames = upload_filenames if isinstance(upload_filenames, list) else [upload_filenames]
 
-        if not img_list:
-            return h.Div("No images yet", className="text-muted small"), img_list
+            for content, filename in zip(uploads, filenames):
+                if content:
+                    # Store the upload data for preview (don't save to disk yet)
+                    preview_data.append({
+                        'content': content,
+                        'filename': filename,
+                        'is_preview': True
+                    })
 
         # Create gallery of thumbnails with delete buttons
         gallery_items = []
+
+        # Show existing saved images
         for i, img_filename in enumerate(img_list):
             thumb_url = get_thumbnail_url(img_filename)
             if thumb_url:
@@ -214,6 +227,7 @@ def register_callbacks(app):
                                 id={"type": "delete-image", "index": i},
                                 className="btn btn-sm btn-danger delete-img-btn",
                                 title="Remove image",
+                                n_clicks=0,
                             ),
                             h.Div(f"Image {i+1}", className="text-muted small text-center"),
                         ],
@@ -221,18 +235,41 @@ def register_callbacks(app):
                     )
                 )
 
+        # Show upload previews
+        for j, preview in enumerate(preview_data):
+            gallery_items.append(
+                h.Div(
+                    [
+                        h.Img(src=preview['content'], className="gallery-thumb", style={'maxHeight': '150px', 'maxWidth': '150px', 'objectFit': 'contain'}),
+                        h.Div(f"New: {preview['filename']}", className="text-muted small text-center"),
+                    ],
+                    className="gallery-item",
+                    style={'border': '2px dashed #28a745'}
+                )
+            )
+
+        if not gallery_items:
+            return h.Div("No images yet. Drag & drop or click to upload.", className="text-muted small"), img_list
+
         return h.Div(gallery_items, className="image-gallery-grid"), img_list
 
     # ---------- Remove image from gallery ----------
     @app.callback(
         Output("current-images", "data", allow_duplicate=True),
+        Output("image-gallery", "children", allow_duplicate=True),
         Input({"type": "delete-image", "index": ALL}, "n_clicks"),
         State("current-images", "data"),
         prevent_initial_call=True,
     )
     def remove_image_from_gallery(n_clicks_list, current_imgs):
-        import json
+        from dash import html as h
+        from utils import get_thumbnail_url
+
         if not ctx.triggered or not current_imgs:
+            raise PreventUpdate
+
+        # Check if any delete button was actually clicked
+        if not n_clicks_list or all(clicks is None or clicks == 0 for clicks in n_clicks_list):
             raise PreventUpdate
 
         # Find which button was clicked
@@ -240,9 +277,35 @@ def register_callbacks(app):
         if triggered_id and isinstance(triggered_id, dict):
             index = triggered_id.get("index")
             if index is not None and 0 <= index < len(current_imgs):
-                current_imgs = current_imgs.copy()
-                del current_imgs[index]
-                return current_imgs
+                # Remove the image at the specified index
+                updated_imgs = current_imgs.copy()
+                del updated_imgs[index]
+
+                # Rebuild gallery with updated list
+                gallery_items = []
+                for i, img_filename in enumerate(updated_imgs):
+                    thumb_url = get_thumbnail_url(img_filename)
+                    if thumb_url:
+                        gallery_items.append(
+                            h.Div(
+                                [
+                                    h.Img(src=thumb_url, className="gallery-thumb"),
+                                    h.Button(
+                                        "×",
+                                        id={"type": "delete-image", "index": i},
+                                        className="btn btn-sm btn-danger delete-img-btn",
+                                        title="Remove image",
+                                        n_clicks=0,
+                                    ),
+                                    h.Div(f"Image {i+1}", className="text-muted small text-center"),
+                                ],
+                                className="gallery-item",
+                            )
+                        )
+
+                gallery_div = h.Div(gallery_items, className="image-gallery-grid") if gallery_items else h.Div("No images yet. Drag & drop or click to upload.", className="text-muted small")
+
+                return updated_imgs, gallery_div
 
         raise PreventUpdate
 
