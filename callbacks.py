@@ -128,10 +128,10 @@ def register_callbacks(app):
                         existing_row = next((r for r in items if r.get("id") == editing_id), {})
                         existing_ocr = existing_row.get("ocr_text", "")
                         data.update_item(editing_id, nm, ds, nqty, img_filenames, existing_ocr)
-                        toast_header, toast_icon, toast_msg = "Item Updated", "success", f""{nm}" updated."
+                        toast_header, toast_icon, toast_msg = "Item Updated", "success", f'"{nm}" updated.'
                     else:
                         data.add_item(nm, ds, nqty, img_filenames, "")
-                        toast_header, toast_icon, toast_msg = "Item Added", "success", f""{nm}" added."
+                        toast_header, toast_icon, toast_msg = "Item Added", "success", f'"{nm}" added.'
                 except ValueError as e:
                     toast_header, toast_icon, toast_msg = "Duplicate Name", "danger", str(e)
 
@@ -146,7 +146,7 @@ def register_callbacks(app):
             if editing_id:
                 removed = data.remove_item(editing_id)
                 if removed:
-                    toast_open, toast_header, toast_icon, toast_msg = True, "Item Deleted", "danger", f""{removed.get('name','')}" deleted."
+                    toast_open, toast_header, toast_icon, toast_msg = True, "Item Deleted", "danger", f'"{removed.get("name","")}" deleted.'
                 next_sel, next_name, next_desc, next_qty, next_editing, next_images = [], "", "", None, None, []
                 items = data.inventory()
 

@@ -497,6 +497,6 @@ def register_ocr_lab_callbacks(app):
                 images=cur.get("images", []),
                 ocr_text=(text_val or "").strip(),
             )
-            return html.Div(["Saved OCR text back to item “", html.Code(cur.get("name", "")), "”."])
+            return html.Div(['Saved OCR text back to item "', html.Code(cur.get("name", "")), '".'])
         except Exception:
             return html.Pre("Save error:\n" + traceback.format_exc())
