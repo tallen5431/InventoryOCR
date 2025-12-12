@@ -66,6 +66,7 @@ def register_callbacks(app):
             Output("item-qty", "value"),
             Output("editing-id", "data"),
             Output("current-images", "data"),
+            Output("image-upload", "contents"),
             Output("action-toast", "is_open"),
             Output("action-toast", "header"),
             Output("action-toast", "icon"),
@@ -96,7 +97,7 @@ def register_callbacks(app):
         triggered = (ctx.triggered_id or "")
         toast_open, toast_header, toast_icon, toast_msg = False, "", "info", ""
         next_sel = sel_rows or []
-        next_name = next_desc = next_qty = next_editing = next_images = no_update
+        next_name = next_desc = next_qty = next_editing = next_images = next_upload = no_update
 
         # Always load latest items
         items = data.inventory()
@@ -137,7 +138,7 @@ def register_callbacks(app):
 
                 toast_open = True
                 # clear form
-                next_sel, next_name, next_desc, next_qty, next_editing, next_images = [], "", "", None, None, []
+                next_sel, next_name, next_desc, next_qty, next_editing, next_images, next_upload = [], "", "", None, None, [], None
                 # refresh items for table build
                 items = data.inventory()
 
@@ -147,12 +148,12 @@ def register_callbacks(app):
                 removed = data.remove_item(editing_id)
                 if removed:
                     toast_open, toast_header, toast_icon, toast_msg = True, "Item Deleted", "danger", f'"{removed.get("name","")}" deleted.'
-                next_sel, next_name, next_desc, next_qty, next_editing, next_images = [], "", "", None, None, []
+                next_sel, next_name, next_desc, next_qty, next_editing, next_images, next_upload = [], "", "", None, None, [], None
                 items = data.inventory()
 
         # Cancel clears form
         elif triggered == "cancel-button":
-            next_sel, next_name, next_desc, next_qty, next_editing, next_images = [], "", "", None, None, []
+            next_sel, next_name, next_desc, next_qty, next_editing, next_images, next_upload = [], "", "", None, None, [], None
 
         # Selecting a row populates form
         elif triggered == "inventory-table":
@@ -171,7 +172,7 @@ def register_callbacks(app):
         out_rows = _build_rows(filtered)
 
         return [
-            out_rows, next_sel, next_name, next_desc, next_qty, next_editing, next_images,
+            out_rows, next_sel, next_name, next_desc, next_qty, next_editing, next_images, next_upload,
             toast_open, toast_header, toast_icon, toast_msg
         ]
 
