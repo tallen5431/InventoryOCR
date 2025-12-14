@@ -33,6 +33,7 @@ if not URL_PREFIX.startswith("/"):
     URL_PREFIX = "/" + URL_PREFIX
 
 def get_local_ip() -> str:
+    """Get the local IP address for LAN access."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
@@ -42,6 +43,76 @@ def get_local_ip() -> str:
     finally:
         s.close()
     return ip
+
+def get_external_url(host: str, port: int, url_prefix: str) -> tuple[str, list[str]]:
+    """
+    Automatically determine the correct external URL(s) for accessing the application.
+    Returns (primary_url, list_of_additional_urls)
+    """
+    urls = []
+
+    # 1. Check for PUBLIC_BASE environment variable (highest priority)
+    public_base = os.environ.get("PUBLIC_BASE", "").rstrip("/")
+    if public_base:
+        return f"{public_base}{url_prefix}", []
+
+    # 2. Check for common cloud platform environment variables
+    # Railway
+    if os.environ.get("RAILWAY_PUBLIC_DOMAIN"):
+        domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+        return f"https://{domain}{url_prefix}", []
+
+    # Render
+    if os.environ.get("RENDER_EXTERNAL_URL"):
+        return f"{os.environ.get('RENDER_EXTERNAL_URL')}{url_prefix}", []
+
+    # Heroku
+    if os.environ.get("HEROKU_APP_NAME"):
+        app_name = os.environ.get("HEROKU_APP_NAME")
+        return f"https://{app_name}.herokuapp.com{url_prefix}", []
+
+    # Vercel
+    if os.environ.get("VERCEL_URL"):
+        return f"https://{os.environ.get('VERCEL_URL')}{url_prefix}", []
+
+    # AWS / Generic
+    if os.environ.get("AWS_EXECUTION_ENV"):
+        # Try to get the public hostname if available
+        try:
+            import urllib.request
+            public_ip = urllib.request.urlopen('http://169.254.169.254/latest/meta-data/public-ipv4', timeout=1).read().decode()
+            return f"http://{public_ip}:{port}{url_prefix}", []
+        except:
+            pass
+
+    # 3. Check if running behind a reverse proxy (look for proxy headers env vars)
+    if os.environ.get("FORWARDED_ALLOW_IPS") or os.environ.get("PROXY_COUNT"):
+        # Likely behind nginx/caddy - use hostname
+        hostname = socket.gethostname()
+        scheme = os.environ.get("SCHEME", "https" if os.environ.get("HTTPS") else "http")
+        return f"{scheme}://{hostname}{url_prefix}", []
+
+    # 4. Local development fallback - provide multiple access options
+    local_ip = get_local_ip()
+    scheme = os.environ.get("SCHEME", "http")
+
+    # Build list of access URLs
+    primary = f"{scheme}://localhost:{port}{url_prefix}"
+    alternatives = []
+
+    # Add local IP if different from localhost
+    if local_ip and local_ip != "127.0.0.1":
+        alternatives.append(f"{scheme}://{local_ip}:{port}{url_prefix}")
+
+    # Add hostname if available
+    try:
+        hostname = socket.gethostname()
+        if hostname and hostname != "localhost":
+            alternatives.append(f"{scheme}://{hostname}:{port}{url_prefix}")
+    except:
+        pass
+
+    return primary, alternatives
 
 def _route_key(path: str | None) -> str:
     """
@@ -239,17 +310,21 @@ if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
     # Default port aligned with your Caddy backend (PORT=8001)
     port = int(os.environ.get("PORT", 8001))
-    ip = get_local_ip()
 
-    # External URL banner (works nicely behind Caddy if PUBLIC_BASE is set)
-    public_base = os.environ.get("PUBLIC_BASE", "").rstrip("/")
-    if public_base:
-        external_url = f"{public_base}{URL_PREFIX}"
-    else:
-        scheme = os.environ.get("SCHEME", "http")
-        external_url = f"{scheme}://{ip}:{port}{URL_PREFIX}"
+    # Automatically determine the correct external URL(s)
+    primary_url, alternative_urls = get_external_url(host, port, URL_PREFIX)
 
-    print(f"[INFO] Inventory OCR Server running on {external_url}")
-    print(f"[INFO] Internal: http://{host}:{port}{URL_PREFIX}")
+    print("=" * 60)
+    print("📦 Inventory OCR Server Started")
+    print("=" * 60)
+    print(f"✓ Primary URL:  {primary_url}")
+
+    if alternative_urls:
+        print("\n📍 Alternative access URLs:")
+        for url in alternative_urls:
+            print(f"  • {url}")
+
+    print(f"\n🔧 Internal:    http://{host}:{port}{URL_PREFIX}")
+    print("=" * 60)
 
     serve(server, host=host, port=port, expose_tracebacks=True)
