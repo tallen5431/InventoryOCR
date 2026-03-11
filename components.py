@@ -153,6 +153,7 @@ def inventory_table():
         id="inventory-table",
         columns=columns,
         data=[],
+        row_id="id",
         page_size=DATATABLE_PAGE_SIZE,
         row_selectable="single",
         selected_rows=[],

@@ -323,10 +323,16 @@ def register_callbacks(app):
     def open_image_modal(cell, rows, is_open):
         if not cell or cell.get("column_id") != "image":
             raise PreventUpdate
-        ridx = cell.get("row")
-        if ridx is None or ridx >= len(rows or []):
+        row_id = cell.get("row_id")
+        if row_id is not None:
+            row = next((r for r in (rows or []) if str(r.get("id")) == str(row_id)), None)
+        else:
+            ridx = cell.get("row")
+            if ridx is None or ridx >= len(rows or []):
+                raise PreventUpdate
+            row = (rows or [])[ridx]
+        if row is None:
             raise PreventUpdate
-        row = (rows or [])[ridx]
         all_images = row.get("all_images", [])
         if not all_images:
             raise PreventUpdate
