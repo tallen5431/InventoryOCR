@@ -138,7 +138,11 @@ def register_callbacks(app):
                      name, desc, qty, category, location, img_contents,
                      current_images, editing_id, current_rows):
         triggered = (ctx.triggered_id or "")
-        toast_open, toast_header, toast_icon, toast_msg = False, "", "info", ""
+        # Default toast outputs to no_update: 'inventory-table.selected_rows' is both
+        # an Output and an Input here, so resetting the selection after a Save/Delete
+        # re-enters this callback. If the toast defaulted to closed, that second pass
+        # would immediately hide the success toast, so leave it untouched instead.
+        toast_open, toast_header, toast_icon, toast_msg = no_update, no_update, no_update, no_update
         next_sel = sel_rows or []
         next_name = next_desc = next_qty = next_category = next_location = no_update
         next_editing = next_images = next_upload = no_update
@@ -226,6 +230,14 @@ def register_callbacks(app):
                     next_location = actual_row.get("location", "")
                     next_editing = row.get("id")
                     next_images = actual_row.get("images", [])
+                    # Discard any pending (unsaved) upload so it isn't attached to
+                    # the item we just switched to.
+                    next_upload = None
+
+        # Search / filter change: drop the stale selection highlight (the edit form
+        # and editing-id are intentionally left as-is).
+        elif triggered in ("search-bar", "filter-category", "filter-location"):
+            next_sel = []
 
         # Filter/search
         filtered = _apply_filters(items, search, filter_cat, filter_loc)
