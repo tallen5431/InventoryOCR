@@ -31,9 +31,32 @@ def _save(rows: List[Dict[str, Any]]) -> None:
 
 def inventory() -> List[Dict[str, Any]]:
     rows = _load()
+
+    # Every record must have a unique id — the UI selects, edits, and opens
+    # photos for items by id. Legacy / hand-edited files may omit it, which would
+    # collapse multiple records to id=None and cross-wire them. Backfill stable
+    # unique ids for any id-less record (deterministic across reads).
+    used: set = set()
+    for r in rows:
+        try:
+            used.add(int(r.get("id")))
+        except (TypeError, ValueError):
+            pass
+    next_free = (max(used) + 1) if used else 1
+
     # Normalize schema
     norm = []
     for r in rows:
+        try:
+            rid = int(r.get("id"))
+        except (TypeError, ValueError):
+            rid = None
+        if rid is None:
+            while next_free in used:
+                next_free += 1
+            rid = next_free
+            used.add(rid)
+
         # Backward compatibility: normalize images to a list.
         # Accept a bare string (hand-edited/legacy data) as a single image, and
         # fall back to the old single image_filename field.
@@ -48,7 +71,7 @@ def inventory() -> List[Dict[str, Any]]:
                 images = [old_img]
 
         norm.append({
-            "id": r.get("id"),
+            "id": rid,
             "name": r.get("name", ""),
             "description": r.get("description", ""),
             "category": (r.get("category") or "").strip(),
