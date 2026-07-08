@@ -90,6 +90,99 @@ def _breakdown_list(groups):
         )
     return html.Div(items)
 
+def _identify_footer(res):
+    endpoint = (res.get("endpoint", "") or "").replace("/api/generate", "")
+    return html.Div(
+        ["via ", html.Code(res.get("model", "") or "?"), " @ ", html.Code(endpoint or "?")],
+        className="text-muted small mt-3",
+    )
+
+def _identify_row(icon, label, value_node):
+    return html.Div(
+        [
+            html.Div(
+                [html.I(className=f"bi {icon} me-2 text-muted"), html.Span(label)],
+                className="text-muted small",
+            ),
+            html.Div(value_node, className="mt-1"),
+        ],
+        className="py-2 border-bottom",
+    )
+
+def _render_identify(res):
+    """Read-only rendering of a vision_lookup.identify_item() result."""
+    if not res.get("ok"):
+        return html.Div(
+            [
+                html.P(
+                    [html.I(className="bi bi-exclamation-triangle me-2"), "Couldn't reach the vision service."],
+                    className="fw-bold text-danger",
+                ),
+                html.P(res.get("error", ""), className="small"),
+                html.Hr(),
+                html.P(["Endpoint: ", html.Code(res.get("endpoint", "") or "—")], className="small mb-1"),
+                html.P(["Model: ", html.Code(res.get("model", "") or "—")], className="small mb-1"),
+                html.P(
+                    [
+                        "Tip: set ", html.Code("OLLAMA_HOST"), " / ", html.Code("OLLAMA_VISION_MODEL"),
+                        " and pull a vision model, e.g. ", html.Code("ollama pull llama3.2-vision"), ".",
+                    ],
+                    className="small text-muted",
+                ),
+            ]
+        )
+
+    data = res.get("data")
+    if not isinstance(data, dict):
+        return html.Div(
+            [
+                html.P("Here's what the model returned (couldn't parse it as structured data):", className="fw-bold"),
+                html.Pre(res.get("raw", "") or "(empty)", style={"whiteSpace": "pre-wrap"}),
+                _identify_footer(res),
+            ]
+        )
+
+    def _txt(v):
+        return "" if v is None else str(v).strip()
+
+    def _disp(v):
+        t = _txt(v)
+        return "—" if (not t or t.lower() == "unknown") else t
+
+    name = _txt(data.get("name")) or "Unidentified item"
+    conf = _txt(data.get("confidence")).lower()
+    conf_color = {"high": "success", "medium": "warning", "low": "danger"}.get(conf, "secondary")
+
+    rows = [
+        _identify_row("bi-info-circle", "What it is", _disp(data.get("what_it_is"))),
+        _identify_row("bi-tags", "Category", _disp(data.get("category"))),
+    ]
+
+    specs = data.get("specifications")
+    if isinstance(specs, list) and any(_txt(s) for s in specs):
+        specs_node = html.Ul([html.Li(_txt(s)) for s in specs if _txt(s)], className="mb-0")
+    else:
+        specs_node = _disp(specs if isinstance(specs, str) else None)
+    rows.append(_identify_row("bi-list-check", "Specifications", specs_node))
+    rows.append(_identify_row("bi-cash-coin", "Estimated value", _disp(data.get("estimated_value"))))
+    rows.append(_identify_row("bi-rulers", "Dimensions", _disp(data.get("dimensions"))))
+
+    header = [html.H4(name, className="mb-0")]
+    if conf:
+        header.append(html.Span(conf.capitalize(), className=f"badge bg-{conf_color} ms-2"))
+
+    return html.Div(
+        [
+            html.Div(header, className="d-flex align-items-center mb-3"),
+            html.Div(rows),
+            html.Div(
+                "⚠️ These are AI estimates read from the photo — double-check before relying on them.",
+                className="text-muted small mt-3",
+            ),
+            _identify_footer(res),
+        ]
+    )
+
 def register_callbacks(app):
     # ---------- Table & form (single source of truth for table + toast) ----------
     @app.callback(
@@ -506,6 +599,60 @@ def register_callbacks(app):
                 "; ".join(r.get("images", []) or []),
             ])
         return dcc.send_string(buf.getvalue(), "inventory.csv")
+
+    # ---------- Identify item from photo (open modal + kick off lookup) ----------
+    @app.callback(
+        Output("identify-modal", "is_open"),
+        Output("identify-trigger", "data"),
+        Input("identify-button", "n_clicks"),
+        Input("close-identify-modal", "n_clicks"),
+        State("current-images", "data"),
+        State("image-upload", "contents"),
+        prevent_initial_call=True,
+    )
+    def toggle_identify(open_clicks, close_clicks, current_images, upload_contents):
+        trig = ctx.triggered_id
+        if trig == "close-identify-modal":
+            return False, no_update
+        if trig != "identify-button":
+            raise PreventUpdate
+        # Prefer a freshly-taken (unsaved) photo; else the selected item's primary photo.
+        pending = None
+        if upload_contents:
+            pending = upload_contents[0] if isinstance(upload_contents, list) else upload_contents
+        primary = (current_images or [None])[0] if current_images else None
+        # Include n_clicks so re-clicking on the same photo re-runs the lookup.
+        return True, {"pending": pending, "img": primary, "n": open_clicks}
+
+    # ---------- Identify item from photo (run the vision lookup) ----------
+    @app.callback(
+        Output("identify-body", "children"),
+        Input("identify-trigger", "data"),
+        prevent_initial_call=True,
+    )
+    def do_identify(trigger):
+        if not trigger:
+            raise PreventUpdate
+        pending = trigger.get("pending")
+        primary = trigger.get("img")
+
+        image = None
+        if pending:
+            image = pending  # data URL string (freshly-taken, unsaved photo)
+        elif primary:
+            path = ASSET_IMAGE_PATH / primary
+            if path.exists():
+                image = path.read_bytes()
+
+        if image is None:
+            return html.Div(
+                "Select an item that has a photo (or take a new photo) first, then click Identify.",
+                className="text-warning",
+            )
+
+        import vision_lookup
+        res = vision_lookup.identify_item(image)
+        return _render_identify(res)
 
     # ---------- Load selected item image into OCR Lab ----------
     @app.callback(

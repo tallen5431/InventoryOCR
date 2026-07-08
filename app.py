@@ -16,7 +16,7 @@ from config import (
 from flask import send_from_directory
 
 # UI components
-from components import sidebar_form, inventory_table, detail_panel, kpi_bar, breakdown_card
+from components import sidebar_form, inventory_table, detail_panel, kpi_bar, breakdown_card, identify_modal
 
 # Page layouts
 from components_ocr_lab import ocr_lab_layout
@@ -222,6 +222,7 @@ def dashboard_layout():
                 className="g-3",
             ),
             dbc.Row([dbc.Col(breakdown_card(), width=12)]),
+            identify_modal(),
             dbc.Row([dbc.Col(detail_panel(), width=12)], className="mt-4"),
         ],
         fluid=True,

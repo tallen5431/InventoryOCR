@@ -147,6 +147,17 @@ def sidebar_form():
                                 ],
                                 className="g-2",
                             ),
+                            dbc.Button(
+                                [html.I(className="bi bi-search me-1"), "Identify from photo"],
+                                id="identify-button",
+                                color="info",
+                                outline=True,
+                                className="w-100 mt-3",
+                            ),
+                            html.Div(
+                                "Uses a local vision AI to suggest what it is, its specs, value & size.",
+                                className="text-muted small mt-1",
+                            ),
                         ]
                     ),
                 ],
@@ -335,6 +346,36 @@ def breakdown_card():
             ),
         ],
         className="mt-4 shadow-sm",
+    )
+
+
+def identify_modal():
+    """Read-only panel showing what the vision AI found for an item's photo."""
+    return html.Div(
+        [
+            dcc.Store(id="identify-trigger"),
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(
+                        dbc.ModalTitle([html.I(className="bi bi-search me-2"), "Item lookup"])
+                    ),
+                    dbc.ModalBody(
+                        dcc.Loading(
+                            html.Div(id="identify-body"),
+                            type="default",
+                        )
+                    ),
+                    dbc.ModalFooter(
+                        dbc.Button("Close", id="close-identify-modal", className="ms-auto", n_clicks=0)
+                    ),
+                ],
+                id="identify-modal",
+                is_open=False,
+                size="lg",
+                centered=True,
+                scrollable=True,
+            ),
+        ]
     )
 
 

@@ -30,6 +30,9 @@ to find something or restock.
 - 📊 **At‑a‑glance** — KPI cards (total items, total quantity, low‑stock count,
   categories) and an **Overview** grouped by location and by category.
 - 📤 **Export** — one‑click CSV of your whole inventory.
+- 🔎 **Identify from photo** — send an item's photo to a local vision AI
+  (Ollama) to suggest what it is, its specifications, an estimated value, and
+  dimensions. Read-only — it never changes your item, you decide what to keep.
 - 🧪 **OCR Lab** — experiment with preprocessing and pull text off images when
   Tesseract is installed.
 - 🌗 **Dark/light theme**, responsive layout tuned for phones and tablets.
@@ -66,6 +69,9 @@ All settings are environment variables:
 | `URL_PREFIX`      | `/inventory`  | Path prefix. **Set to empty** (`URL_PREFIX=`) to serve at the site root. |
 | `INVENTORY_THEME` | `dark`        | `dark` or `light` default theme |
 | `PUBLIC_BASE`     | *(unset)*     | Force the external base URL shown on startup |
+| `OLLAMA_HOST`     | `http://100.98.112.1:11434` | Ollama server for "Identify from photo" (a trailing `/v1` is accepted). |
+| `OLLAMA_VISION_MODEL` | `llama3.2-vision` | Vision model used for identification. Pull it first. |
+| `VISION_TIMEOUT`  | `60`          | Identify request timeout, in seconds |
 
 Serve at the root (e.g. when accessed directly at `http://host:8001/`):
 
@@ -92,6 +98,33 @@ sudo apt-get install -y tesseract-ocr
 On Windows you can drop a `Tesseract-OCR/` folder (with `tesseract.exe` and
 `tessdata/`) next to the app and it will be picked up automatically. Without
 Tesseract the inventory features all work — OCR simply returns empty text.
+
+## Identify items from a photo (optional)
+
+Click **🔎 Identify from photo** to have a local vision AI look at an item's
+photo and suggest what it is, its specifications, an estimated value, and
+dimensions. It works on the currently-selected item's photo, or on a photo you
+just took (before saving). Results are **read-only** — nothing is written back
+to the item; you copy over anything useful yourself.
+
+It talks to an [Ollama](https://ollama.com) server using a vision-capable model
+— by default the same local/Tailscale endpoint the rest of the stack uses. The
+photo never leaves your network unless `OLLAMA_HOST` points somewhere remote.
+
+Set it up:
+
+```bash
+# On the machine running Ollama, pull a vision model:
+ollama pull llama3.2-vision       # or: qwen2.5vl, llava, moondream, …
+
+# Point the app at your Ollama server (defaults shown):
+export OLLAMA_HOST=http://100.98.112.1:11434
+export OLLAMA_VISION_MODEL=llama3.2-vision
+```
+
+> ⚠️ Estimated values and specs are the model's best guess from the photo —
+> treat them as a starting point, not an appraisal.
+
 
 ## Data & storage
 
