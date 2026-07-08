@@ -457,6 +457,28 @@ input[type="radio"] {
    UPLOAD AREA ENHANCEMENTS
    ============================================ */
 
+/* Camera-first upload dropzone */
+.upload-dropzone {
+    border: 2px dashed var(--bs-border-color);
+    border-radius: 12px;
+    padding: 18px 12px;
+    text-align: center;
+    cursor: pointer;
+    background-color: var(--bs-tertiary-bg);
+    transition: all 0.2s ease;
+}
+
+.upload-dropzone:hover {
+    border-color: #0d6efd;
+    background-color: rgba(13, 110, 253, 0.06);
+}
+
+.upload-icon {
+    font-size: 2rem;
+    line-height: 1;
+    margin-bottom: 4px;
+}
+
 /* Make upload area more prominent */
 #image-upload {
     transition: all 0.2s ease;

@@ -1,15 +1,15 @@
 from __future__ import annotations
 import os, time
-from dash import Input, Output, State, ctx, no_update, ALL
+from dash import Input, Output, State, ctx, no_update, ALL, html, dcc
 from dash.exceptions import PreventUpdate
 import data
 from utils import save_image, get_thumbnail_url, get_image_url
 from config import LOW_STOCK_THRESHOLD, ASSET_IMAGE_PATH, OCR_TEXT_MAX_CHARS
 
-URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").rstrip("/")
-if not URL_PREFIX.startswith("/"):
+URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
+if URL_PREFIX and not URL_PREFIX.startswith("/"):
     URL_PREFIX = "/" + URL_PREFIX
-ASSET_URL_BASE = f"{URL_PREFIX}/assets"
+ASSET_URL_BASE = f"{URL_PREFIX}/assets" if URL_PREFIX else "/assets"
 
 def _parse_qty(q):
     try:
@@ -44,6 +44,10 @@ def _build_rows(filtered):
             row["image"] = ""
             row["all_images"] = []
 
+        # Keep organizing fields present for the table (and CSV/native filters)
+        row["category"] = (row.get("category") or "").strip()
+        row["location"] = (row.get("location") or "").strip()
+
         full_ocr = (row.get("ocr_text") or "").strip()
         if len(full_ocr) > OCR_TEXT_MAX_CHARS:
             cut = full_ocr.rfind(" ", 0, OCR_TEXT_MAX_CHARS)
@@ -55,6 +59,37 @@ def _build_rows(filtered):
         out_rows.append(row)
     return out_rows
 
+def _apply_filters(items, search, filter_cat, filter_loc):
+    filtered = data.search(search) if search else items
+    if filter_cat:
+        filtered = [r for r in filtered if (r.get("category") or "").strip() == filter_cat]
+    if filter_loc:
+        filtered = [r for r in filtered if (r.get("location") or "").strip() == filter_loc]
+    return filtered
+
+def _breakdown_list(groups):
+    """Render a summary_by() result as a compact list with quantity badges."""
+    if not groups:
+        return html.Div("Nothing here yet.", className="text-muted small")
+    items = []
+    for g in groups:
+        items.append(
+            html.Div(
+                [
+                    html.Span(g["name"], className="text-truncate me-2"),
+                    html.Span(
+                        [
+                            html.Span(f"{g['qty']}", className="badge bg-primary rounded-pill me-1"),
+                            html.Span(f"{g['items']} item{'s' if g['items'] != 1 else ''}", className="text-muted small"),
+                        ],
+                        className="text-nowrap",
+                    ),
+                ],
+                className="d-flex justify-content-between align-items-center py-1 border-bottom",
+            )
+        )
+    return html.Div(items)
+
 def register_callbacks(app):
     # ---------- Table & form (single source of truth for table + toast) ----------
     @app.callback(
@@ -64,6 +99,8 @@ def register_callbacks(app):
             Output("item-name", "value"),
             Output("item-desc", "value"),
             Output("item-qty", "value"),
+            Output("item-category", "value"),
+            Output("item-location", "value"),
             Output("editing-id", "data"),
             Output("current-images", "data"),
             Output("image-upload", "contents"),
@@ -79,12 +116,16 @@ def register_callbacks(app):
             Input("inventory-table", "selected_rows"),
             Input("cancel-button", "n_clicks"),
             Input("search-bar", "value"),
+            Input("filter-category", "value"),
+            Input("filter-location", "value"),
             Input("refresh-seq", "data"),
         ],
         [
             State("item-name", "value"),
             State("item-desc", "value"),
             State("item-qty", "value"),
+            State("item-category", "value"),
+            State("item-location", "value"),
             State("image-upload", "contents"),
             State("current-images", "data"),
             State("editing-id", "data"),
@@ -93,11 +134,14 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def manage_table(pathname, save_clicks, delete_clicks, sel_rows, cancel_clicks,
-                     search, _refresh_seq, name, desc, qty, img_contents, current_images, editing_id, current_rows):
+                     search, filter_cat, filter_loc, _refresh_seq,
+                     name, desc, qty, category, location, img_contents,
+                     current_images, editing_id, current_rows):
         triggered = (ctx.triggered_id or "")
         toast_open, toast_header, toast_icon, toast_msg = False, "", "info", ""
         next_sel = sel_rows or []
-        next_name = next_desc = next_qty = next_editing = next_images = next_upload = no_update
+        next_name = next_desc = next_qty = next_category = next_location = no_update
+        next_editing = next_images = next_upload = no_update
 
         # Always load latest items
         items = data.inventory()
@@ -109,10 +153,12 @@ def register_callbacks(app):
                 toast_open, toast_header, toast_icon, toast_msg = True, "Missing Name", "warning", "Please enter a name."
             else:
                 ds = (desc or "").strip()
+                cat = (category or "").strip()
+                loc = (location or "").strip()
                 nqty = _parse_qty(qty)
 
                 # Handle multiple image uploads
-                img_filenames = current_images or []
+                img_filenames = list(current_images or [])
                 if img_contents:
                     # Support both single and multiple uploads
                     if isinstance(img_contents, list):
@@ -128,17 +174,21 @@ def register_callbacks(app):
                         # preserve existing ocr_text if not part of this form
                         existing_row = next((r for r in items if r.get("id") == editing_id), {})
                         existing_ocr = existing_row.get("ocr_text", "")
-                        data.update_item(editing_id, nm, ds, nqty, img_filenames, existing_ocr)
+                        data.update_item(editing_id, nm, ds, nqty, img_filenames, existing_ocr,
+                                         category=cat, location=loc)
                         toast_header, toast_icon, toast_msg = "Item Updated", "success", f'"{nm}" updated.'
                     else:
-                        data.add_item(nm, ds, nqty, img_filenames, "")
+                        data.add_item(nm, ds, nqty, img_filenames, "", category=cat, location=loc)
                         toast_header, toast_icon, toast_msg = "Item Added", "success", f'"{nm}" added.'
                 except ValueError as e:
                     toast_header, toast_icon, toast_msg = "Duplicate Name", "danger", str(e)
 
                 toast_open = True
-                # clear form
-                next_sel, next_name, next_desc, next_qty, next_editing, next_images, next_upload = [], "", "", None, None, [], None
+                # clear form (reset qty to 1 for quick repeat entry)
+                next_sel = []
+                next_name, next_desc, next_qty = "", "", 1
+                next_category, next_location = "", ""
+                next_editing, next_images, next_upload = None, [], None
                 # refresh items for table build
                 items = data.inventory()
 
@@ -148,12 +198,18 @@ def register_callbacks(app):
                 removed = data.remove_item(editing_id)
                 if removed:
                     toast_open, toast_header, toast_icon, toast_msg = True, "Item Deleted", "danger", f'"{removed.get("name","")}" deleted.'
-                next_sel, next_name, next_desc, next_qty, next_editing, next_images, next_upload = [], "", "", None, None, [], None
+                next_sel = []
+                next_name, next_desc, next_qty = "", "", 1
+                next_category, next_location = "", ""
+                next_editing, next_images, next_upload = None, [], None
                 items = data.inventory()
 
         # Cancel clears form
         elif triggered == "cancel-button":
-            next_sel, next_name, next_desc, next_qty, next_editing, next_images, next_upload = [], "", "", None, None, [], None
+            next_sel = []
+            next_name, next_desc, next_qty = "", "", 1
+            next_category, next_location = "", ""
+            next_editing, next_images, next_upload = None, [], None
 
         # Selecting a row populates form
         elif triggered == "inventory-table":
@@ -161,20 +217,46 @@ def register_callbacks(app):
                 idx = sel_rows[0]
                 if isinstance(idx, int) and 0 <= idx < len(current_rows or []):
                     row = (current_rows or [])[idx]
-                    next_name, next_desc = row.get("name", ""), row.get("description", "")
-                    next_qty, next_editing = row.get("qty", None), row.get("id")
-                    # Load images from the actual data
+                    # Load the authoritative record from disk
                     actual_row = next((r for r in items if r.get("id") == row.get("id")), {})
+                    next_name = actual_row.get("name", row.get("name", ""))
+                    next_desc = actual_row.get("description", row.get("description", ""))
+                    next_qty = actual_row.get("qty", row.get("qty", None))
+                    next_category = actual_row.get("category", "")
+                    next_location = actual_row.get("location", "")
+                    next_editing = row.get("id")
                     next_images = actual_row.get("images", [])
 
         # Filter/search
-        filtered = data.search(search) if search else items
+        filtered = _apply_filters(items, search, filter_cat, filter_loc)
         out_rows = _build_rows(filtered)
 
         return [
-            out_rows, next_sel, next_name, next_desc, next_qty, next_editing, next_images, next_upload,
+            out_rows, next_sel, next_name, next_desc, next_qty, next_category, next_location,
+            next_editing, next_images, next_upload,
             toast_open, toast_header, toast_icon, toast_msg
         ]
+
+    # ---------- Populate filter dropdowns & type-ahead suggestions ----------
+    @app.callback(
+        Output("filter-category", "options"),
+        Output("filter-location", "options"),
+        Output("category-datalist", "children"),
+        Output("location-datalist", "children"),
+        Input("inventory-table", "data"),
+        prevent_initial_call=False,
+    )
+    def refresh_organizers(_table_data):
+        # Always derive from the FULL inventory (not the filtered view) so you can
+        # switch between filters freely and newly-added values show up immediately.
+        all_items = data.inventory()
+        cats = data.categories(all_items)
+        locs = data.locations(all_items)
+        cat_opts = [{"label": c, "value": c} for c in cats]
+        loc_opts = [{"label": l, "value": l} for l in locs]
+        cat_dl = [html.Option(value=c) for c in cats]
+        loc_dl = [html.Option(value=l) for l in locs]
+        return cat_opts, loc_opts, cat_dl, loc_dl
 
     # ---------- Image gallery display ----------
     @app.callback(
@@ -188,10 +270,6 @@ def register_callbacks(app):
     )
     def update_image_gallery(current_imgs, upload_contents, upload_filenames, existing_imgs):
         from dash import html as h
-        from utils import get_thumbnail_url
-        import base64
-        from io import BytesIO
-        from PIL import Image
 
         # Start with existing images
         img_list = existing_imgs or []
@@ -250,7 +328,7 @@ def register_callbacks(app):
             )
 
         if not gallery_items:
-            return h.Div("No images yet. Drag & drop or click to upload.", className="text-muted small"), img_list
+            return h.Div("No photos yet. Take a photo or upload to get started.", className="text-muted small"), img_list
 
         return h.Div(gallery_items, className="image-gallery-grid"), img_list
 
@@ -264,7 +342,6 @@ def register_callbacks(app):
     )
     def remove_image_from_gallery(n_clicks_list, current_imgs):
         from dash import html as h
-        from utils import get_thumbnail_url
 
         if not ctx.triggered or not current_imgs:
             raise PreventUpdate
@@ -304,7 +381,7 @@ def register_callbacks(app):
                             )
                         )
 
-                gallery_div = h.Div(gallery_items, className="image-gallery-grid") if gallery_items else h.Div("No images yet. Drag & drop or click to upload.", className="text-muted small")
+                gallery_div = h.Div(gallery_items, className="image-gallery-grid") if gallery_items else h.Div("No photos yet. Take a photo or upload to get started.", className="text-muted small")
 
                 return updated_imgs, gallery_div
 
@@ -363,15 +440,60 @@ def register_callbacks(app):
     # ---------- KPIs ----------
     @app.callback(
         Output("kpi-total", "children"),
+        Output("kpi-qty", "children"),
         Output("kpi-low", "children"),
+        Output("kpi-cat", "children"),
         Input("inventory-table", "data"),
         prevent_initial_call=False,
     )
     def update_kpis(rows):
         rows = rows or []
         total = len(rows)
-        low = sum(1 for r in rows if (r.get("qty") or 0) < LOW_STOCK_THRESHOLD)
-        return total, low
+        total_qty = sum(int(r.get("qty") or 0) for r in rows)
+        low = sum(1 for r in rows if (int(r.get("qty") or 0)) < LOW_STOCK_THRESHOLD)
+        cats = len({(r.get("category") or "").strip() for r in rows if (r.get("category") or "").strip()})
+        return total, total_qty, low, cats
+
+    # ---------- Overview breakdown (by location / category) ----------
+    @app.callback(
+        Output("breakdown-location", "children"),
+        Output("breakdown-category", "children"),
+        Input("inventory-table", "data"),
+        prevent_initial_call=False,
+    )
+    def update_breakdown(rows):
+        rows = rows or []
+        by_loc = data.summary_by("location", rows)
+        by_cat = data.summary_by("category", rows)
+        return _breakdown_list(by_loc), _breakdown_list(by_cat)
+
+    # ---------- Export inventory to CSV ----------
+    @app.callback(
+        Output("download-csv", "data"),
+        Input("export-button", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def export_csv(n):
+        if not n:
+            raise PreventUpdate
+        import csv, io
+
+        rows = data.inventory()
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["id", "name", "category", "location", "qty", "description", "ocr_text", "images"])
+        for r in rows:
+            writer.writerow([
+                r.get("id"),
+                r.get("name", ""),
+                r.get("category", ""),
+                r.get("location", ""),
+                r.get("qty", 0),
+                r.get("description", ""),
+                (r.get("ocr_text", "") or "").replace("\n", " ").strip(),
+                "; ".join(r.get("images", []) or []),
+            ])
+        return dcc.send_string(buf.getvalue(), "inventory.csv")
 
     # ---------- Load selected item image into OCR Lab ----------
     @app.callback(
@@ -383,7 +505,6 @@ def register_callbacks(app):
     )
     def load_image_to_ocr_lab(selected_rows, table_data):
         import base64
-        from pathlib import Path
 
         if not selected_rows or not table_data:
             raise PreventUpdate
@@ -465,6 +586,8 @@ def register_callbacks(app):
                     qty=match.get("qty", 0),
                     images=match.get("images", []),
                     ocr_text=(text or ""),
+                    category=match.get("category", ""),
+                    location=match.get("location", ""),
                 )
         except Exception:
             pass

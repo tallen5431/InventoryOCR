@@ -16,7 +16,7 @@ from config import (
 from flask import send_from_directory
 
 # UI components
-from components import sidebar_form, inventory_table, detail_panel, kpi_bar
+from components import sidebar_form, inventory_table, detail_panel, kpi_bar, breakdown_card
 
 # Page layouts
 from components_ocr_lab import ocr_lab_layout
@@ -27,10 +27,16 @@ from callbacks_ocr_lab import register_ocr_lab_callbacks
 
 BOOTSTRAP_ICONS = "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
 
-# Base URL prefix when served behind Caddy (e.g. /inventory)
-URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").rstrip("/")
-if not URL_PREFIX.startswith("/"):
+# Base URL prefix when served behind a reverse proxy (e.g. /inventory).
+# Set URL_PREFIX="" (empty) to serve the app at the site root — this is how the
+# HTTP_Server manager runs it, accessed directly at http://<host>:<port>/.
+URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
+if URL_PREFIX and not URL_PREFIX.startswith("/"):
     URL_PREFIX = "/" + URL_PREFIX
+# Dash requires pathname prefixes to start and end with "/". At the site root
+# that means a bare "/", otherwise "<prefix>/".
+PATHNAME_PREFIX = (URL_PREFIX + "/") if URL_PREFIX else "/"
+ASSETS_URL_PATH = (URL_PREFIX + "/assets") if URL_PREFIX else "/assets"
 
 def get_local_ip() -> str:
     """Get the local IP address for LAN access."""
@@ -139,12 +145,12 @@ app = Dash(
     external_stylesheets=[BOOTSTRAP_ICONS],
     suppress_callback_exceptions=True,
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
-    # Served under /inventory/ when behind Caddy
-    requests_pathname_prefix=URL_PREFIX + "/",
-    routes_pathname_prefix=URL_PREFIX + "/",
-    assets_url_path=URL_PREFIX + "/assets",
+    # Served under /inventory/ behind a proxy, or at "/" when standalone
+    requests_pathname_prefix=PATHNAME_PREFIX,
+    routes_pathname_prefix=PATHNAME_PREFIX,
+    assets_url_path=ASSETS_URL_PATH,
 )
-app.title = "📦 Inventory Tracker"
+app.title = "📦 Inventory Manager"
 
 # Make the underlying Flask server proxy-aware (respect X-Forwarded-* from Caddy)
 server = app.server
@@ -202,7 +208,11 @@ def dashboard_layout():
     return dbc.Container(
         [
             dcc.Store(id="refresh-seq"),
-            html.H2("📦 Inventory Tracker", className="mt-2 mb-3 text-center app-title"),
+            html.H2("📦 Inventory Manager", className="mt-2 mb-1 text-center app-title"),
+            html.P(
+                "Snap a photo, tag where it lives, track how many you have.",
+                className="text-center text-muted mb-3",
+            ),
             kpi_bar(),
             dbc.Row(
                 [
@@ -211,6 +221,7 @@ def dashboard_layout():
                 ],
                 className="g-3",
             ),
+            dbc.Row([dbc.Col(breakdown_card(), width=12)]),
             dbc.Row([dbc.Col(detail_panel(), width=12)], className="mt-4"),
         ],
         fluid=True,

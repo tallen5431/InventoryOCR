@@ -18,7 +18,7 @@ from config import ASSET_IMAGE_PATH, ASSET_THUMB_PATH
 # When running locally without a prefix, this cleanly falls back to:
 #   /assets/images/<file>, etc.
 # --------------------------------------------------------------------
-URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").rstrip("/")
+URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
 if URL_PREFIX and not URL_PREFIX.startswith("/"):
     URL_PREFIX = "/" + URL_PREFIX
 
