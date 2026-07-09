@@ -25,6 +25,7 @@ from components import (
     identify_modal,
     organize_card,
     organize_modal,
+    connect_modal,
 )
 
 # Page layouts
@@ -200,7 +201,19 @@ navbar = dbc.Navbar(
                 navbar=True,
             ),
             html.Div(
-                dbc.Switch(id="theme-switch", label="Dark", value=(THEME_DEFAULT_MODE == "dark"), className="ms-3"),
+                [
+                    dbc.Button(
+                        [html.I(className="bi bi-phone me-1"), "Connect"],
+                        id="open-connect",
+                        color="secondary",
+                        outline=True,
+                        size="sm",
+                        n_clicks=0,
+                        className="me-3",
+                        title="Open on your phone / another device",
+                    ),
+                    dbc.Switch(id="theme-switch", label="Dark", value=(THEME_DEFAULT_MODE == "dark")),
+                ],
                 className="ms-auto d-flex align-items-center",
             ),
         ],
@@ -257,6 +270,7 @@ app.layout = html.Div(
             media=("all" if THEME_DEFAULT_MODE == "dark" else "not all"),
         ),
         navbar,
+        connect_modal(),
         # cross-page stores
         dcc.Store(id="image-contents"),
         dcc.Store(id="ocr-target"),

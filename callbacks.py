@@ -179,6 +179,45 @@ def _render_storage_map(bins):
         )
     return html.Div(cards)
 
+def _render_connect(eps):
+    """Render the list of access URLs (LAN / Tailscale / localhost) with QR codes."""
+    if not eps:
+        return html.Div("No network addresses found.", className="text-muted")
+    import net_info
+    kind_icon = {
+        "lan": "bi-hdd-network", "tailscale": "bi-shield-lock",
+        "loopback": "bi-pc-display", "other": "bi-globe",
+    }
+    cols = []
+    for e in eps:
+        qr = net_info.qr_data_uri(e["url"])
+        qr_node = html.Img(src=qr, className="connect-qr mt-2") if qr else html.Div(
+            "QR needs the 'qrcode' package.", className="text-muted small mt-2"
+        )
+        cols.append(
+            dbc.Col(
+                dbc.Card(
+                    dbc.CardBody(
+                        [
+                            html.Div(
+                                [html.I(className=f"bi {kind_icon.get(e['kind'], 'bi-globe')} me-2"),
+                                 html.Strong(e["label"])],
+                                className="mb-1",
+                            ),
+                            html.A(
+                                e["url"], href=e["url"], target="_blank", rel="noopener noreferrer",
+                                className="d-block text-break small",
+                            ),
+                            html.Div(qr_node, className="text-center"),
+                        ]
+                    ),
+                    className="h-100 shadow-sm text-center",
+                ),
+                xs=12, sm=6, md=4, className="mb-3",
+            )
+        )
+    return dbc.Row(cols, className="g-3")
+
 def _identify_footer(res):
     endpoint = (res.get("endpoint", "") or "").replace("/api/generate", "")
     return html.Div(
@@ -1042,6 +1081,118 @@ def register_callbacks(app):
             True,  # open the details section so the applied fields are visible
             True, "Applied", "success", "Lookup details copied into the form — review and Save.",
         )
+
+    # ---------- Apply identify result AND save straight onto the item ----------
+    @app.callback(
+        Output("item-name", "value", allow_duplicate=True),
+        Output("item-category", "value", allow_duplicate=True),
+        Output("item-desc", "value", allow_duplicate=True),
+        Output("item-specs", "value", allow_duplicate=True),
+        Output("item-value", "value", allow_duplicate=True),
+        Output("item-dims", "value", allow_duplicate=True),
+        Output("item-tags", "value", allow_duplicate=True),
+        Output("item-producturl", "value", allow_duplicate=True),
+        Output("editing-id", "data", allow_duplicate=True),
+        Output("identify-modal", "is_open", allow_duplicate=True),
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("apply-identify-save", "n_clicks"),
+        State("identify-result", "data"),
+        State("editing-id", "data"),
+        State("item-name", "value"),
+        State("item-desc", "value"),
+        State("item-qty", "value"),
+        State("item-category", "value"),
+        State("item-location", "value"),
+        State("item-location-code", "value"),
+        State("current-images", "data"),
+        prevent_initial_call=True,
+    )
+    def apply_and_save(n, result, editing_id, cur_name, cur_desc, cur_qty,
+                       cur_cat, cur_loc, cur_code, cur_imgs):
+        if not n or not result:
+            raise PreventUpdate
+        d = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(d, dict):
+            return (no_update,) * 11 + (True, "Nothing to apply", "warning",
+                                        "The lookup didn't return structured details.")
+
+        def _s(v):
+            t = "" if v is None else str(v).strip()
+            return "" if t.lower() == "unknown" else t
+
+        name = _s(d.get("name")) or (cur_name or "").strip()
+        if not name:
+            return (no_update,) * 11 + (True, "Missing name", "warning",
+                                        "Nothing to name this item — type a name first.")
+        category = _s(d.get("category")) or (cur_cat or "").strip()
+        what = _s(d.get("what_it_is"))
+        desc = (cur_desc or "").strip()
+        if what and what.lower() not in desc.lower():
+            desc = (desc + "\n" + what).strip() if desc else what
+        specs = d.get("specifications")
+        specs_text = _specs_to_text(specs) if isinstance(specs, list) else _s(specs)
+        value = _s(d.get("estimated_value"))
+        dims = _s(d.get("dimensions"))
+        tags = d.get("tags")
+        tags_text = _tags_to_text(tags) if isinstance(tags, list) else _s(tags)
+        url = _s(d.get("product_url"))
+        qty = _parse_qty(cur_qty)
+        images = list(cur_imgs or [])
+        loc = (cur_loc or "").strip()
+        code = (cur_code or "").strip()
+
+        try:
+            if editing_id:
+                existing = next((r for r in data.inventory() if r.get("id") == editing_id), {})
+                data.update_item(
+                    editing_id, name, desc, qty, images, existing.get("ocr_text", ""),
+                    category=category, location=loc, location_code=code,
+                    specifications=specs_text, estimated_value=value, dimensions=dims,
+                    tags=tags_text, product_url=url,
+                )
+                saved_id = editing_id
+                header, msg = "Item Updated", f'"{name}" updated from the lookup.'
+            else:
+                row = data.add_item(
+                    name, desc, qty, images, "", category=category, location=loc,
+                    location_code=code, specifications=specs_text, estimated_value=value,
+                    dimensions=dims, tags=tags_text, product_url=url,
+                )
+                saved_id = row.get("id")
+                header, msg = "Item Added", f'"{name}" added from the lookup.'
+        except ValueError as e:
+            # Duplicate name (add path) — keep the modal open so they can fix it.
+            return (no_update,) * 11 + (True, "Duplicate Name", "danger", str(e))
+
+        return (
+            name, category, desc, specs_text, value, dims, tags_text, url,
+            saved_id, False, time.time(),
+            True, header, "success", msg,
+        )
+
+    # ---------- Connect: show every URL this app is reachable at ----------
+    @app.callback(
+        Output("connect-modal", "is_open"),
+        Output("connect-body", "children"),
+        Input("open-connect", "n_clicks"),
+        Input("close-connect-modal", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def toggle_connect(open_n, close_n):
+        trig = ctx.triggered_id
+        if trig == "close-connect-modal":
+            return False, no_update
+        if trig != "open-connect":
+            raise PreventUpdate
+        import net_info
+        port = int(os.environ.get("PORT", 8001) or 8001)
+        scheme = os.environ.get("SCHEME", "http")
+        eps = net_info.access_endpoints(port, URL_PREFIX, scheme)
+        return True, _render_connect(eps)
 
     # ---------- Form: "Search the web" link tracks the typed name ----------
     @app.callback(

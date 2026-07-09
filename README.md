@@ -46,6 +46,9 @@ to find something or restock.
   **Smart Organize** to group like items into labelled bins automatically. A live
   **Storage map** shows what lives in each bin so a keyword search tells you
   exactly where to look.
+- 📱 **Connect panel** — the navbar **Connect** button lists every address the app
+  is reachable at (local network, Tailscale, localhost) with **QR codes**, so you
+  can scan it open on your phone.
 - 🧪 **OCR Lab** — experiment with preprocessing and pull text off images when
   Tesseract is installed.
 - 🌗 **Dark/light theme**, responsive layout tuned for phones and tablets.
@@ -196,9 +199,24 @@ browser‑powered lookups that run in *your* browser (so they work on any networ
   the photo in the modal and choose **“Search image with Google Lens”** — the
   browser uploads the image directly and it works even on a private LAN.
 
-Whatever you learn, click **Apply to item** on an AI result (or just type into
-the form) and **Save** to record the name, category, specs, value, dimensions,
-tags, and a product link.
+Two ways to keep a result:
+
+- **Apply to form** — fills the form with the details so you can tweak, then
+  **Save**. Best when you want to review first.
+- **Apply & Update** — writes the details straight onto the item (or adds a new
+  one) in a single click. Fastest during a big scan-in.
+
+Either way the name, category, specs, value, dimensions, tags, and product link
+are recorded.
+
+## Open on another device (Connect panel)
+
+The app binds every network interface, so it's reachable **at the same time** on
+localhost, your LAN IP, and your Tailscale IP. Click **Connect** in the navbar to
+see all of them as clickable links with **QR codes** — scan the local‑network one
+for speed, or the Tailscale one to reach it from anywhere. (QR codes need the
+optional `qrcode` package from `requirements.txt`; without it you still get the
+links.)
 
 ## Storage & retrieval — find where you put things
 
@@ -253,6 +271,7 @@ This app ships as a bundled card in
 | `vision_lookup.py` | Ollama vision client for "Identify from photo" |
 | `web_detect.py` | Automatic web lookup (SerpApi / Google Vision), pluggable |
 | `web_search.py` | Google Lens / Google / Shopping search URL builders |
+| `net_info.py` | Enumerates reachable URLs (LAN / Tailscale) + QR codes for the Connect panel |
 | `utils.py` | Image saving, thumbnails, asset URLs |
 | `image_processing.py` / `ocr_engine.py` | OCR preprocessing & extraction |
 | `components_ocr_lab.py` / `callbacks_ocr_lab.py` | OCR Lab page |

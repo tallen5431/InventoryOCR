@@ -484,6 +484,16 @@ input[type="radio"] {
     overflow-y: auto;
 }
 
+/* Connect panel QR codes */
+.connect-qr {
+    width: 100%;
+    max-width: 180px;
+    height: auto;
+    background: #fff;          /* keep QR readable in dark mode */
+    padding: 8px;
+    border-radius: 8px;
+}
+
 /* ============================================
    UPLOAD AREA ENHANCEMENTS
    ============================================ */

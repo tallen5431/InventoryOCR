@@ -492,11 +492,26 @@ def identify_modal():
                     ),
                     dbc.ModalFooter(
                         [
-                            dbc.Button(
-                                [html.I(className="bi bi-arrow-down-circle me-1"), "Apply to item"],
-                                id="apply-identify",
-                                color="primary",
-                                n_clicks=0,
+                            html.Div(
+                                [
+                                    dbc.Button(
+                                        [html.I(className="bi bi-pencil-square me-1"), "Apply to form"],
+                                        id="apply-identify",
+                                        color="primary",
+                                        outline=True,
+                                        n_clicks=0,
+                                        title="Fill the form with these details so you can review, then Save.",
+                                        className="me-2",
+                                    ),
+                                    dbc.Button(
+                                        [html.I(className="bi bi-check2-circle me-1"), "Apply & Update"],
+                                        id="apply-identify-save",
+                                        color="primary",
+                                        n_clicks=0,
+                                        title="Write these details straight onto the item and save.",
+                                    ),
+                                ],
+                                className="d-flex flex-wrap gap-2",
                             ),
                             dbc.Button("Close", id="close-identify-modal", color="secondary", n_clicks=0),
                         ],
@@ -504,6 +519,38 @@ def identify_modal():
                     ),
                 ],
                 id="identify-modal",
+                is_open=False,
+                size="lg",
+                centered=True,
+                scrollable=True,
+            ),
+        ]
+    )
+
+
+def connect_modal():
+    """Shows every address the app is reachable at (LAN, Tailscale, localhost)."""
+    return html.Div(
+        [
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(
+                        dbc.ModalTitle([html.I(className="bi bi-phone me-2"), "Open on another device"])
+                    ),
+                    dbc.ModalBody(
+                        [
+                            html.P(
+                                "This app is reachable at every address below — pick your local "
+                                "network for speed, or Tailscale from anywhere. Scan a QR with "
+                                "your phone's camera to open it there.",
+                                className="text-muted small",
+                            ),
+                            dcc.Loading(html.Div(id="connect-body"), type="default"),
+                        ]
+                    ),
+                    dbc.ModalFooter(dbc.Button("Close", id="close-connect-modal", className="ms-auto", n_clicks=0)),
+                ],
+                id="connect-modal",
                 is_open=False,
                 size="lg",
                 centered=True,
