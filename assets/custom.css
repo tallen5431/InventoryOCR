@@ -454,6 +454,49 @@ input[type="radio"] {
 }
 
 /* ============================================
+   INVENTORY TABLE — clear thumbnails & readable rows
+   ============================================ */
+
+/* Uniform, tidy photo thumbnails in the Photo column */
+#inventory-table td[data-dash-column="image"] img {
+    width: 60px !important;
+    height: 60px !important;
+    max-width: none !important;   /* beat the generic mobile 60px cap */
+    object-fit: cover;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+    display: block;
+    margin: 0 auto;
+}
+/* markdown wraps the <img> in a <p>; kill its default margins */
+#inventory-table td[data-dash-column="image"] p {
+    margin: 0;
+    text-align: center;
+    font-size: 12px;
+    color: var(--bs-secondary-color);
+}
+
+/* Roomier, easier-to-scan rows */
+#inventory-table td {
+    line-height: 1.4;
+}
+#inventory-table .dash-spreadsheet-inner tr:hover td {
+    background-color: var(--bs-tertiary-bg) !important;
+}
+#inventory-table .dash-spreadsheet-inner th {
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    font-size: 12px;
+}
+
+@media (max-width: 576px) {
+    #inventory-table td[data-dash-column="image"] img {
+        width: 52px !important;
+        height: 52px !important;
+    }
+}
+
+/* ============================================
    STORAGE MAP / ORGANIZE
    ============================================ */
 

@@ -35,6 +35,25 @@ from typing import Dict, Any, List, Optional, Tuple
 
 _CURRENCY = {"USD": "$", "CAD": "$", "AUD": "$", "GBP": "£", "EUR": "€", "JPY": "¥", "INR": "₹"}
 
+# BeautifulSoup unlocks richer extraction (spec tables, Amazon detail bullets).
+# Optional — without it we still parse JSON-LD / Open Graph via the stdlib path.
+try:
+    from bs4 import BeautifulSoup  # type: ignore
+    _HAS_BS4 = True
+except Exception:
+    _HAS_BS4 = False
+
+# Spec rows whose key mentions any of these are noise, not helpful specs.
+_SPEC_NOISE = (
+    "customer review", "best sellers rank", "date first available", "warranty & support",
+    "feedback", "lower price", "shipping", "return policy", "questions", "would you like",
+    "report incorrect", "new & used", "video", "compare with", "manufacturer contact",
+    "legal disclaimer", "warranty description", "from the manufacturer", "add to cart",
+    "in stock", "availability", "sold by", "ships from",
+)
+_DIM_HINT = "dimension"
+_ZW = "‎‏​﻿"  # invisible marks Amazon sprinkles into detail bullets
+
 
 def _fmt_price(value: Any, currency: str = "") -> str:
     if value in (None, ""):
@@ -162,15 +181,15 @@ def _product_from_jsonld(blocks: List[str]) -> Optional[Dict[str, Any]]:
                     price = ps.get("price") or ""
                     currency = currency or ps.get("priceCurrency") or ""
 
-        specs: List[str] = []
+        spec_pairs: List[tuple] = []
         for prop in (obj.get("additionalProperty") or []):
             if isinstance(prop, dict):
                 nm, val = str(prop.get("name", "")).strip(), str(prop.get("value", "")).strip()
                 if nm and val:
-                    specs.append(f"{nm}: {val}")
+                    spec_pairs.append((nm, val))
         sku = obj.get("sku") or obj.get("mpn") or ""
         if sku:
-            specs.append(f"SKU: {sku}")
+            spec_pairs.append(("SKU", str(sku)))
 
         category = obj.get("category") or ""
         if isinstance(category, list):
@@ -183,7 +202,7 @@ def _product_from_jsonld(blocks: List[str]) -> Optional[Dict[str, Any]]:
             "brand": brand.strip(),
             "image_url": image_url.strip(),
             "price": _fmt_price(price, currency),
-            "specifications": specs,
+            "spec_pairs": spec_pairs,
             "category": category,
         }
     return None
@@ -224,6 +243,129 @@ def _short_category(category: str, brand: str) -> str:
     return ""
 
 
+def _clean_kv(k: str, v: str):
+    trans = {ord(c): None for c in _ZW}
+    k = re.sub(r"\s+", " ", (k or "").translate(trans)).strip().strip(":").strip()
+    v = re.sub(r"\s+", " ", (v or "").translate(trans)).strip().strip(":").strip()
+    return k, v
+
+
+def _isolate_specs(pairs: List[tuple]):
+    """Filter raw key/value pairs down to helpful specs, pulling out dimensions.
+
+    Returns (specs_list_of_"Key: value"_strings, dimensions_string).
+    """
+    specs: List[str] = []
+    dims = ""
+    seen = set()
+    for k, v in pairs:
+        k, v = _clean_kv(k, v)
+        if not k or not v:
+            continue
+        kl = k.lower()
+        if len(k) > 45 or len(v) > 160:
+            continue
+        if any(n in kl for n in _SPEC_NOISE):
+            continue
+        if _DIM_HINT in kl:
+            # dimensions get their own field; prefer product/item over package.
+            if not dims or "product" in kl or "item" in kl:
+                dims = v
+            continue
+        sig = (kl, v.lower())
+        if sig in seen:
+            continue
+        seen.add(sig)
+        specs.append(f"{k}: {v}")
+        if len(specs) >= 15:
+            break
+    return specs, dims
+
+
+def _enrich_with_bs4(html_text: str) -> Dict[str, Any]:
+    """Pull name/price/image/brand/specs/bullets from messy retailer HTML.
+
+    Targets common structures (spec tables, Amazon detail bullets & feature
+    bullets). Returns {} if BeautifulSoup isn't available or nothing is found.
+    """
+    out: Dict[str, Any] = {"name": "", "price": "", "image_url": "", "brand": "",
+                           "description": "", "category": "", "spec_pairs": [], "bullets": []}
+    if not _HAS_BS4:
+        return out
+    try:
+        soup = BeautifulSoup(html_text, "html.parser")
+    except Exception:
+        return out
+
+    def _text(sel):
+        el = soup.select_one(sel)
+        return el.get_text(" ", strip=True) if el else ""
+
+    out["name"] = _text("#productTitle") or _text("h1#title") or _text("h1.product-title")
+
+    for sel in (".a-price .a-offscreen", "#corePrice_feature_div .a-offscreen",
+                "#priceblock_ourprice", "#priceblock_dealprice", "#price_inside_buybox"):
+        p = _text(sel)
+        if p:
+            out["price"] = p
+            break
+
+    img = soup.select_one("#landingImage") or soup.select_one("#imgBlkFront") or soup.select_one("img#main-image")
+    if img:
+        out["image_url"] = img.get("data-old-hires") or img.get("src") or ""
+
+    byline = _text("#bylineInfo")
+    if byline:
+        out["brand"] = re.sub(r"(?i)^\s*(brand:|visit the|store)\s*", "", byline).replace(" Store", "").strip()
+
+    out["description"] = _text("#productDescription")
+
+    # Category from the breadcrumb trail.
+    crumbs = [a.get_text(" ", strip=True) for a in soup.select("#wayfinding-breadcrumbs_feature_div a")]
+    if crumbs:
+        out["category"] = " / ".join(c for c in crumbs if c)
+
+    # Spec tables — prefer the known spec/detail tables, else any 2-column table.
+    pairs: List[tuple] = []
+    rows = soup.select(
+        "#productDetails_techSpec_section_1 tr, #productDetails_techSpec_section_2 tr, "
+        "#productDetails_detailBullets_sections1 tr, .prodDetTable tr, table.a-keyvalue tr, "
+        "#technicalSpecifications_section_1 tr, #technical-details tr, table.product-specs tr"
+    )
+    if not rows:
+        for table in soup.find_all("table"):
+            trs = table.find_all("tr")
+            kv = [tr for tr in trs if len(tr.find_all(["th", "td"])) == 2]
+            if len(kv) >= 2 and len(kv) >= 0.6 * max(1, len(trs)):
+                rows.extend(kv)
+    for tr in rows:
+        cells = tr.find_all(["th", "td"])
+        if len(cells) >= 2:
+            k = cells[0].get_text(" ", strip=True)
+            v = cells[1].get_text(" ", strip=True)
+            if k and v:
+                pairs.append((k, v))
+
+    # Amazon detail bullets: <li><span class="a-text-bold">Key</span> value</li>
+    for li in soup.select("#detailBullets_feature_div li, .detail-bullet-list li"):
+        bold = li.select_one(".a-text-bold, .a-list-item .a-text-bold")
+        if bold:
+            k = bold.get_text(" ", strip=True)
+            full = li.get_text(" ", strip=True)
+            v = full.replace(bold.get_text(" ", strip=True), "", 1)
+            if k and v:
+                pairs.append((k, v))
+    out["spec_pairs"] = pairs
+
+    # Feature bullets (concise selling points that read like specs).
+    for li in soup.select("#feature-bullets li, #feature-bullets .a-list-item"):
+        txt = li.get_text(" ", strip=True)
+        if txt:
+            out["bullets"].append(txt)
+
+    return out
+
+
 def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
     """Parse product details out of a page's HTML. Returns {ok, data|error}."""
     if not html_text or not html_text.strip():
@@ -237,24 +379,43 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
 
     prod = _product_from_jsonld(ex.jsonld)
     meta = _product_from_meta(ex.metas, ex.title)
+    enr = _enrich_with_bs4(html_text)
 
-    def pick(k):
-        return ((prod or {}).get(k) or "").strip() if isinstance((prod or {}).get(k), str) else meta.get(k, "")
+    def base(k: str) -> str:
+        for src in (prod or {}), meta, enr:
+            v = src.get(k) if isinstance(src, dict) else ""
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return ""
 
-    name = (pick("name") or meta.get("name", "")).strip()
+    name = base("name")
     if not name:
         return {"ok": False,
-                "error": "Couldn't find product details in that page. Try a different product "
-                         "page, or use the 'paste HTML' option with the full page source.",
+                "error": "Couldn't find product details in that page. Open the product page in "
+                         "your browser, save it (Ctrl+S) or copy its source, and use “paste / "
+                         "upload the page HTML”.",
                 "suggest_html": True}
 
-    price = (prod or {}).get("price") or meta.get("price", "")
-    image_url = pick("image_url") or meta.get("image_url", "")
-    brand = pick("brand") or meta.get("brand", "")
-    description = _clean_text(pick("description") or meta.get("description", ""))
-    specs = (prod or {}).get("specifications") or []
-    category_raw = (prod or {}).get("category") or ""
+    price = ((prod or {}).get("price") or meta.get("price") or enr.get("price") or "").strip()
+    image_url = base("image_url")
+    brand = base("brand")
 
+    # Combine specs from every source, then isolate the helpful ones + dimensions.
+    pairs = list((prod or {}).get("spec_pairs", [])) + list(enr.get("spec_pairs", []))
+    specs, dimensions = _isolate_specs(pairs)
+    # Add a few concise feature bullets if there's room — they're often the specs.
+    for b in enr.get("bullets", []):
+        if len(specs) >= 18:
+            break
+        b = re.sub(r"\s+", " ", b).strip()
+        if 8 <= len(b) <= 110 and b not in specs:
+            specs.append(b)
+
+    description = _clean_text(base("description"))
+    if not description and enr.get("bullets"):
+        description = _clean_text(" ".join(enr["bullets"][:2]))
+
+    category_raw = (prod or {}).get("category") or enr.get("category") or meta.get("category", "") or ""
     tags: List[str] = []
     if brand:
         tags.append(brand)
@@ -269,15 +430,15 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
         "what_it_is": description,
         "specifications": specs,
         "estimated_value": price,
-        "dimensions": "unknown",
+        "dimensions": dimensions or "unknown",
         "tags": tags,
         "product_url": source_url,
-        "confidence": "high" if prod else "medium",
+        "confidence": "high" if (prod or dimensions or len(specs) >= 3) else "medium",
         "image_url": image_url,
     }
+    via = "JSON-LD" if prod else ("Open Graph" if meta.get("name") else "page HTML")
     return {"ok": True, "data": data, "source": source_url, "price": price,
-            "image_url": image_url, "brand": brand,
-            "via": "JSON-LD" if prod else "Open Graph"}
+            "image_url": image_url, "brand": brand, "via": via, "spec_count": len(specs)}
 
 
 # ---------------------------------------------------------------------------
