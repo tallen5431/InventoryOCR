@@ -28,6 +28,10 @@ to find something or restock.
 - ⚡ **Fast batch entry** — **Save & Next** stores the item and keeps the
   category / location / bin so you can rip through a whole shelf without
   re‑typing where things live.
+- 📷 **Quick phone scan** — on your phone, just snap a photo and tap **Save &
+  Next**: a blank name **auto‑numbers** (Item 0001, Item 0002 …), so you can bang
+  through a pile of items with photos only, then fill in real names/details later
+  from a desktop.
 - 🔎 **Find fast** — full‑text search across name / category / location / bin /
   notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters for
   category and location.
