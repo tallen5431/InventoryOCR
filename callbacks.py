@@ -932,10 +932,20 @@ def register_callbacks(app):
         res = vision_lookup.identify_item(image)
         parsed = res.get("data") if isinstance(res.get("data"), dict) else None
 
-        # Automatic reverse-image lookup (Lens-style) when a provider is
-        # configured; otherwise stays fully local. Only the photo the user just
-        # asked to identify is sent, and only when GOOGLE_VISION_API_KEY is set.
-        web = web_detect.detect_web(image) if web_detect.is_configured() else None
+        # Automatic web lookup when a provider is configured; otherwise fully
+        # local. Only runs on click. SerpApi uses a public image URL (Lens) when
+        # available, else a Google search on the local model's best guess;
+        # Google Vision uses the image bytes directly.
+        local_query = ""
+        if parsed:
+            local_query = str(parsed.get("search_query") or parsed.get("name") or "").strip()
+        if not local_query:
+            local_query = typed_name
+        img_public = web_search.public_image_url(primary)  # "" if no public base
+        web = (
+            web_detect.detect_web(image, query=local_query, image_url=img_public)
+            if web_detect.is_configured() else None
+        )
 
         # Merge: web reverse-image match wins the name; local model keeps
         # category/value/dimensions/specs; entities fold into tags.

@@ -86,8 +86,10 @@ All settings are environment variables:
 | `OLLAMA_HOST`     | `http://100.98.112.1:11434` | Ollama server for "Identify from photo" (a trailing `/v1` is accepted). |
 | `OLLAMA_VISION_MODEL` | `llama3.2-vision` | Vision model used for identification. Pull it first. |
 | `VISION_TIMEOUT`  | `60`          | Identify request timeout, in seconds |
-| `GOOGLE_VISION_API_KEY` | *(unset)* | Enables **automatic reverse‑image detection** (Lens‑style) during Identify. When set, the photo is sent to Google Cloud Vision on click; unset = fully local. |
-| `WEB_DETECT_TIMEOUT` | `30`       | Reverse‑image request timeout, in seconds |
+| `SERPAPI_KEY`     | *(unset)*     | **Free web lookup** during Identify (SerpApi — 100/mo, no credit card). Real product name, tags, links, and price. |
+| `GOOGLE_VISION_API_KEY` | *(unset)* | Alternative web lookup (Google Vision reverse‑image; free tier needs billing on). |
+| `WEB_DETECT_PROVIDER` | `auto`   | `auto` (serpapi if its key is set, else google_vision, else off), or force `serpapi` / `google_vision` / `none`. |
+| `WEB_DETECT_TIMEOUT` | `30`       | Web‑lookup request timeout, in seconds |
 | `WEB_DETECT_MAX_RESULTS` | `8`    | Max web entities / matching pages to keep |
 
 Serve at the root (e.g. when accessed directly at `http://host:8001/`):
@@ -142,34 +144,43 @@ export OLLAMA_VISION_MODEL=llama3.2-vision
 > ⚠️ Estimated values and specs are the model's best guess from the photo —
 > treat them as a starting point, not an appraisal.
 
-## Automatic reverse‑image identification (Lens‑style)
+## Automatic web identification (free)
 
 Local vision models describe an item well but often miss the *exact* product.
-Set **`GOOGLE_VISION_API_KEY`** and the Identify button does a real reverse‑image
-lookup automatically — no manual search or copy‑paste:
+Configure a web‑lookup provider and the Identify button grounds the result in
+real web data automatically — no manual search or copy‑paste:
 
-1. Your local model runs as usual (category, estimated value, dimensions, specs).
-2. In parallel, the photo is sent to **Google Cloud Vision — Web Detection**,
-   which returns the accurate **product name**, keyword entities, and links to
-   matching pages.
-3. The two are merged — the reverse‑image match wins the **name**, its keywords
-   become **tags**, the top matching page becomes the **product link**, and your
-   local model keeps category/value/size. **Apply to item** drops it all into the
-   form.
+1. Your local model runs as usual (category, dimensions, specs, a first guess).
+2. In parallel, a web lookup returns the accurate **product name**, keyword
+   tags, links to matching pages, and — when available — a **real price**.
+3. The two are merged: the web match wins the **name** and **price**, entities
+   become **tags**, the top page becomes the **product link**, and your local
+   model keeps category/dimensions/specs. **Apply to item** drops it all into
+   the form.
 
-Why Vision (and not Google Lens / SerpApi)? It accepts the photo **bytes
-directly**, so it works on a **private LAN** without exposing the app on a public
-URL. Nothing is sent anywhere unless the key is set *and* you press Identify.
+### Provider options
 
-Setup:
-```
-# 1. In Google Cloud, create a project, enable the "Cloud Vision API",
-#    and make an API key (Vision Web Detection has a free monthly tier).
-# 2. Point the app at it (e.g. in the manager card's env, or your shell):
-export GOOGLE_VISION_API_KEY=AIza...your-key...
-```
-No key? Identify stays exactly as before — fully local, plus the manual web
-buttons below.
+- **SerpApi — free, recommended.** Free tier is **100 searches/month with no
+  credit card**. Returns product names *and* real prices. Sign up at
+  [serpapi.com](https://serpapi.com), copy your key, and set:
+  ```
+  export SERPAPI_KEY=your-serpapi-key
+  ```
+  It uses Google Lens (reverse image) when the photo is reachable on a public
+  URL (`PUBLIC_BASE` / `TAILSCALE_FUNNEL_BASE`), and otherwise a Google search
+  grounded on your local model's guess — so it works even on a private LAN.
+
+- **Google Cloud Vision — reverse image from bytes.** Free tier is 1000/month
+  but requires enabling billing (a card). Accepts the photo bytes directly, so
+  no public URL is needed:
+  ```
+  export GOOGLE_VISION_API_KEY=AIza...your-key...
+  ```
+
+`WEB_DETECT_PROVIDER` selects the back‑end (`auto` by default: SerpApi if its key
+is set, else Vision, else off). **No key at all?** Identify stays fully local,
+plus the manual web‑search buttons below. Nothing is sent anywhere unless a
+provider is configured *and* you press Identify.
 
 ## Look it up on the web (manual)
 
@@ -240,7 +251,7 @@ This app ships as a bundled card in
 | `callbacks.py` | Dashboard behavior (add/edit/delete, filter, KPIs, identify, web search, organize, export) |
 | `data.py` | JSON persistence + organizing/storage helpers (categories, locations, bins, Smart Organize) |
 | `vision_lookup.py` | Ollama vision client for "Identify from photo" |
-| `web_detect.py` | Automatic reverse‑image detection (Google Vision Web Detection) |
+| `web_detect.py` | Automatic web lookup (SerpApi / Google Vision), pluggable |
 | `web_search.py` | Google Lens / Google / Shopping search URL builders |
 | `utils.py` | Image saving, thumbnails, asset URLs |
 | `image_processing.py` / `ocr_engine.py` | OCR preprocessing & extraction |
