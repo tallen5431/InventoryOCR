@@ -187,6 +187,14 @@ def sidebar_form():
                                 "Local vision AI suggests what it is; the web button opens Google for the name/specs.",
                                 className="text-muted small mt-1",
                             ),
+                            dbc.Button(
+                                [html.I(className="bi bi-link-45deg me-1"), "Import from a product link / page"],
+                                id="open-import",
+                                color="link",
+                                size="sm",
+                                n_clicks=0,
+                                className="px-0 mt-1 text-decoration-none",
+                            ),
 
                             # ----- Collapsible catalogue details -----
                             dbc.Button(
@@ -485,10 +493,82 @@ def identify_modal():
                         dbc.ModalTitle([html.I(className="bi bi-search me-2"), "Item lookup"])
                     ),
                     dbc.ModalBody(
-                        dcc.Loading(
-                            html.Div(id="identify-body"),
-                            type="default",
-                        )
+                        [
+                            # --- Import from a product page (URL or pasted/saved HTML) ---
+                            html.Div(
+                                [
+                                    html.Div(
+                                        [html.I(className="bi bi-link-45deg me-2"),
+                                         html.Strong("Found it online? Import from the product page")],
+                                        className="mb-2",
+                                    ),
+                                    dbc.InputGroup(
+                                        [
+                                            dbc.Input(
+                                                id="import-url",
+                                                placeholder="Paste a product URL (Amazon, Home Depot, manufacturer…)",
+                                                type="url",
+                                            ),
+                                            dbc.Button(
+                                                [html.I(className="bi bi-download me-1"), "Fetch"],
+                                                id="import-fetch", color="secondary", n_clicks=0,
+                                            ),
+                                        ]
+                                    ),
+                                    dbc.Button(
+                                        "Site blocked it? Paste / upload the page HTML",
+                                        id="import-html-toggle",
+                                        color="link", size="sm", n_clicks=0,
+                                        className="px-0 mt-1 text-decoration-none",
+                                    ),
+                                    dbc.Collapse(
+                                        html.Div(
+                                            [
+                                                dbc.Textarea(
+                                                    id="import-html",
+                                                    placeholder="Paste the product page's HTML source here…",
+                                                    rows=4, className="mt-1",
+                                                ),
+                                                dbc.Row(
+                                                    [
+                                                        dbc.Col(
+                                                            dbc.Button(
+                                                                [html.I(className="bi bi-magic me-1"), "Extract from HTML"],
+                                                                id="import-extract", color="secondary",
+                                                                n_clicks=0, className="w-100 mt-1",
+                                                            ),
+                                                            xs=12, sm=6,
+                                                        ),
+                                                        dbc.Col(
+                                                            dcc.Upload(
+                                                                id="import-html-upload",
+                                                                children=html.Div(
+                                                                    [html.I(className="bi bi-file-earmark-code me-1"),
+                                                                     "Upload a saved .html file"]
+                                                                ),
+                                                                accept=".html,.htm,text/html",
+                                                                className="upload-dropzone mt-1",
+                                                            ),
+                                                            xs=12, sm=6,
+                                                        ),
+                                                    ],
+                                                    className="g-2",
+                                                ),
+                                                html.Div(
+                                                    "Tip: on the product page press Ctrl+S to save it, or "
+                                                    "right‑click → View Source → select all → copy.",
+                                                    className="text-muted small mt-1",
+                                                ),
+                                            ]
+                                        ),
+                                        id="import-html-collapse", is_open=False,
+                                    ),
+                                ],
+                                className="mb-2",
+                            ),
+                            html.Hr(),
+                            dcc.Loading(html.Div(id="identify-body"), type="default"),
+                        ]
                     ),
                     dbc.ModalFooter(
                         [

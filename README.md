@@ -42,6 +42,9 @@ to find something or restock.
 - 🌐 **Look it up on the web** — open a **Google Lens** reverse‑image search
   (when the app is on a public URL) or a plain **Google / Shopping** search for
   the item's name and specs. Handy when local models can't nail an exact product.
+- 🔗 **Import from a product page** — found it online? Paste the product URL (or,
+  when a store blocks bots, paste/upload the page's HTML) and the app reads the
+  embedded product data (name, price, brand, specs) and fills the item for you.
 - 🧺 **Storage system** — give items a short **bin / location code**, or run
   **Smart Organize** to group like items into labelled bins automatically. A live
   **Storage map** shows what lives in each bin so a keyword search tells you
@@ -218,6 +221,25 @@ for speed, or the Tailscale one to reach it from anywhere. (QR codes need the
 optional `qrcode` package from `requirements.txt`; without it you still get the
 links.)
 
+## Import from a product page (Amazon & co.)
+
+When visual search lands you on a real product page, pull its details straight
+into the item. Open **Item lookup** (the Identify panel, or the form's *Import
+from a product link* button) and use the **product page** row:
+
+- **Paste a URL → Fetch.** The app fetches the page and reads the product data
+  most stores embed as JSON‑LD / Open Graph (name, price, brand, specs, image).
+  Works on many manufacturer and retailer sites.
+- **Blocked? Paste or upload the HTML.** Amazon and other big stores block
+  automated fetches, so instead open the page in your browser, **Ctrl+S** to save
+  it (or right‑click → View Source → copy all), and paste/upload it. Because the
+  page came from *your* browser, this always works — and the same JSON‑LD parser
+  reads the exact product name and price out of it.
+
+Then **Apply to form** (to review) or **Apply & Update** (one click) records it.
+The importer only reads embedded structured data — no login or scraping of your
+account — and URL fetches are limited to public hosts.
+
 ## Storage & retrieval — find where you put things
 
 The whole point of scanning your stuff is being able to find it later. Two pieces
@@ -271,6 +293,7 @@ This app ships as a bundled card in
 | `vision_lookup.py` | Ollama vision client for "Identify from photo" |
 | `web_detect.py` | Automatic web lookup (SerpApi / Google Vision), pluggable |
 | `web_search.py` | Google Lens / Google / Shopping search URL builders |
+| `product_import.py` | Extract product details from a page URL or pasted/saved HTML (JSON‑LD / OG) |
 | `net_info.py` | Enumerates reachable URLs (LAN / Tailscale) + QR codes for the Connect panel |
 | `utils.py` | Image saving, thumbnails, asset URLs |
 | `image_processing.py` / `ocr_engine.py` | OCR preprocessing & extraction |

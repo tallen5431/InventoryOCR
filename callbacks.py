@@ -218,6 +218,68 @@ def _render_connect(eps):
         )
     return dbc.Row(cols, className="g-3")
 
+def _render_import(res):
+    """Render a product_import result (from a URL fetch or pasted/uploaded HTML)."""
+    if not res.get("ok"):
+        return html.Div(
+            [
+                html.P(
+                    [html.I(className="bi bi-exclamation-triangle me-2"), "Couldn't import that page."],
+                    className="fw-bold text-warning",
+                ),
+                html.P(res.get("error", ""), className="small"),
+            ]
+        )
+    d = res.get("data") or {}
+
+    def _row(icon, label, val):
+        if not val:
+            return None
+        return html.Div(
+            [
+                html.Div([html.I(className=f"bi {icon} me-2 text-muted"), html.Span(label)], className="text-muted small"),
+                html.Div(val, className="mt-1"),
+            ],
+            className="py-2 border-bottom",
+        )
+
+    header = [html.H4(d.get("name", "") or "Product", className="mb-0")]
+    if d.get("estimated_value"):
+        header.append(html.Span(d["estimated_value"], className="badge bg-success ms-2"))
+    body = [html.Div(header, className="d-flex align-items-center flex-wrap mb-2")]
+
+    if res.get("image_url"):
+        body.append(
+            html.Img(
+                src=res["image_url"],
+                className="mb-2",
+                style={"maxHeight": "140px", "maxWidth": "100%", "objectFit": "contain", "borderRadius": "8px"},
+            )
+        )
+
+    specs = d.get("specifications") or []
+    specs_node = html.Ul([html.Li(s) for s in specs], className="mb-0") if specs else None
+    for node in (
+        _row("bi-tags", "Category", d.get("category")),
+        _row("bi-info-circle", "Description", d.get("what_it_is")),
+        _row("bi-list-check", "Specifications", specs_node),
+    ):
+        if node:
+            body.append(node)
+
+    tags = d.get("tags") or []
+    if tags:
+        body.append(html.Div([html.Span(t, className="badge bg-secondary me-1 mb-1") for t in tags], className="py-2"))
+
+    body.append(
+        html.Div(
+            ["Imported via ", html.Code(res.get("via", "web")),
+             " — use ", html.Strong("Apply to form"), " or ", html.Strong("Apply & Update"), " below."],
+            className="text-muted small mt-2",
+        )
+    )
+    return html.Div(body)
+
 def _identify_footer(res):
     endpoint = (res.get("endpoint", "") or "").replace("/api/generate", "")
     return html.Div(
@@ -1193,6 +1255,81 @@ def register_callbacks(app):
         scheme = os.environ.get("SCHEME", "http")
         eps = net_info.access_endpoints(port, URL_PREFIX, scheme)
         return True, _render_connect(eps)
+
+    # ---------- Import: toggle the paste-HTML area ----------
+    @app.callback(
+        Output("import-html-collapse", "is_open"),
+        Input("import-html-toggle", "n_clicks"),
+        State("import-html-collapse", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_import_html(n, is_open):
+        if not n:
+            raise PreventUpdate
+        return not is_open
+
+    # ---------- Import: open the lookup hub from the form ----------
+    @app.callback(
+        Output("identify-modal", "is_open", allow_duplicate=True),
+        Output("identify-body", "children", allow_duplicate=True),
+        Input("open-import", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def open_import(n):
+        if not n:
+            raise PreventUpdate
+        hint = html.Div(
+            [
+                html.I(className="bi bi-arrow-up-circle me-2"),
+                "Paste a product link (or the page's HTML) above and Fetch / Extract — "
+                "or take a photo and use Identify.",
+            ],
+            className="text-muted",
+        )
+        return True, hint
+
+    # ---------- Import: fetch a URL or parse pasted/uploaded HTML ----------
+    @app.callback(
+        Output("identify-body", "children", allow_duplicate=True),
+        Output("identify-result", "data", allow_duplicate=True),
+        Input("import-fetch", "n_clicks"),
+        Input("import-extract", "n_clicks"),
+        Input("import-html-upload", "contents"),
+        State("import-url", "value"),
+        State("import-html", "value"),
+        prevent_initial_call=True,
+    )
+    def do_import(fetch_n, extract_n, upload_contents, url, html_text):
+        import product_import, base64
+        trig = ctx.triggered_id
+
+        if trig == "import-fetch":
+            if not (url or "").strip():
+                raise PreventUpdate
+            res = product_import.import_product(url=url or "")
+        elif trig == "import-extract":
+            if not (html_text or "").strip():
+                raise PreventUpdate
+            res = product_import.import_product(url=url or "", html_text=html_text or "")
+        elif trig == "import-html-upload":
+            if not upload_contents:
+                raise PreventUpdate
+            text = ""
+            try:
+                if "," in upload_contents:
+                    text = base64.b64decode(upload_contents.split(",", 1)[1]).decode("utf-8", "replace")
+            except Exception:
+                text = ""
+            res = (product_import.import_product(url=url or "", html_text=text)
+                   if text.strip() else {"ok": False, "error": "Couldn't read that file."})
+        else:
+            raise PreventUpdate
+
+        body = _render_import(res)
+        if res.get("ok"):
+            return body, {"data": res.get("data")}
+        # Keep any prior good result on failure so Apply still has something.
+        return body, no_update
 
     # ---------- Form: "Search the web" link tracks the typed name ----------
     @app.callback(
