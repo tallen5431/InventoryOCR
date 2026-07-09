@@ -495,29 +495,47 @@ def identify_modal():
                     ),
                     dbc.ModalBody(
                         [
-                            # --- Import from a product page (URL or pasted/saved HTML) ---
+                            # --- Import from a product listing (upload .html — most reliable — or URL) ---
                             html.Div(
                                 [
                                     html.Div(
                                         [html.I(className="bi bi-link-45deg me-2"),
-                                         html.Strong("Found it online? Import from the product page")],
+                                         html.Strong("Found it online? Import from the listing")],
                                         className="mb-2",
                                     ),
+                                    # Primary, reliable path: upload the saved page.
+                                    dcc.Upload(
+                                        id="import-html-upload",
+                                        children=html.Div(
+                                            [
+                                                html.Div("⬆️", className="upload-icon"),
+                                                html.Div(html.Strong("Upload the saved .html listing")),
+                                                html.Div(
+                                                    "Save the page (Ctrl+S) then drop it here — name, price & specs fill in automatically. Never gets blocked.",
+                                                    className="text-muted small mt-1",
+                                                ),
+                                            ]
+                                        ),
+                                        accept=".html,.htm,text/html",
+                                        className="upload-dropzone",
+                                    ),
+                                    # Secondary: fetch a URL directly (works on many non-Amazon sites).
                                     dbc.InputGroup(
                                         [
                                             dbc.Input(
                                                 id="import-url",
-                                                placeholder="Paste a product URL (Amazon, Home Depot, manufacturer…)",
+                                                placeholder="…or paste a product URL (Amazon, eBay, Home Depot…)",
                                                 type="url",
                                             ),
                                             dbc.Button(
                                                 [html.I(className="bi bi-download me-1"), "Fetch"],
                                                 id="import-fetch", color="secondary", n_clicks=0,
                                             ),
-                                        ]
+                                        ],
+                                        className="mt-2",
                                     ),
                                     dbc.Button(
-                                        "Site blocked it? Paste / upload the page HTML",
+                                        "or paste the HTML source instead",
                                         id="import-html-toggle",
                                         color="link", size="sm", n_clicks=0,
                                         className="px-0 mt-1 text-decoration-none",
@@ -527,38 +545,13 @@ def identify_modal():
                                             [
                                                 dbc.Textarea(
                                                     id="import-html",
-                                                    placeholder="Paste the product page's HTML source here…",
+                                                    placeholder="Paste the listing page's HTML source here…",
                                                     rows=4, className="mt-1",
                                                 ),
-                                                dbc.Row(
-                                                    [
-                                                        dbc.Col(
-                                                            dbc.Button(
-                                                                [html.I(className="bi bi-magic me-1"), "Extract from HTML"],
-                                                                id="import-extract", color="secondary",
-                                                                n_clicks=0, className="w-100 mt-1",
-                                                            ),
-                                                            xs=12, sm=6,
-                                                        ),
-                                                        dbc.Col(
-                                                            dcc.Upload(
-                                                                id="import-html-upload",
-                                                                children=html.Div(
-                                                                    [html.I(className="bi bi-file-earmark-code me-1"),
-                                                                     "Upload a saved .html file"]
-                                                                ),
-                                                                accept=".html,.htm,text/html",
-                                                                className="upload-dropzone mt-1",
-                                                            ),
-                                                            xs=12, sm=6,
-                                                        ),
-                                                    ],
-                                                    className="g-2",
-                                                ),
-                                                html.Div(
-                                                    "Tip: on the product page press Ctrl+S to save it, or "
-                                                    "right‑click → View Source → select all → copy.",
-                                                    className="text-muted small mt-1",
+                                                dbc.Button(
+                                                    [html.I(className="bi bi-magic me-1"), "Extract from pasted HTML"],
+                                                    id="import-extract", color="secondary",
+                                                    n_clicks=0, className="w-100 mt-1",
                                                 ),
                                             ]
                                         ),

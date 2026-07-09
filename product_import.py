@@ -54,6 +54,27 @@ _SPEC_NOISE = (
 _DIM_HINT = "dimension"
 _ZW = "‎‏​﻿"  # invisible marks Amazon sprinkles into detail bullets
 
+# Placeholder "values" that carry no real info (eBay's Brand field, etc.).
+_PLACEHOLDER_VALUES = {
+    "does not apply", "does not apply.", "doesn't apply", "n/a", "na", "none",
+    "unbranded", "unspecified", "not applicable", "not specified", "-", "--", "—",
+    "see description", "see photos", "no", "unknown",
+}
+
+
+def _is_placeholder(v: str) -> bool:
+    return (v or "").strip().lower() in _PLACEHOLDER_VALUES
+
+
+def _clean_price_text(s: str) -> str:
+    """Normalise retailer price text, e.g. 'US $11.99' -> '$11.99', 'AU $5' -> '$5'."""
+    s = re.sub(r"\s+", " ", (s or "").strip())
+    # drop a leading country/locale code before the currency symbol
+    s = re.sub(r"^[A-Za-z]{1,3}\s*(?=[$£€¥₹])", "", s)
+    # keep just the first price-looking token if there's trailing junk
+    m = re.search(r"[$£€¥₹]\s?\d[\d,]*(?:\.\d+)?", s)
+    return m.group(0).replace(" ", "") if m else s
+
 
 def _fmt_price(value: Any, currency: str = "") -> str:
     if value in (None, ""):
@@ -260,7 +281,7 @@ def _isolate_specs(pairs: List[tuple]):
     seen = set()
     for k, v in pairs:
         k, v = _clean_kv(k, v)
-        if not k or not v:
+        if not k or not v or _is_placeholder(v):
             continue
         kl = k.lower()
         if len(k) > 45 or len(v) > 160:
@@ -301,18 +322,22 @@ def _enrich_with_bs4(html_text: str) -> Dict[str, Any]:
         el = soup.select_one(sel)
         return el.get_text(" ", strip=True) if el else ""
 
-    out["name"] = _text("#productTitle") or _text("h1#title") or _text("h1.product-title")
+    out["name"] = (_text("#productTitle") or _text("h1#title") or _text("h1.product-title")
+                   or _text("h1.x-item-title__mainTitle") or _text("h1[class*='item-title']"))
 
     for sel in (".a-price .a-offscreen", "#corePrice_feature_div .a-offscreen",
-                "#priceblock_ourprice", "#priceblock_dealprice", "#price_inside_buybox"):
+                "#priceblock_ourprice", "#priceblock_dealprice", "#price_inside_buybox",
+                ".x-price-primary span", ".x-price-primary", "[itemprop='price']"):
         p = _text(sel)
         if p:
-            out["price"] = p
+            out["price"] = _clean_price_text(p)
             break
 
-    img = soup.select_one("#landingImage") or soup.select_one("#imgBlkFront") or soup.select_one("img#main-image")
+    img = (soup.select_one("#landingImage") or soup.select_one("#imgBlkFront")
+           or soup.select_one("img#main-image") or soup.select_one(".ux-image-carousel-item img")
+           or soup.select_one("img.x-image"))
     if img:
-        out["image_url"] = img.get("data-old-hires") or img.get("src") or ""
+        out["image_url"] = img.get("data-old-hires") or img.get("src") or img.get("data-src") or ""
 
     byline = _text("#bylineInfo")
     if byline:
@@ -320,8 +345,10 @@ def _enrich_with_bs4(html_text: str) -> Dict[str, Any]:
 
     out["description"] = _text("#productDescription")
 
-    # Category from the breadcrumb trail.
-    crumbs = [a.get_text(" ", strip=True) for a in soup.select("#wayfinding-breadcrumbs_feature_div a")]
+    # Category from the breadcrumb trail (Amazon or eBay).
+    crumbs = [a.get_text(" ", strip=True) for a in
+              soup.select("#wayfinding-breadcrumbs_feature_div a, nav.breadcrumbs a, "
+                          "nav[aria-label*='readcrumb'] a")]
     if crumbs:
         out["category"] = " / ".join(c for c in crumbs if c)
 
@@ -355,6 +382,20 @@ def _enrich_with_bs4(html_text: str) -> Dict[str, Any]:
             v = full.replace(bold.get_text(" ", strip=True), "", 1)
             if k and v:
                 pairs.append((k, v))
+
+    # eBay item specifics: <dl class="ux-labels-values"><dt __labels><dd __values>.
+    # (Shipping/returns use <div>, so selecting <dl> keeps just the real specifics.)
+    for dl in soup.select("dl.ux-labels-values"):
+        lab = dl.select_one(".ux-labels-values__labels")
+        val = dl.select_one(".ux-labels-values__values")
+        if lab and val:
+            k = lab.get_text(" ", strip=True)
+            v = val.get_text(" ", strip=True)
+            if k and v and k != v:
+                pairs.append((k, v))
+                if k.lower() == "brand" and not _is_placeholder(v) and not out["brand"]:
+                    out["brand"] = v
+
     out["spec_pairs"] = pairs
 
     # Feature bullets (concise selling points that read like specs).
@@ -399,9 +440,17 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
     price = ((prod or {}).get("price") or meta.get("price") or enr.get("price") or "").strip()
     image_url = base("image_url")
     brand = base("brand")
+    if _is_placeholder(brand):
+        brand = ""
 
     # Combine specs from every source, then isolate the helpful ones + dimensions.
     pairs = list((prod or {}).get("spec_pairs", [])) + list(enr.get("spec_pairs", []))
+    # Derive a brand from the specifics if we still don't have one.
+    if not brand:
+        for k, v in pairs:
+            if k.strip().lower() == "brand" and v.strip() and not _is_placeholder(v):
+                brand = v.strip()
+                break
     specs, dimensions = _isolate_specs(pairs)
     # Add a few concise feature bullets if there's room — they're often the specs.
     for b in enr.get("bullets", []):
@@ -419,9 +468,11 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
     tags: List[str] = []
     if brand:
         tags.append(brand)
-    for w in re.split(r"[>/›»|,]", category_raw):
-        w = w.strip()
-        if w and w.lower() not in {t.lower() for t in tags}:
+    # Only the most specific 1-2 breadcrumb segments make useful search tags —
+    # not the whole "Business & Industrial > … > Toggle Switches" path.
+    cat_parts = [w.strip() for w in re.split(r"[>/›»|,]", category_raw) if w.strip()]
+    for w in cat_parts[-2:]:
+        if w.lower() not in {t.lower() for t in tags}:
             tags.append(w)
 
     data = {
