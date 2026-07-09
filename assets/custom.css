@@ -280,6 +280,71 @@ input[type="radio"] {
 }
 
 /* ============================================
+   DARK MODE — widgets the Bootswatch theme doesn't cover
+   ============================================ */
+/* These render with their own light styling, so they look washed-out / hard to
+   read in dark mode. Re-skin them with the theme's CSS variables. */
+
+/* dcc.Dropdown (react-select) — the category/location filters */
+[data-theme="dark"] .Select-control,
+[data-theme="dark"] .Select.is-focused > .Select-control,
+[data-theme="dark"] .Select-menu-outer,
+[data-theme="dark"] .Select-menu,
+[data-theme="dark"] .VirtualizedSelectOption {
+    background-color: var(--bs-body-bg) !important;
+    border-color: var(--bs-border-color) !important;
+    color: var(--bs-body-color) !important;
+}
+[data-theme="dark"] .Select-value-label,
+[data-theme="dark"] .Select--single > .Select-control .Select-value .Select-value-label,
+[data-theme="dark"] .Select-input > input,
+[data-theme="dark"] .Select-option {
+    color: var(--bs-body-color) !important;
+}
+[data-theme="dark"] .Select-option {
+    background-color: var(--bs-body-bg) !important;
+}
+[data-theme="dark"] .Select-option.is-focused,
+[data-theme="dark"] .VirtualizedSelectFocusedOption {
+    background-color: var(--bs-tertiary-bg) !important;
+}
+[data-theme="dark"] .Select-placeholder,
+[data-theme="dark"] .Select-noresults {
+    color: var(--bs-secondary-color) !important;
+}
+[data-theme="dark"] .Select-arrow {
+    border-top-color: var(--bs-secondary-color) !important;
+}
+
+/* DataTable native filter row + toggle-columns controls */
+[data-theme="dark"] .dash-table-container .dash-filter input,
+[data-theme="dark"] .dash-table-container .dash-filter--case,
+[data-theme="dark"] .dash-table-container .column-header-name,
+[data-theme="dark"] .dash-table-container .show-hide {
+    color: var(--bs-body-color) !important;
+}
+[data-theme="dark"] .dash-table-container .dash-filter input::placeholder {
+    color: var(--bs-secondary-color) !important;
+    opacity: 1;
+}
+[data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner .dash-filter {
+    background-color: var(--bs-tertiary-bg) !important;
+}
+
+/* Lookup / import result panels: give the bordered blocks a readable surface */
+[data-theme="dark"] #identify-body .border,
+[data-theme="dark"] #organize-body .table,
+[data-theme="dark"] #connect-body .card {
+    background-color: var(--bs-tertiary-bg);
+}
+/* code chips (endpoints/keys) readable on dark */
+[data-theme="dark"] code {
+    background-color: rgba(255, 255, 255, 0.08);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+/* ============================================
    PERFORMANCE OPTIMIZATIONS
    ============================================ */
 

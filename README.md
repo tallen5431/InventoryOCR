@@ -221,24 +221,29 @@ for speed, or the Tailscale one to reach it from anywhere. (QR codes need the
 optional `qrcode` package from `requirements.txt`; without it you still get the
 links.)
 
-## Import from a product page (Amazon & co.)
+## Import from a product page (Amazon, eBay & co.)
 
 When visual search lands you on a real product page, pull its details straight
 into the item. Open **Item lookup** (the Identify panel, or the form's *Import
-from a product link* button) and use the **product page** row:
+from a product link* button):
 
-- **Paste a URL → Fetch.** The app fetches the page and reads the product data
-  most stores embed as JSON‑LD / Open Graph (name, price, brand, specs, image).
-  Works on many manufacturer and retailer sites.
-- **Blocked? Paste or upload the HTML.** Amazon and other big stores block
-  automated fetches, so instead open the page in your browser, **Ctrl+S** to save
-  it (or right‑click → View Source → copy all), and paste/upload it. Because the
-  page came from *your* browser, this always works — and the same JSON‑LD parser
-  reads the exact product name and price out of it.
+- **Most reliable: upload the saved `.html`.** On the listing press **Ctrl+S** to
+  save the page, then drop the file on the **Upload the saved .html** box — name,
+  price, and specs fill in automatically, and it never gets blocked. (You can also
+  paste the HTML source instead.)
+- **Or paste a URL → Fetch.** The app fetches the page directly — works on many
+  manufacturer/retailer sites; big stores (Amazon) block bots, so use the upload.
+
+The parser reads the structured data pages embed — **JSON‑LD**, **Open Graph**,
+Amazon **detail/feature bullets & spec tables**, and **eBay item specifics** — and
+puts each value in the right field: product name, **real price**, image, a short
+**category** (from the breadcrumb), **dimensions** pulled into their own field,
+and the **helpful specs** isolated (noise like *Best Sellers Rank*, *Customer
+Reviews*, and placeholders like *“Does not apply”* are dropped).
 
 Then **Apply to form** (to review) or **Apply & Update** (one click) records it.
-The importer only reads embedded structured data — no login or scraping of your
-account — and URL fetches are limited to public hosts.
+The importer only reads embedded structured data — no login or account scraping —
+and URL fetches are limited to public hosts.
 
 ## Storage & retrieval — find where you put things
 

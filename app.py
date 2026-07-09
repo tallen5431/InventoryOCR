@@ -279,6 +279,8 @@ app.layout = html.Div(
         # tiny diagnostics (hidden)
         dcc.Interval(id="diag-interval", interval=4000, n_intervals=0),
         html.Div(id="diag", style={"display": "none"}),
+        # sink for the clientside theme-attribute callback (below)
+        html.Div(id="theme-attr-sink", style={"display": "none"}),
         # seed content so first paint isn't blank
         html.Div(id="page-content", children=dashboard_layout()),
     ]
@@ -328,6 +330,21 @@ def _on_switch(is_dark, current):
     if desired == current:
         raise PreventUpdate
     return desired
+
+# Stamp the active theme onto the document so custom CSS can style the widgets
+# that don't come from the Bootswatch theme (dcc.Dropdown, DataTable filters).
+app.clientside_callback(
+    """
+    function(mode) {
+        try {
+            document.documentElement.setAttribute('data-theme', mode === 'light' ? 'light' : 'dark');
+        } catch (e) {}
+        return '';
+    }
+    """,
+    Output("theme-attr-sink", "children"),
+    Input("theme-mode", "data"),
+)
 
 # ---------- Diagnostics ----------
 @app.callback(Output("diag", "children"), Input("diag-interval", "n_intervals"), Input("url", "pathname"))
