@@ -59,7 +59,14 @@ def sidebar_form():
                     dbc.CardBody(
                         [
                             dbc.Label("Name"),
-                            dbc.Input(id="item-name", debounce=True, placeholder="e.g., Cordless Drill"),
+                            dbc.Input(id="item-name", debounce=True,
+                                      placeholder="e.g., Cordless Drill — or leave blank to auto-number"),
+                            html.Div(
+                                [html.I(className="bi bi-phone me-1"),
+                                 "Quick scan on your phone: snap a photo and tap Save & Next — a blank "
+                                 "name auto-numbers (Item 0001). Fill in the details later from a desktop."],
+                                className="text-muted small mt-1",
+                            ),
 
                             dbc.Row(
                                 [

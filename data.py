@@ -106,6 +106,28 @@ def _norm_list(v: Any) -> List[str]:
         return [str(p).strip() for p in v if str(p).strip()]
     return []
 
+import re as _re_auto
+
+
+def next_auto_name(prefix: str = "Item") -> str:
+    """Next auto-number name like ``Item 0007`` — for quick photo-only capture.
+
+    Scans existing ``<prefix> NNNN`` names and returns the next free number so
+    you can snap-and-save on your phone without typing, then rename later.
+    """
+    rows = inventory()
+    mx = 0
+    pat = _re_auto.compile(rf"^{_re_auto.escape(prefix)}\s*0*(\d+)$", _re_auto.IGNORECASE)
+    for r in rows:
+        m = pat.match((r.get("name") or "").strip())
+        if m:
+            try:
+                mx = max(mx, int(m.group(1)))
+            except ValueError:
+                pass
+    return f"{prefix} {mx + 1:04d}"
+
+
 def _next_id(rows: List[Dict[str, Any]]) -> int:
     mx = 0
     for r in rows:

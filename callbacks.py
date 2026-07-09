@@ -613,8 +613,17 @@ def register_callbacks(app):
         # Create / Update (Save and Save & Next share the write path)
         if triggered in ("save-button", "save-next-button"):
             nm = (name or "").strip()
+            has_photo = bool(img_contents) or bool(current_images)
+            # Quick phone capture: if there's a photo but no name, auto-number it
+            # (Item 0001, Item 0002 …) so you can snap-and-save without typing and
+            # fill in the real details later from a desktop.
+            if not nm and has_photo and not editing_id:
+                nm = data.next_auto_name()
             if not nm:
-                toast_open, toast_header, toast_icon, toast_msg = True, "Missing Name", "warning", "Please enter a name."
+                toast_open, toast_header, toast_icon, toast_msg = (
+                    True, "Add a photo or name", "warning",
+                    "Take a photo (it'll auto-number) or type a name first.",
+                )
             else:
                 ds = (desc or "").strip()
                 cat = (category or "").strip()
