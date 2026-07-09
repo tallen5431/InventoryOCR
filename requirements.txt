@@ -18,3 +18,7 @@ typing-extensions>=4.8 ; python_version < "3.11"
 
 # QR codes for the Connect panel (optional; app works without it)
 qrcode~=7.4
+
+# Richer product-page HTML parsing for the importer (optional; JSON-LD/OG still
+# work without it)
+beautifulsoup4~=4.12
