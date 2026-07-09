@@ -12,6 +12,10 @@ if URL_PREFIX and not URL_PREFIX.startswith("/"):
     URL_PREFIX = "/" + URL_PREFIX
 ASSET_URL_BASE = f"{URL_PREFIX}/assets" if URL_PREFIX else "/assets"
 
+# How much of the description to show inline before truncating (full text + the
+# extracted specs live in the row's hover tooltip).
+DESC_MAX_CHARS = 90
+
 def _parse_qty(q):
     try:
         n = int(q)
@@ -60,6 +64,17 @@ def _build_rows(filtered):
         # Keep organizing fields present for the table (and CSV/native filters)
         row["category"] = (row.get("category") or "").strip()
         row["location"] = (row.get("location") or "").strip()
+        row["estimated_value"] = (row.get("estimated_value") or "").strip()
+
+        # Truncate the description so rows stay compact — the full text (and the
+        # extracted specs) are shown in the row's hover tooltip.
+        full_desc = (row.get("description") or "").strip()
+        if len(full_desc) > DESC_MAX_CHARS:
+            cut = full_desc.rfind(" ", 0, DESC_MAX_CHARS)
+            cut = cut if cut != -1 else DESC_MAX_CHARS
+            row["description"] = full_desc[:cut].rstrip() + "…"
+        else:
+            row["description"] = full_desc
 
         full_ocr = (row.get("ocr_text") or "").strip()
         if len(full_ocr) > OCR_TEXT_MAX_CHARS:
@@ -704,6 +719,39 @@ def register_callbacks(app):
         loc_dl = [html.Option(value=l) for l in locs]
         code_dl = [html.Option(value=c) for c in codes]
         return cat_opts, loc_opts, cat_dl, loc_dl, code_dl
+
+    # ---------- Rich hover tooltips (full extracted details per row) ----------
+    @app.callback(
+        Output("inventory-table", "tooltip_data"),
+        Input("inventory-table", "data"),
+        prevent_initial_call=False,
+    )
+    def build_tooltips(rows):
+        full = {r.get("id"): r for r in data.inventory()}
+        tips = []
+        for row in rows or []:
+            item = full.get(row.get("id"), {})
+            parts = []
+            if item.get("estimated_value"):
+                parts.append(f"**Value:** {item['estimated_value']}")
+            if item.get("dimensions") and item["dimensions"].lower() != "unknown":
+                parts.append(f"**Dimensions:** {item['dimensions']}")
+            specs = item.get("specifications") or []
+            if specs:
+                parts.append("**Specs:**\n" + "\n".join(f"- {s}" for s in specs[:18]))
+            tags = item.get("tags") or []
+            if tags:
+                parts.append("**Tags:** " + ", ".join(tags))
+            desc = (item.get("description") or "").strip()
+            if desc:
+                parts.append(f"**Notes:** {desc}")
+            if item.get("product_url"):
+                parts.append(f"[Open product page]({item['product_url']})")
+            md = "\n\n".join(parts) or "_No extra details yet._"
+            cell = {"value": md, "type": "markdown"}
+            # Same rich tooltip on the columns you're most likely to hover.
+            tips.append({"name": cell, "description": cell, "estimated_value": cell})
+        return tips
 
     # ---------- Image gallery display ----------
     @app.callback(

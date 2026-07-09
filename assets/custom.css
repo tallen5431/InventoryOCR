@@ -282,16 +282,13 @@ input[type="radio"] {
 /* ============================================
    DARK MODE — fix washed-out / light surfaces
    ============================================ */
-/* ROOT CAUSE: Bootswatch "darkly" recolours components directly but leaves some
-   Bootstrap surface variables (notably --bs-tertiary-bg / --bs-secondary-bg) at
-   their LIGHT defaults. Anything using those vars — the table header, the upload
-   dropzone, row hovers, our result panels — therefore renders light-grey in dark
-   mode. Correcting the vars fixes all of them at once. */
-[data-theme="dark"] {
-    --bs-tertiary-bg: #2b3035;
-    --bs-secondary-bg: #2b3035;
-    --bs-tertiary-color: rgba(233, 236, 239, 0.6);
-}
+/* ROOT CAUSE: Bootswatch "darkly" is loaded as a <link> in the layout, which the
+   browser applies AFTER this stylesheet, and it leaves --bs-tertiary-bg /
+   --bs-secondary-bg at their LIGHT defaults. Because darkly wins the cascade for
+   those variables' VALUES, re-declaring the vars here doesn't help (the header
+   stayed white even with !important, since the value still resolved light).
+   So every rule below uses CONCRETE dark colours — immune to the var/order issue.
+   Palette: surface #2b3035, deep #23272b, text #e9ecef, muted #adb5bd, border #444c56. */
 
 /* dcc.Dropdown (react-select) — the category/location filters render white */
 [data-theme="dark"] .Select-control,
@@ -299,98 +296,121 @@ input[type="radio"] {
 [data-theme="dark"] .Select-menu-outer,
 [data-theme="dark"] .Select-menu,
 [data-theme="dark"] .VirtualizedSelectOption {
-    background-color: var(--bs-body-bg) !important;
-    border-color: var(--bs-border-color) !important;
-    color: var(--bs-body-color) !important;
+    background-color: #2b3035 !important;
+    border-color: #444c56 !important;
+    color: #e9ecef !important;
 }
 [data-theme="dark"] .Select-value-label,
 [data-theme="dark"] .Select--single > .Select-control .Select-value .Select-value-label,
 [data-theme="dark"] .Select-input > input,
 [data-theme="dark"] .Select-option {
-    color: var(--bs-body-color) !important;
+    color: #e9ecef !important;
 }
-[data-theme="dark"] .Select-option {
-    background-color: var(--bs-body-bg) !important;
-}
+[data-theme="dark"] .Select-option { background-color: #2b3035 !important; }
 [data-theme="dark"] .Select-option.is-focused,
 [data-theme="dark"] .VirtualizedSelectFocusedOption {
     background-color: rgba(255, 255, 255, 0.10) !important;
 }
 [data-theme="dark"] .Select-placeholder,
-[data-theme="dark"] .Select-noresults {
-    color: var(--bs-secondary-color) !important;
-}
-[data-theme="dark"] .Select-arrow {
-    border-top-color: var(--bs-secondary-color) !important;
-}
+[data-theme="dark"] .Select-noresults { color: #adb5bd !important; }
+[data-theme="dark"] .Select-arrow { border-top-color: #adb5bd !important; }
 
-/* DataTable header + native filter row (Dash hard-codes the filter cells white) */
+/* DataTable header + native filter row (both render light in dark mode) */
 [data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner th,
+[data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner th *,
 [data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner .dash-header {
-    background-color: var(--bs-tertiary-bg) !important;
-    color: var(--bs-body-color) !important;
-    border-color: var(--bs-border-color) !important;
+    background-color: #2b3035 !important;
+    color: #e9ecef !important;
+    border-color: #444c56 !important;
 }
 [data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner .dash-filter,
 [data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner .dash-filter input {
-    background-color: var(--bs-body-bg) !important;
-    color: var(--bs-body-color) !important;
-    border-color: var(--bs-border-color) !important;
+    background-color: #23272b !important;
+    color: #e9ecef !important;
+    border-color: #444c56 !important;
 }
 [data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner .dash-filter input::placeholder {
-    color: var(--bs-secondary-color) !important;
+    color: #adb5bd !important;
     opacity: 1;
 }
 [data-theme="dark"] .dash-table-container .column-header-name,
 [data-theme="dark"] .dash-table-container .dash-filter--case {
-    color: var(--bs-body-color) !important;
+    color: #e9ecef !important;
 }
-/* "Toggle Columns" button (button.show-hide) — darkly leaves it light-grey */
+/* selected / focused cell was a muddy maroon on dark — use a clear blue tint */
+[data-theme="dark"] .dash-spreadsheet-container td.focused,
+[data-theme="dark"] .dash-spreadsheet-container td.dash-cell.focused,
+[data-theme="dark"] .dash-spreadsheet-container td.cell--selected {
+    background-color: rgba(13, 110, 253, 0.22) !important;
+    color: #e9ecef !important;
+    border-color: #0d6efd !important;
+}
+/* "Toggle Columns" button */
 [data-theme="dark"] .dash-table-container .dash-spreadsheet-menu button.show-hide,
 [data-theme="dark"] .dash-table-container button.show-hide {
     background-color: #2b3035 !important;
-    color: var(--bs-body-color) !important;
-    border: 1px solid var(--bs-border-color) !important;
+    color: #e9ecef !important;
+    border: 1px solid #444c56 !important;
 }
 
-/* Form inputs — darkly ships them WHITE, which clashes with the dark UI.
-   Give them a cohesive dark surface with readable text + placeholder. */
+/* Form inputs — darkly ships them WHITE, which clashes with the dark UI. */
 [data-theme="dark"] .form-control,
 [data-theme="dark"] textarea.form-control,
 [data-theme="dark"] .form-select {
     background-color: #2b3035 !important;
-    color: var(--bs-body-color) !important;
-    border-color: var(--bs-border-color) !important;
+    color: #e9ecef !important;
+    border-color: #444c56 !important;
 }
 [data-theme="dark"] .form-control::placeholder,
 [data-theme="dark"] textarea.form-control::placeholder {
-    color: var(--bs-secondary-color) !important;
+    color: #adb5bd !important;
     opacity: 1;
 }
 [data-theme="dark"] .form-control:focus,
 [data-theme="dark"] textarea.form-control:focus,
 [data-theme="dark"] .form-select:focus {
     background-color: #2b3035 !important;
-    color: var(--bs-body-color) !important;
+    color: #e9ecef !important;
     border-color: #0d6efd !important;
     box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25) !important;
 }
 [data-theme="dark"] .input-group-text {
     background-color: #23272b !important;
-    color: var(--bs-body-color) !important;
-    border-color: var(--bs-border-color) !important;
+    color: #e9ecef !important;
+    border-color: #444c56 !important;
+}
+
+/* Upload dropzones + result panels use surface colours too */
+[data-theme="dark"] .upload-dropzone {
+    background-color: #2b3035 !important;
+    border-color: #495057 !important;
+}
+[data-theme="dark"] #identify-body .border,
+[data-theme="dark"] #connect-body .card {
+    background-color: #2b3035 !important;
+    border-color: #444c56 !important;
 }
 
 /* code chips (endpoints/keys) readable on dark */
 [data-theme="dark"] code {
-    background-color: rgba(255, 255, 255, 0.08);
+    background-color: rgba(255, 255, 255, 0.10);
+    color: #f1a9c4;
     padding: 1px 5px;
     border-radius: 4px;
 }
-/* Toggle Columns button reads on dark */
-[data-theme="dark"] .dash-table-container .toggle-columns,
-[data-theme="dark"] button.toggle-columns {
-    color: var(--bs-body-color) !important;
+/* DataTable hover tooltips (render light by default) */
+[data-theme="dark"] .dash-tooltip,
+[data-theme="dark"] .dash-table-tooltip,
+[data-theme="dark"] .dash-tooltip .dash-table-tooltip {
+    background-color: #2b3035 !important;
+    color: #e9ecef !important;
+    border-color: #444c56 !important;
+}
+/* tooltips are readable in both themes; give them a comfortable width */
+.dash-table-tooltip {
+    max-width: 360px;
+    font-size: 13px;
+    line-height: 1.45;
 }
 
 /* ============================================
@@ -590,12 +610,30 @@ input[type="radio"] {
     color: var(--bs-secondary-color);
 }
 
+/* Clamp the description to a few lines so rows stay uniform and scannable —
+   the full text + extracted specs are in the row's hover tooltip. */
+#inventory-table td[data-dash-column="description"] .dash-cell-value {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+}
+
 /* Roomier, easier-to-scan rows */
 #inventory-table td {
     line-height: 1.4;
 }
-#inventory-table .dash-spreadsheet-inner tr:hover td {
-    background-color: var(--bs-tertiary-bg) !important;
+/* Row hover — Dash's default turns the <tr> near-white, which is invisible in
+   dark mode. Override BOTH tr and td with an opaque theme-appropriate colour. */
+[data-theme="light"] #inventory-table .dash-spreadsheet-inner tr:hover,
+[data-theme="light"] #inventory-table .dash-spreadsheet-inner tr:hover td {
+    background-color: #eef1f4 !important;
+}
+[data-theme="dark"] #inventory-table .dash-spreadsheet-inner tr:hover,
+[data-theme="dark"] #inventory-table .dash-spreadsheet-inner tr:hover td {
+    background-color: #2f353b !important;
+    color: #e9ecef !important;
 }
 #inventory-table .dash-spreadsheet-inner th {
     letter-spacing: 0.02em;
