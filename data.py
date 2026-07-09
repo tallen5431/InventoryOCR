@@ -632,3 +632,165 @@ def storage_map(rows: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, A
     # Coded bins first (by code), then the unfiled bucket.
     out.sort(key=lambda d: (d["location_code"] == "", d["location_code"].lower()))
     return out
+
+
+# --------------------------------------------------------------------
+# Physical containers + constrained "fit to my bins" allocation
+# --------------------------------------------------------------------
+# You describe the storage you actually have (each with a capacity), and
+# ``fit_to_containers`` packs the inventory into them — keeping like items
+# together where possible and respecting each bin's capacity.
+
+from pathlib import Path as _Path
+CONTAINERS_FILE = _Path(INVENTORY_JSON).parent / "containers.json"
+
+
+def containers() -> List[Dict[str, Any]]:
+    """Load the user-defined containers: [{code, name, capacity}]."""
+    p = CONTAINERS_FILE
+    if not p.exists():
+        return []
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for c in raw if isinstance(raw, list) else []:
+        code = str(c.get("code", "")).strip()
+        if not code or code.lower() in seen:
+            continue
+        seen.add(code.lower())
+        try:
+            cap = max(0, int(c.get("capacity") or 0))
+        except (TypeError, ValueError):
+            cap = 0
+        out.append({"code": code, "name": (c.get("name") or code).strip(), "capacity": cap})
+    return out
+
+
+def save_containers(conts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    clean: List[Dict[str, Any]] = []
+    seen = set()
+    for c in conts or []:
+        code = str(c.get("code", "")).strip()
+        if not code or code.lower() in seen:
+            continue
+        seen.add(code.lower())
+        try:
+            cap = max(0, int(c.get("capacity") or 0))
+        except (TypeError, ValueError):
+            cap = 0
+        clean.append({"code": code, "name": (c.get("name") or code).strip(), "capacity": cap})
+    CONTAINERS_FILE.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
+    return clean
+
+
+def parse_containers_text(text: str) -> List[Dict[str, Any]]:
+    """Parse an editor textarea (one container per line: ``CODE | Name | capacity``)."""
+    out: List[Dict[str, Any]] = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 3:
+            code, name, cap = parts[0], parts[1], parts[2]
+        elif len(parts) == 2:
+            code, name, cap = parts[0], parts[0], parts[1]
+        else:
+            code, name, cap = parts[0], parts[0], "25"
+        m = _re.search(r"\d+", cap or "")
+        capacity = int(m.group(0)) if m else 25
+        if code:
+            out.append({"code": code, "name": name or code, "capacity": capacity})
+    return out
+
+
+def containers_to_text(conts: Optional[List[Dict[str, Any]]] = None) -> str:
+    conts = conts if conts is not None else containers()
+    return "\n".join(f"{c['code']} | {c['name']} | {c['capacity']}" for c in conts)
+
+
+def fit_to_containers(
+    rows: Optional[List[Dict[str, Any]]] = None,
+    conts: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Pack items into the defined containers, keeping like items together.
+
+    Uses the smart grouping as cohesion units, then First-Fit-Decreasing bin
+    packing: each group goes whole into the tightest container it fits; if none
+    fits, it's split across the emptiest containers; anything left over is
+    reported as overflow. Capacity counts *distinct items* (entries).
+
+    Returns {ok, assignments:[{code,name,capacity,used,item_ids,groups}], overflow, overflow_names}.
+    """
+    rows = rows if rows is not None else inventory()
+    conts = conts if conts is not None else containers()
+    if not conts:
+        return {"ok": False, "error": "No containers defined yet — add some first.",
+                "assignments": [], "overflow": [], "overflow_names": []}
+
+    groups = auto_organize(rows)  # deterministic cohesion units
+    remaining = {c["code"]: c["capacity"] for c in conts}
+    assign = {c["code"]: {"groups": {}, "ids": []} for c in conts}
+    overflow: List[int] = []
+    id_name = {int(r.get("id")): r.get("name", "") for r in rows}
+
+    def _place(ids, gname, code):
+        a = assign[code]
+        a["ids"].extend(ids)
+        a["groups"].setdefault(gname, []).extend(ids)
+        remaining[code] -= len(ids)
+
+    for g in sorted(groups, key=lambda g: (-g["items"], g["location_code"])):
+        ids = list(g["item_ids"])
+        gname = g["group"]
+        fits = [c for c in conts if remaining[c["code"]] >= len(ids)]
+        if fits:
+            # tightest fit: smallest remaining that still holds the whole group
+            c = min(fits, key=lambda c: (remaining[c["code"]], c["code"]))
+            _place(ids, gname, c["code"])
+        else:
+            # split across the emptiest containers first
+            for c in sorted(conts, key=lambda c: (-remaining[c["code"]], c["code"])):
+                if not ids:
+                    break
+                room = remaining[c["code"]]
+                if room <= 0:
+                    continue
+                take = ids[:room]
+                _place(take, gname, c["code"])
+                ids = ids[len(take):]
+            if ids:
+                overflow.extend(ids)
+
+    assignments = []
+    for c in conts:
+        a = assign[c["code"]]
+        assignments.append({
+            "code": c["code"], "name": c["name"], "capacity": c["capacity"],
+            "used": len(a["ids"]), "item_ids": a["ids"],
+            "groups": [{"name": n, "ids": i, "count": len(i)}
+                       for n, i in sorted(a["groups"].items(), key=lambda kv: -len(kv[1]))],
+        })
+    return {"ok": True, "assignments": assignments, "overflow": overflow,
+            "overflow_names": [id_name.get(int(i), str(i)) for i in overflow]}
+
+
+def apply_fit(plan: Dict[str, Any]) -> int:
+    """Persist a fit_to_containers plan: set each item's bin code + location name."""
+    rows = inventory()
+    by_id = {int(r.get("id")): r for r in rows}
+    updated = 0
+    for a in (plan or {}).get("assignments", []):
+        for iid in a.get("item_ids", []):
+            r = by_id.get(int(iid))
+            if not r:
+                continue
+            r["location_code"] = a["code"]
+            r["location"] = a["name"]
+            updated += 1
+    if updated:
+        _save(rows)
+    return updated
