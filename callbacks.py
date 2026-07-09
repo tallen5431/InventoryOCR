@@ -255,6 +255,62 @@ def _identify_row(icon, label, value_node):
         className="py-2 border-bottom",
     )
 
+def _render_web_match(web):
+    """Render a web_detect.detect_web() result (reverse-image match)."""
+    if not web:
+        return html.Div()
+    if not web.get("ok"):
+        # Configured but failed — a small muted note; local result still shows.
+        if web.get("configured") is False:
+            return html.Div()
+        return html.Div(
+            [html.I(className="bi bi-cloud-slash me-1"),
+             f"Web match unavailable: {web.get('error', 'unknown error')}"],
+            className="text-muted small mb-2",
+        )
+    best = (web.get("best_guess") or "").strip()
+    entities = web.get("entities") or []
+    pages = web.get("pages") or []
+
+    children = [
+        html.Div(
+            [html.I(className="bi bi-globe2 me-2"),
+             html.Strong("Best web match"),
+             html.Span(f"  ·  {web.get('provider', '')}", className="text-muted small")],
+            className="mb-1",
+        )
+    ]
+    if best:
+        children.append(html.Div(best, className="fs-5 fw-semibold"))
+        children.append(
+            html.Div("This becomes the item name when you Apply.", className="text-muted small mb-2")
+        )
+    else:
+        children.append(html.Div("No confident product name from the image.", className="text-muted small mb-2"))
+
+    if entities:
+        children.append(
+            html.Div(
+                [html.Span(e, className="badge bg-secondary me-1 mb-1") for e in entities[:8]],
+                className="mb-2",
+            )
+        )
+    if pages:
+        children.append(html.Div([html.I(className="bi bi-link-45deg me-1"), "Matching pages:"], className="small text-muted"))
+        children.append(
+            html.Ul(
+                [
+                    html.Li(
+                        html.A(p["title"][:90], href=p["url"], target="_blank", rel="noopener noreferrer")
+                    )
+                    for p in pages[:5]
+                ],
+                className="mb-0 small",
+            )
+        )
+    return html.Div(children, className="p-2 mb-3 rounded border")
+
+
 def _render_identify(res, links=None):
     """Read-only rendering of a vision_lookup.identify_item() result."""
     if not res.get("ok"):
@@ -872,30 +928,49 @@ def register_callbacks(app):
                 className="text-warning",
             ), no_update
 
-        import vision_lookup
+        import vision_lookup, web_detect
         res = vision_lookup.identify_item(image)
-
         parsed = res.get("data") if isinstance(res.get("data"), dict) else None
+
+        # Automatic reverse-image lookup (Lens-style) when a provider is
+        # configured; otherwise stays fully local. Only the photo the user just
+        # asked to identify is sent, and only when GOOGLE_VISION_API_KEY is set.
+        web = web_detect.detect_web(image) if web_detect.is_configured() else None
+
+        # Merge: web reverse-image match wins the name; local model keeps
+        # category/value/dimensions/specs; entities fold into tags.
+        merged = web_detect.merge_into(parsed, web)
+        merged = merged if merged else parsed
+
+        # Best web-search query for the manual buttons.
         name_for_search = ""
         specs_for_search = None
-        if parsed:
-            name_for_search = str(parsed.get("name") or "").strip()
-            sq = str(parsed.get("search_query") or "").strip()
-            specs_for_search = parsed.get("specifications")
+        source = merged or parsed
+        if source:
+            name_for_search = str(source.get("name") or "").strip()
+            sq = str(source.get("search_query") or "").strip()
+            specs_for_search = source.get("specifications")
             if sq:
-                # A model-provided query beats name+specs when present.
                 name_for_search, specs_for_search = sq, None
+        if web and web.get("ok") and web.get("best_guess"):
+            name_for_search = web["best_guess"]
+            specs_for_search = None
         query_name = name_for_search or typed_name
 
         links = web_search.links_for(query_name, specs_for_search, primary)
-        body = _render_identify(res, links)
+
+        # Show the reverse-image match (if any) above the local-AI details.
+        res_display = dict(res)
+        if isinstance(merged, dict):
+            res_display["data"] = merged
+        body = html.Div([_render_web_match(web), _render_identify(res_display, links)])
 
         # Payload the "Apply to item" button copies into the form.
         store = {
-            "data": parsed,
+            "data": merged if isinstance(merged, dict) else parsed,
             "typed_name": typed_name,
             "typed_cat": typed_cat,
-            "product_url": "",
+            "product_url": (merged or {}).get("product_url", "") if isinstance(merged, dict) else "",
         }
         return body, store
 
@@ -908,6 +983,7 @@ def register_callbacks(app):
         Output("item-value", "value", allow_duplicate=True),
         Output("item-dims", "value", allow_duplicate=True),
         Output("item-tags", "value", allow_duplicate=True),
+        Output("item-producturl", "value", allow_duplicate=True),
         Output("more-details-collapse", "is_open", allow_duplicate=True),
         Output("action-toast", "is_open", allow_duplicate=True),
         Output("action-toast", "header", allow_duplicate=True),
@@ -918,15 +994,16 @@ def register_callbacks(app):
         State("item-name", "value"),
         State("item-category", "value"),
         State("item-desc", "value"),
+        State("item-producturl", "value"),
         prevent_initial_call=True,
     )
-    def apply_identify(n, result, cur_name, cur_cat, cur_desc):
+    def apply_identify(n, result, cur_name, cur_cat, cur_desc, cur_url):
         if not n or not result:
             raise PreventUpdate
         d = result.get("data") if isinstance(result, dict) else None
         if not isinstance(d, dict):
             # Nothing structured to apply (e.g. vision failed) — tell the user.
-            return (no_update,) * 7 + (no_update, True, "Nothing to apply", "warning",
+            return (no_update,) * 9 + (True, "Nothing to apply", "warning",
                                        "The lookup didn't return structured details.")
 
         def _s(v):
@@ -947,9 +1024,11 @@ def register_callbacks(app):
         dims = _s(d.get("dimensions"))
         tags = d.get("tags")
         tags_text = _tags_to_text(tags) if isinstance(tags, list) else _s(tags)
+        # Only fill the product link if the lookup found one and the user hasn't set it.
+        url = _s(d.get("product_url")) or (cur_url or "")
 
         return (
-            name, category, desc, specs_text, value, dims, tags_text,
+            name, category, desc, specs_text, value, dims, tags_text, url,
             True,  # open the details section so the applied fields are visible
             True, "Applied", "success", "Lookup details copied into the form — review and Save.",
         )
