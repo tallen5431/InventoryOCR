@@ -280,12 +280,20 @@ input[type="radio"] {
 }
 
 /* ============================================
-   DARK MODE — widgets the Bootswatch theme doesn't cover
+   DARK MODE — fix washed-out / light surfaces
    ============================================ */
-/* These render with their own light styling, so they look washed-out / hard to
-   read in dark mode. Re-skin them with the theme's CSS variables. */
+/* ROOT CAUSE: Bootswatch "darkly" recolours components directly but leaves some
+   Bootstrap surface variables (notably --bs-tertiary-bg / --bs-secondary-bg) at
+   their LIGHT defaults. Anything using those vars — the table header, the upload
+   dropzone, row hovers, our result panels — therefore renders light-grey in dark
+   mode. Correcting the vars fixes all of them at once. */
+[data-theme="dark"] {
+    --bs-tertiary-bg: #2b3035;
+    --bs-secondary-bg: #2b3035;
+    --bs-tertiary-color: rgba(233, 236, 239, 0.6);
+}
 
-/* dcc.Dropdown (react-select) — the category/location filters */
+/* dcc.Dropdown (react-select) — the category/location filters render white */
 [data-theme="dark"] .Select-control,
 [data-theme="dark"] .Select.is-focused > .Select-control,
 [data-theme="dark"] .Select-menu-outer,
@@ -306,7 +314,7 @@ input[type="radio"] {
 }
 [data-theme="dark"] .Select-option.is-focused,
 [data-theme="dark"] .VirtualizedSelectFocusedOption {
-    background-color: var(--bs-tertiary-bg) !important;
+    background-color: rgba(255, 255, 255, 0.10) !important;
 }
 [data-theme="dark"] .Select-placeholder,
 [data-theme="dark"] .Select-noresults {
@@ -316,32 +324,73 @@ input[type="radio"] {
     border-top-color: var(--bs-secondary-color) !important;
 }
 
-/* DataTable native filter row + toggle-columns controls */
-[data-theme="dark"] .dash-table-container .dash-filter input,
-[data-theme="dark"] .dash-table-container .dash-filter--case,
-[data-theme="dark"] .dash-table-container .column-header-name,
-[data-theme="dark"] .dash-table-container .show-hide {
+/* DataTable header + native filter row (Dash hard-codes the filter cells white) */
+[data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner th,
+[data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner .dash-header {
+    background-color: var(--bs-tertiary-bg) !important;
     color: var(--bs-body-color) !important;
+    border-color: var(--bs-border-color) !important;
 }
-[data-theme="dark"] .dash-table-container .dash-filter input::placeholder {
+[data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner .dash-filter,
+[data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner .dash-filter input {
+    background-color: var(--bs-body-bg) !important;
+    color: var(--bs-body-color) !important;
+    border-color: var(--bs-border-color) !important;
+}
+[data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner .dash-filter input::placeholder {
     color: var(--bs-secondary-color) !important;
     opacity: 1;
 }
-[data-theme="dark"] .dash-spreadsheet-container .dash-spreadsheet-inner .dash-filter {
-    background-color: var(--bs-tertiary-bg) !important;
+[data-theme="dark"] .dash-table-container .column-header-name,
+[data-theme="dark"] .dash-table-container .dash-filter--case {
+    color: var(--bs-body-color) !important;
+}
+/* "Toggle Columns" button (button.show-hide) — darkly leaves it light-grey */
+[data-theme="dark"] .dash-table-container .dash-spreadsheet-menu button.show-hide,
+[data-theme="dark"] .dash-table-container button.show-hide {
+    background-color: #2b3035 !important;
+    color: var(--bs-body-color) !important;
+    border: 1px solid var(--bs-border-color) !important;
 }
 
-/* Lookup / import result panels: give the bordered blocks a readable surface */
-[data-theme="dark"] #identify-body .border,
-[data-theme="dark"] #organize-body .table,
-[data-theme="dark"] #connect-body .card {
-    background-color: var(--bs-tertiary-bg);
+/* Form inputs — darkly ships them WHITE, which clashes with the dark UI.
+   Give them a cohesive dark surface with readable text + placeholder. */
+[data-theme="dark"] .form-control,
+[data-theme="dark"] textarea.form-control,
+[data-theme="dark"] .form-select {
+    background-color: #2b3035 !important;
+    color: var(--bs-body-color) !important;
+    border-color: var(--bs-border-color) !important;
 }
+[data-theme="dark"] .form-control::placeholder,
+[data-theme="dark"] textarea.form-control::placeholder {
+    color: var(--bs-secondary-color) !important;
+    opacity: 1;
+}
+[data-theme="dark"] .form-control:focus,
+[data-theme="dark"] textarea.form-control:focus,
+[data-theme="dark"] .form-select:focus {
+    background-color: #2b3035 !important;
+    color: var(--bs-body-color) !important;
+    border-color: #0d6efd !important;
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25) !important;
+}
+[data-theme="dark"] .input-group-text {
+    background-color: #23272b !important;
+    color: var(--bs-body-color) !important;
+    border-color: var(--bs-border-color) !important;
+}
+
 /* code chips (endpoints/keys) readable on dark */
 [data-theme="dark"] code {
     background-color: rgba(255, 255, 255, 0.08);
     padding: 1px 5px;
     border-radius: 4px;
+}
+/* Toggle Columns button reads on dark */
+[data-theme="dark"] .dash-table-container .toggle-columns,
+[data-theme="dark"] button.toggle-columns {
+    color: var(--bs-body-color) !important;
 }
 
 /* ============================================
