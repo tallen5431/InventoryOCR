@@ -254,10 +254,14 @@ make that fast:
    `SHELF-A3`) alongside its human location. Type it in the **Bin / code** field,
    or let the app assign one.
 2. **Smart Organize.** Click **Smart Organize** in the Storage map card to
-   generate a plan that groups *like items together* — one bin per category — and
-   assigns each a bin code. Review the plan, then **Apply plan** to stamp those
+   **analyse every item** and generate a plan that groups *related things
+   together*. It reads each item's name and category and clusters ones that share
+   a type word — so "Toggle Switches" and "Slide Switches" land in one **Switches**
+   bin, while unrelated things stay apart; anything with no match falls back to its
+   category or a **Miscellaneous** bin. The preview shows each bin's item count,
+   quantity, and total estimated value. Review it, then **Apply plan** to stamp the
    bin labels onto every item at once. Existing codes are preserved, so re‑running
-   it is safe and stable.
+   after you scan more items is safe and stable.
 
 The **Storage map** card then shows what physically lives in each bin. To find
 something later, just search a keyword (name, tag, spec, category…) — the results

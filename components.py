@@ -658,8 +658,9 @@ def organize_card():
             dbc.CardBody(
                 [
                     html.Div(
-                        "Group like items into labelled bins, then search a keyword to find "
-                        "which bin something lives in.",
+                        "Smart Organize analyses every item's name & category and groups related "
+                        "things into labelled bins (e.g. all your switches together). Then a keyword "
+                        "search tells you which bin something lives in.",
                         className="text-muted small mb-2",
                     ),
                     html.Div(id="storage-map"),

@@ -119,9 +119,13 @@ def _breakdown_list(groups):
     return html.Div(items)
 
 def _render_plan(plan):
-    """Render an auto_organize() plan as a readable preview table."""
+    """Render an auto_organize() plan as a readable analysis + preview table."""
     if not plan:
         return html.Div("Nothing to organize yet.", className="text-muted")
+
+    total_items = sum(g.get("items", 0) for g in plan)
+    total_val = sum(g.get("value", 0) or 0 for g in plan)
+
     rows = [
         html.Tr(
             [
@@ -129,6 +133,7 @@ def _render_plan(plan):
                 html.Th("Group"),
                 html.Th("Items", className="text-end"),
                 html.Th("Qty", className="text-end"),
+                html.Th("Value", className="text-end"),
             ]
         )
     ]
@@ -137,22 +142,33 @@ def _render_plan(plan):
             g.get("location_code", ""),
             className="badge bg-primary" if not g.get("existing") else "badge bg-info text-dark",
         )
+        val = g.get("value", 0) or 0
         rows.append(
             html.Tr(
                 [
                     html.Td(code_badge),
-                    html.Td(g.get("location_name", "") or "—"),
+                    html.Td(g.get("location_name", "") or "—", className="fw-semibold"),
                     html.Td(str(g.get("items", 0)), className="text-end"),
                     html.Td(str(g.get("qty", 0)), className="text-end"),
+                    html.Td(f"${val:,.2f}" if val else "—", className="text-end text-success"),
                 ]
             )
         )
     return html.Div(
         [
             html.P(
-                "Like items are grouped into labelled bins. Bins marked "
-                "in blue keep a code they already had. Apply to save these "
-                "bin labels onto every item.",
+                [
+                    "Analysed ", html.Strong(f"{total_items} items"), " into ",
+                    html.Strong(f"{len(plan)} bins"),
+                    (f" · est. ${total_val:,.2f} total" if total_val else ""),
+                    ".",
+                ],
+                className="mb-1",
+            ),
+            html.P(
+                "Related items are grouped by their name & category (e.g. Toggle + "
+                "Slide Switches → “Switches”). Blue bins keep a code they already "
+                "had. Apply to stamp these bins onto every item.",
                 className="text-muted small",
             ),
             dbc.Table(rows, bordered=False, hover=True, responsive=True, striped=True, className="mb-0"),
