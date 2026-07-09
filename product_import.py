@@ -396,6 +396,19 @@ def _enrich_with_bs4(html_text: str) -> Dict[str, Any]:
                 if k.lower() == "brand" and not _is_placeholder(v) and not out["brand"]:
                     out["brand"] = v
 
+    # Generic definition lists (<dl><dt>label</dt><dd>value</dd>) used by many
+    # other retailers / manufacturer spec sheets.
+    for dl in soup.find_all("dl"):
+        if "ux-labels-values" in " ".join(dl.get("class") or []):
+            continue  # already handled above
+        dts = dl.find_all("dt")
+        dds = dl.find_all("dd")
+        for dt, dd in zip(dts, dds):
+            k = dt.get_text(" ", strip=True)
+            v = dd.get_text(" ", strip=True)
+            if k and v and k != v:
+                pairs.append((k, v))
+
     out["spec_pairs"] = pairs
 
     # Feature bullets (concise selling points that read like specs).
@@ -474,6 +487,16 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
     for w in cat_parts[-2:]:
         if w.lower() not in {t.lower() for t in tags}:
             tags.append(w)
+    # Promote key identifiers (model / part number) to tags so they're easy to
+    # search for later — critical for finding a specific part or material.
+    _ID_KEYS = ("model", "mpn", "part number", "manufacturer part number", "model number", "model name")
+    for k, v in pairs:
+        kl = k.strip().lower()
+        v = v.strip()
+        if v and not _is_placeholder(v) and any(idk in kl for idk in _ID_KEYS):
+            if len(v) <= 40 and v.lower() not in {t.lower() for t in tags}:
+                tags.append(v)
+    tags = tags[:10]
 
     data = {
         "name": name,

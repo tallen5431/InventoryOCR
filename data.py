@@ -403,50 +403,138 @@ def set_location(item_id: int, location: Any = _KEEP, location_code: Any = _KEEP
     return found
 
 
+# Common/generic words that shouldn't drive a grouping ("150pcs black mini set").
+_GROUP_STOP = {
+    "the", "and", "for", "with", "set", "kit", "pack", "packs", "pcs", "pc", "piece",
+    "pieces", "lot", "lots", "new", "assorted", "assortment", "universal", "mini",
+    "micro", "small", "large", "pro", "premium", "high", "quality", "type", "size",
+    "black", "white", "red", "blue", "green", "silver", "gray", "grey", "yellow",
+    "color", "colour", "value", "genuine", "original", "oem", "pack", "count", "unit",
+    "units", "inch", "inches", "cm", "mm", "long", "short", "wide", "each", "per",
+}
+
+
+def _tokenize(text: str) -> List[str]:
+    """Significant type words in ``text`` (lower-cased, de-duped, stop-words removed)."""
+    out: List[str] = []
+    for t in _re.findall(r"[a-z][a-z0-9\-]{2,}", (text or "").lower()):
+        t = t.strip("-")
+        if len(t) >= 3 and t not in _GROUP_STOP and t not in out:
+            out.append(t)
+    return out
+
+
+def _sum_group_value(rows: List[Dict[str, Any]]) -> float:
+    """Total estimated value of a group (per-item value × quantity)."""
+    total = 0.0
+    found = False
+    for r in rows:
+        v = str(r.get("estimated_value") or "").replace(",", "")
+        m = _re.search(r"\d+(?:\.\d+)?", v)
+        if m:
+            try:
+                total += float(m.group(0)) * max(1, int(r.get("qty") or 1))
+                found = True
+            except ValueError:
+                pass
+    return round(total, 2) if found else 0.0
+
+
 def auto_organize(
     rows: Optional[List[Dict[str, Any]]] = None,
     *,
     prefix: str = "BIN",
+    mode: str = "smart",
 ) -> List[Dict[str, Any]]:
-    """Propose a storage plan that groups like items (by category) into bins.
+    """Analyse every item and propose a storage plan that groups like things together.
 
     Returns a list of group dicts (does NOT persist anything):
-        {group, location_code, location_name, item_ids, items, qty, existing}
+        {group, location_code, location_name, keywords, item_ids, items, qty, value, existing}
 
-    Grouping rules:
-      * Items sharing a category go to the same bin so like things live together.
-      * If any item in a group already has a location_code, that code is reused
-        for the whole group (keeps codes stable across re-runs).
-      * New groups get the next free ``<prefix>-NN`` number.
-      * Uncategorized items are grouped under a single "Uncategorised" bin.
+    Grouping (``mode="smart"``, the default) looks at each item's **name and
+    category** and clusters items that share a significant type word — so
+    "Toggle Switches" and "Slide Switches" land together under "Switches", while
+    unrelated things stay apart. Items with no shared word fall back to their
+    category, or a single "Miscellaneous" bin. ``mode="category"`` groups by the
+    exact category field only.
+
+    Bins are stable across re-runs: if any item in a group already has a
+    location_code that code is reused, and new groups get the next ``<prefix>-NN``.
     """
-    rows = rows if rows is not None else inventory()
+    from collections import Counter
 
-    # Bucket by category (case-insensitive), preserving a display name.
+    rows = rows if rows is not None else inventory()
+    if not rows:
+        return []
+
     buckets: Dict[str, Dict[str, Any]] = {}
-    for r in rows:
-        cat = (r.get("category") or "").strip()
-        key = cat.lower() or "\x00uncategorised"
-        b = buckets.setdefault(key, {"name": cat or "Uncategorised", "rows": []})
+
+    def _add(key, name, kw, r):
+        b = buckets.setdefault(key, {"name": name, "rows": [], "kw": list(kw)})
         b["rows"].append(r)
+
+    if mode == "category":
+        for r in rows:
+            cat = (r.get("category") or "").strip()
+            _add(("cat::" + cat.lower()) if cat else "\x00misc", cat or "Miscellaneous", [], r)
+    else:
+        # Split into categorised vs not.
+        cat_rows: Dict[str, List[Dict[str, Any]]] = {}
+        uncat: List[Dict[str, Any]] = []
+        for r in rows:
+            cat = (r.get("category") or "").strip()
+            if cat:
+                cat_rows.setdefault(cat, []).append(r)
+            else:
+                uncat.append(r)
+
+        # Merge only DIFFERENT categories that share a word (Toggle Switches +
+        # Slide Switches -> Switches); a lone category keeps its full name.
+        cat_tokens = {c: _tokenize(c) for c in cat_rows}
+        cat_df: "Counter[str]" = Counter()
+        for toks in cat_tokens.values():
+            for t in set(toks):
+                cat_df[t] += 1
+        for c, rws in cat_rows.items():
+            shared = [t for t in cat_tokens[c] if cat_df[t] >= 2]
+            if shared:
+                shared.sort(key=lambda t: (-cat_df[t], -len(t), t))
+                key, name, kw = "kw::" + shared[0], shared[0].title(), shared[:4]
+            else:
+                key, name, kw = "cat::" + c.lower(), c, []
+            for r in rws:
+                _add(key, name, kw, r)
+
+        # Uncategorised items cluster among themselves by name keyword, else Misc.
+        if uncat:
+            utoks = {int(r.get("id")): _tokenize(r.get("name") or "") for r in uncat}
+            udf: "Counter[str]" = Counter()
+            for ts in utoks.values():
+                for t in set(ts):
+                    udf[t] += 1
+            for r in uncat:
+                ts = utoks[int(r.get("id"))]
+                shared = [t for t in ts if udf[t] >= 2]
+                if shared:
+                    shared.sort(key=lambda t: (-udf[t], -len(t), t))
+                    _add("kw::" + shared[0], shared[0].title(), shared[:4], r)
+                else:
+                    _add("\x00misc", "Miscellaneous", [], r)
 
     reserved = set(location_codes(rows))
     next_num = _next_bin_number(list(reserved))
 
     plan: List[Dict[str, Any]] = []
-    # Deterministic order: named categories first (alphabetical), uncategorised last.
-    for key in sorted(buckets.keys(), key=lambda k: (k == "\x00uncategorised", k)):
+    for key in sorted(buckets.keys(), key=lambda k: (k == "\x00misc", k)):
         b = buckets[key]
         group_rows = b["rows"]
 
-        # Reuse an existing code if the group already has one.
         existing_code = ""
         for gr in group_rows:
             c = (gr.get("location_code") or "").strip()
             if c:
                 existing_code = c
                 break
-
         if existing_code:
             code = existing_code
         else:
@@ -461,9 +549,11 @@ def auto_organize(
             "group": b["name"],
             "location_code": code,
             "location_name": b["name"],
+            "keywords": b.get("kw", []),
             "item_ids": [int(gr.get("id")) for gr in group_rows],
             "items": len(group_rows),
             "qty": sum(int(gr.get("qty") or 0) for gr in group_rows),
+            "value": _sum_group_value(group_rows),
             "existing": bool(existing_code),
         })
 

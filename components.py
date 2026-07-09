@@ -365,6 +365,7 @@ def inventory_table():
         {"name": "Category", "id": "category", "hideable": True},
         {"name": "Location", "id": "location", "hideable": True},
         {"name": "Bin", "id": "location_code", "hideable": True},
+        {"name": "Value", "id": "estimated_value", "hideable": True},
         {"name": "Description", "id": "description", "hideable": True},
         {"name": "OCR Text", "id": "ocr_text", "hideable": True},
         {"name": "id", "id": "id", "hideable": True},
@@ -415,7 +416,8 @@ def inventory_table():
             {"if": {"column_id": "category"}, "minWidth": "90px", "maxWidth": "150px"},
             {"if": {"column_id": "location"}, "minWidth": "90px", "maxWidth": "160px"},
             {"if": {"column_id": "location_code"}, "minWidth": "72px", "maxWidth": "110px", "fontWeight": "600", "textAlign": "center"},
-            {"if": {"column_id": "description"}, "minWidth": "160px", "maxWidth": "320px", "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
+            {"if": {"column_id": "estimated_value"}, "minWidth": "80px", "maxWidth": "120px", "textAlign": "right", "fontWeight": "600", "color": "var(--bs-success)"},
+            {"if": {"column_id": "description"}, "minWidth": "160px", "maxWidth": "300px", "overflowWrap": "anywhere", "whiteSpace": "normal"},
             {"if": {"column_id": "ocr_text"}, "minWidth": "150px", "maxWidth": "400px", "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
             {"if": {"column_id": "image"}, "width": "88px", "minWidth": "88px", "maxWidth": "96px", "textAlign": "center", "padding": "6px"},
             {"if": {"column_id": "qty"}, "textAlign": "center", "width": "64px", "minWidth": "64px", "maxWidth": "80px", "fontWeight": "600"},
@@ -656,8 +658,9 @@ def organize_card():
             dbc.CardBody(
                 [
                     html.Div(
-                        "Group like items into labelled bins, then search a keyword to find "
-                        "which bin something lives in.",
+                        "Smart Organize analyses every item's name & category and groups related "
+                        "things into labelled bins (e.g. all your switches together). Then a keyword "
+                        "search tells you which bin something lives in.",
                         className="text-muted small mb-2",
                     ),
                     html.Div(id="storage-map"),
