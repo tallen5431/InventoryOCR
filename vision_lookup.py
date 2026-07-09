@@ -87,6 +87,8 @@ PROMPT = (
     '  "specifications": array of short spec strings (brand, model, material, capacity, etc.),\n'
     '  "estimated_value": string with a currency and a plausible RANGE, clearly an estimate,\n'
     '  "dimensions": string with an approximate size, or "unknown",\n'
+    '  "tags": array of 3-6 short lowercase keywords someone might search to find this item,\n'
+    '  "search_query": a concise web-search query (brand + model + product type) to look it up,\n'
     '  "confidence": one of "low", "high", or "medium".\n'
     "Use \"unknown\" for anything you cannot determine. Do NOT invent exact prices or "
     "model numbers; prefer ranges and say when you are unsure."

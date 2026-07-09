@@ -25,14 +25,27 @@ to find something or restock.
 - 🗂️ **Organize** — every item has a **Category** and **Location** (with
   type‑ahead suggestions from what you've already used), a **Quantity**, a
   description, and photos.
-- 🔎 **Find fast** — full‑text search across name / category / location / notes /
-  OCR text, plus dropdown filters for category and location.
+- ⚡ **Fast batch entry** — **Save & Next** stores the item and keeps the
+  category / location / bin so you can rip through a whole shelf without
+  re‑typing where things live.
+- 🔎 **Find fast** — full‑text search across name / category / location / bin /
+  notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters for
+  category and location.
 - 📊 **At‑a‑glance** — KPI cards (total items, total quantity, low‑stock count,
   categories) and an **Overview** grouped by location and by category.
-- 📤 **Export** — one‑click CSV of your whole inventory.
+- 📤 **Export** — one‑click CSV of your whole inventory (including bin, specs,
+  value, dimensions, tags, and product link).
 - 🔎 **Identify from photo** — send an item's photo to a local vision AI
-  (Ollama) to suggest what it is, its specifications, an estimated value, and
-  dimensions. Read-only — it never changes your item, you decide what to keep.
+  (Ollama) to suggest what it is, its specifications, an estimated value,
+  dimensions, and search keywords. **Apply to item** copies those into the form
+  in one click.
+- 🌐 **Look it up on the web** — open a **Google Lens** reverse‑image search
+  (when the app is on a public URL) or a plain **Google / Shopping** search for
+  the item's name and specs. Handy when local models can't nail an exact product.
+- 🧺 **Storage system** — give items a short **bin / location code**, or run
+  **Smart Organize** to group like items into labelled bins automatically. A live
+  **Storage map** shows what lives in each bin so a keyword search tells you
+  exactly where to look.
 - 🧪 **OCR Lab** — experiment with preprocessing and pull text off images when
   Tesseract is installed.
 - 🌗 **Dark/light theme**, responsive layout tuned for phones and tablets.
@@ -68,7 +81,8 @@ All settings are environment variables:
 | `PORT`            | `8001`        | Port to listen on |
 | `URL_PREFIX`      | `/inventory`  | Path prefix. **Set to empty** (`URL_PREFIX=`) to serve at the site root. |
 | `INVENTORY_THEME` | `dark`        | `dark` or `light` default theme |
-| `PUBLIC_BASE`     | *(unset)*     | Force the external base URL shown on startup |
+| `PUBLIC_BASE`     | *(unset)*     | Public base URL of the app. Also enables the **Google Lens by‑image** button (Google must be able to fetch the photo). |
+| `TAILSCALE_FUNNEL_BASE` | *(unset)* | Public [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) base (e.g. `https://host.tailnet.ts.net`). Alternative to `PUBLIC_BASE` for enabling Lens. |
 | `OLLAMA_HOST`     | `http://100.98.112.1:11434` | Ollama server for "Identify from photo" (a trailing `/v1` is accepted). |
 | `OLLAMA_VISION_MODEL` | `llama3.2-vision` | Vision model used for identification. Pull it first. |
 | `VISION_TIMEOUT`  | `60`          | Identify request timeout, in seconds |
@@ -125,6 +139,48 @@ export OLLAMA_VISION_MODEL=llama3.2-vision
 > ⚠️ Estimated values and specs are the model's best guess from the photo —
 > treat them as a starting point, not an appraisal.
 
+## Look it up on the web
+
+Local vision models are handy but often miss the exact product. The Identify
+panel and the form's **🌐 Search the web** button give you two browser‑powered
+lookups that are usually more accurate:
+
+- **Google / Shopping search** — always available. Opens a normal Google search
+  for the item's name + specs in a new tab. Runs in *your* browser, so it works
+  on any network.
+- **Google Lens (reverse image)** — appears when the app is reachable on a public
+  URL, because Google's servers must be able to fetch the photo. Set
+  `PUBLIC_BASE` or `TAILSCALE_FUNNEL_BASE` to enable it. Otherwise, right‑click
+  the photo in the modal and choose **“Search image with Google Lens”** — the
+  browser uploads the image directly and it works even on a private LAN.
+
+Whatever you learn, click **Apply to item** on an AI result (or just type into
+the form) and **Save** to record the name, category, specs, value, dimensions,
+tags, and a product link.
+
+## Storage & retrieval — find where you put things
+
+The whole point of scanning your stuff is being able to find it later. Two pieces
+make that fast:
+
+1. **Bins / location codes.** Each item can carry a short code (e.g. `BIN-01`,
+   `SHELF-A3`) alongside its human location. Type it in the **Bin / code** field,
+   or let the app assign one.
+2. **Smart Organize.** Click **Smart Organize** in the Storage map card to
+   generate a plan that groups *like items together* — one bin per category — and
+   assigns each a bin code. Review the plan, then **Apply plan** to stamp those
+   bin labels onto every item at once. Existing codes are preserved, so re‑running
+   it is safe and stable.
+
+The **Storage map** card then shows what physically lives in each bin. To find
+something later, just search a keyword (name, tag, spec, category…) — the results
+show the item **and its bin**, so you know exactly which box to open.
+
+A good workflow for a big scan‑in:
+
+> Snap → *Identify* / *Search web* → *Apply* → set quantity → **Save & Next**
+> (category/location stay put) … repeat for the shelf, then **Smart Organize**
+> once at the end to bin everything.
 
 ## Data & storage
 
@@ -149,9 +205,11 @@ This app ships as a bundled card in
 | File | Role |
 | ---- | ---- |
 | `app.py` | Dash app shell, routing, theme, asset routes, server entrypoint |
-| `components.py` | Dashboard UI (form, filters, KPIs, table, overview, modal) |
-| `callbacks.py` | Dashboard behavior (add/edit/delete, filter, KPIs, export) |
-| `data.py` | JSON persistence + organizing helpers (categories/locations/summaries) |
+| `components.py` | Dashboard UI (form, filters, KPIs, table, overview, modals, storage map) |
+| `callbacks.py` | Dashboard behavior (add/edit/delete, filter, KPIs, identify, web search, organize, export) |
+| `data.py` | JSON persistence + organizing/storage helpers (categories, locations, bins, Smart Organize) |
+| `vision_lookup.py` | Ollama vision client for "Identify from photo" |
+| `web_search.py` | Google Lens / Google / Shopping search URL builders |
 | `utils.py` | Image saving, thumbnails, asset URLs |
 | `image_processing.py` / `ocr_engine.py` | OCR preprocessing & extraction |
 | `components_ocr_lab.py` / `callbacks_ocr_lab.py` | OCR Lab page |
