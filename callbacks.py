@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os, time
 from dash import Input, Output, State, ctx, no_update, ALL, html, dcc
+import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 import data
 from utils import save_image, get_thumbnail_url, get_image_url
@@ -17,6 +18,18 @@ def _parse_qty(q):
         return n if n >= 0 else 0
     except Exception:
         return 0
+
+def _specs_to_text(specs):
+    """Render a stored specifications list as one-per-line text for the textarea."""
+    if isinstance(specs, list):
+        return "\n".join(str(s) for s in specs if str(s).strip())
+    return str(specs or "")
+
+def _tags_to_text(tags):
+    """Render a stored tags list as a comma-separated string for the input."""
+    if isinstance(tags, list):
+        return ", ".join(str(t) for t in tags if str(t).strip())
+    return str(tags or "")
 
 def _build_rows(filtered):
     out_rows = []
@@ -90,11 +103,183 @@ def _breakdown_list(groups):
         )
     return html.Div(items)
 
+def _render_plan(plan):
+    """Render an auto_organize() plan as a readable preview table."""
+    if not plan:
+        return html.Div("Nothing to organize yet.", className="text-muted")
+    rows = [
+        html.Tr(
+            [
+                html.Th("Bin"),
+                html.Th("Group"),
+                html.Th("Items", className="text-end"),
+                html.Th("Qty", className="text-end"),
+            ]
+        )
+    ]
+    for g in plan:
+        code_badge = html.Span(
+            g.get("location_code", ""),
+            className="badge bg-primary" if not g.get("existing") else "badge bg-info text-dark",
+        )
+        rows.append(
+            html.Tr(
+                [
+                    html.Td(code_badge),
+                    html.Td(g.get("location_name", "") or "—"),
+                    html.Td(str(g.get("items", 0)), className="text-end"),
+                    html.Td(str(g.get("qty", 0)), className="text-end"),
+                ]
+            )
+        )
+    return html.Div(
+        [
+            html.P(
+                "Like items are grouped into labelled bins. Bins marked "
+                "in blue keep a code they already had. Apply to save these "
+                "bin labels onto every item.",
+                className="text-muted small",
+            ),
+            dbc.Table(rows, bordered=False, hover=True, responsive=True, striped=True, className="mb-0"),
+        ]
+    )
+
+def _render_storage_map(bins):
+    """Render data.storage_map() as a compact per-bin list."""
+    if not bins:
+        return html.Div("No bins yet. Add items and run Smart Organize.", className="text-muted small")
+    cards = []
+    for b in bins:
+        code = b.get("location_code", "")
+        label = code or "Unfiled"
+        badge_class = "badge bg-primary" if code else "badge bg-secondary"
+        names = b.get("names", [])
+        preview = ", ".join(names[:6]) + ("…" if len(names) > 6 else "")
+        cards.append(
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Span(label, className=badge_class + " me-2"),
+                            html.Span(b.get("location_name", "") or "", className="text-muted small"),
+                            html.Span(
+                                [
+                                    html.Span(f"{b.get('qty', 0)}", className="badge bg-primary rounded-pill me-1"),
+                                    html.Span(f"{b.get('items', 0)} item{'s' if b.get('items') != 1 else ''}", className="text-muted small"),
+                                ],
+                                className="ms-auto text-nowrap",
+                            ),
+                        ],
+                        className="d-flex align-items-center",
+                    ),
+                    html.Div(preview, className="text-muted small mt-1"),
+                ],
+                className="py-2 border-bottom",
+            )
+        )
+    return html.Div(cards)
+
+def _render_connect(eps):
+    """Render the list of access URLs (LAN / Tailscale / localhost) with QR codes."""
+    if not eps:
+        return html.Div("No network addresses found.", className="text-muted")
+    import net_info
+    kind_icon = {
+        "lan": "bi-hdd-network", "tailscale": "bi-shield-lock",
+        "loopback": "bi-pc-display", "other": "bi-globe",
+    }
+    cols = []
+    for e in eps:
+        qr = net_info.qr_data_uri(e["url"])
+        qr_node = html.Img(src=qr, className="connect-qr mt-2") if qr else html.Div(
+            "QR needs the 'qrcode' package.", className="text-muted small mt-2"
+        )
+        cols.append(
+            dbc.Col(
+                dbc.Card(
+                    dbc.CardBody(
+                        [
+                            html.Div(
+                                [html.I(className=f"bi {kind_icon.get(e['kind'], 'bi-globe')} me-2"),
+                                 html.Strong(e["label"])],
+                                className="mb-1",
+                            ),
+                            html.A(
+                                e["url"], href=e["url"], target="_blank", rel="noopener noreferrer",
+                                className="d-block text-break small",
+                            ),
+                            html.Div(qr_node, className="text-center"),
+                        ]
+                    ),
+                    className="h-100 shadow-sm text-center",
+                ),
+                xs=12, sm=6, md=4, className="mb-3",
+            )
+        )
+    return dbc.Row(cols, className="g-3")
+
 def _identify_footer(res):
     endpoint = (res.get("endpoint", "") or "").replace("/api/generate", "")
     return html.Div(
         ["via ", html.Code(res.get("model", "") or "?"), " @ ", html.Code(endpoint or "?")],
         className="text-muted small mt-3",
+    )
+
+def _web_search_buttons(links):
+    """A row of 'search the web' link-buttons (open in a new tab).
+
+    Google Lens (reverse image search) only appears when the app is reachable on
+    a public URL, since Google must be able to fetch the photo. Text/Shopping
+    search always work — they run in the user's browser, not from the server.
+    """
+    links = links or {}
+    btns = []
+    if links.get("lens"):
+        btns.append(
+            html.A(
+                [html.I(className="bi bi-camera me-1"), "Google Lens (image)"],
+                href=links["lens"], target="_blank", rel="noopener",
+                className="btn btn-primary btn-sm me-2 mb-2",
+            )
+        )
+    if links.get("text"):
+        btns.append(
+            html.A(
+                [html.I(className="bi bi-google me-1"), "Google search"],
+                href=links["text"], target="_blank", rel="noopener",
+                className="btn btn-outline-secondary btn-sm me-2 mb-2",
+            )
+        )
+    if links.get("shopping"):
+        btns.append(
+            html.A(
+                [html.I(className="bi bi-bag me-1"), "Shopping / prices"],
+                href=links["shopping"], target="_blank", rel="noopener",
+                className="btn btn-outline-secondary btn-sm me-2 mb-2",
+            )
+        )
+    if not btns:
+        return html.Div()
+
+    note = None
+    if not links.get("lens_available"):
+        note = html.Div(
+            [
+                html.I(className="bi bi-info-circle me-1"),
+                "Tip: for reverse image search, right-click the photo and choose ",
+                html.Em("“Search image with Google Lens”"),
+                ". Enable Lens-by-link by serving this app on a public URL "
+                "(Tailscale Funnel or PUBLIC_BASE).",
+            ],
+            className="text-muted small mt-1",
+        )
+    return html.Div(
+        [
+            html.Div([html.I(className="bi bi-globe me-2"), html.Strong("Look it up on the web")], className="mb-2"),
+            html.Div(btns, className="d-flex flex-wrap"),
+            note or html.Div(),
+        ],
+        className="py-2",
     )
 
 def _identify_row(icon, label, value_node):
@@ -109,7 +294,63 @@ def _identify_row(icon, label, value_node):
         className="py-2 border-bottom",
     )
 
-def _render_identify(res):
+def _render_web_match(web):
+    """Render a web_detect.detect_web() result (reverse-image match)."""
+    if not web:
+        return html.Div()
+    if not web.get("ok"):
+        # Configured but failed — a small muted note; local result still shows.
+        if web.get("configured") is False:
+            return html.Div()
+        return html.Div(
+            [html.I(className="bi bi-cloud-slash me-1"),
+             f"Web match unavailable: {web.get('error', 'unknown error')}"],
+            className="text-muted small mb-2",
+        )
+    best = (web.get("best_guess") or "").strip()
+    entities = web.get("entities") or []
+    pages = web.get("pages") or []
+
+    children = [
+        html.Div(
+            [html.I(className="bi bi-globe2 me-2"),
+             html.Strong("Best web match"),
+             html.Span(f"  ·  {web.get('provider', '')}", className="text-muted small")],
+            className="mb-1",
+        )
+    ]
+    if best:
+        children.append(html.Div(best, className="fs-5 fw-semibold"))
+        children.append(
+            html.Div("This becomes the item name when you Apply.", className="text-muted small mb-2")
+        )
+    else:
+        children.append(html.Div("No confident product name from the image.", className="text-muted small mb-2"))
+
+    if entities:
+        children.append(
+            html.Div(
+                [html.Span(e, className="badge bg-secondary me-1 mb-1") for e in entities[:8]],
+                className="mb-2",
+            )
+        )
+    if pages:
+        children.append(html.Div([html.I(className="bi bi-link-45deg me-1"), "Matching pages:"], className="small text-muted"))
+        children.append(
+            html.Ul(
+                [
+                    html.Li(
+                        html.A(p["title"][:90], href=p["url"], target="_blank", rel="noopener noreferrer")
+                    )
+                    for p in pages[:5]
+                ],
+                className="mb-0 small",
+            )
+        )
+    return html.Div(children, className="p-2 mb-3 rounded border")
+
+
+def _render_identify(res, links=None):
     """Read-only rendering of a vision_lookup.identify_item() result."""
     if not res.get("ok"):
         return html.Div(
@@ -119,6 +360,8 @@ def _render_identify(res):
                     className="fw-bold text-danger",
                 ),
                 html.P(res.get("error", ""), className="small"),
+                # Even when the local model is down, the web search still works.
+                _web_search_buttons(links) if links else html.Div(),
                 html.Hr(),
                 html.P(["Endpoint: ", html.Code(res.get("endpoint", "") or "—")], className="small mb-1"),
                 html.P(["Model: ", html.Code(res.get("model", "") or "—")], className="small mb-1"),
@@ -176,9 +419,12 @@ def _render_identify(res):
             html.Div(header, className="d-flex align-items-center mb-3"),
             html.Div(rows),
             html.Div(
-                "⚠️ These are AI estimates read from the photo — double-check before relying on them.",
+                "⚠️ These are AI estimates read from the photo — double-check before relying on them. "
+                "Use “Apply to item” below to copy them into the form.",
                 className="text-muted small mt-3",
             ),
+            html.Hr(),
+            _web_search_buttons(links) if links else html.Div(),
             _identify_footer(res),
         ]
     )
@@ -194,6 +440,12 @@ def register_callbacks(app):
             Output("item-qty", "value"),
             Output("item-category", "value"),
             Output("item-location", "value"),
+            Output("item-location-code", "value"),
+            Output("item-specs", "value"),
+            Output("item-value", "value"),
+            Output("item-dims", "value"),
+            Output("item-tags", "value"),
+            Output("item-producturl", "value"),
             Output("editing-id", "data"),
             Output("current-images", "data"),
             Output("image-upload", "contents"),
@@ -205,6 +457,7 @@ def register_callbacks(app):
         [
             Input("url", "pathname"),               # ensures initial population
             Input("save-button", "n_clicks"),
+            Input("save-next-button", "n_clicks"),
             Input("delete-button", "n_clicks"),
             Input("inventory-table", "selected_rows"),
             Input("cancel-button", "n_clicks"),
@@ -219,6 +472,12 @@ def register_callbacks(app):
             State("item-qty", "value"),
             State("item-category", "value"),
             State("item-location", "value"),
+            State("item-location-code", "value"),
+            State("item-specs", "value"),
+            State("item-value", "value"),
+            State("item-dims", "value"),
+            State("item-tags", "value"),
+            State("item-producturl", "value"),
             State("image-upload", "contents"),
             State("current-images", "data"),
             State("editing-id", "data"),
@@ -226,9 +485,10 @@ def register_callbacks(app):
         ],
         prevent_initial_call=False,
     )
-    def manage_table(pathname, save_clicks, delete_clicks, sel_rows, cancel_clicks,
+    def manage_table(pathname, save_clicks, save_next_clicks, delete_clicks, sel_rows, cancel_clicks,
                      search, filter_cat, filter_loc, _refresh_seq,
-                     name, desc, qty, category, location, img_contents,
+                     name, desc, qty, category, location, location_code,
+                     specs, value, dims, tags, producturl, img_contents,
                      current_images, editing_id, current_rows):
         triggered = (ctx.triggered_id or "")
         # Default toast outputs to no_update: 'inventory-table.selected_rows' is both
@@ -238,13 +498,27 @@ def register_callbacks(app):
         toast_open, toast_header, toast_icon, toast_msg = no_update, no_update, no_update, no_update
         next_sel = sel_rows or []
         next_name = next_desc = next_qty = next_category = next_location = no_update
+        next_code = next_specs = next_value = next_dims = next_tags = next_url = no_update
         next_editing = next_images = next_upload = no_update
+
+        def _clear_form(keep_location=False):
+            """Reset the form. When keep_location, the category/location/bin stay so
+            you can scan a run of similar items without re-typing where they live."""
+            nonlocal next_name, next_desc, next_qty, next_category, next_location
+            nonlocal next_code, next_specs, next_value, next_dims, next_tags, next_url
+            nonlocal next_editing, next_images, next_upload, next_sel
+            next_sel = []
+            next_name, next_desc, next_qty = "", "", 1
+            next_specs, next_value, next_dims, next_tags, next_url = "", "", "", "", ""
+            if not keep_location:
+                next_category, next_location, next_code = "", "", ""
+            next_editing, next_images, next_upload = None, [], None
 
         # Always load latest items
         items = data.inventory()
 
-        # Create / Update
-        if triggered == "save-button":
+        # Create / Update (Save and Save & Next share the write path)
+        if triggered in ("save-button", "save-next-button"):
             nm = (name or "").strip()
             if not nm:
                 toast_open, toast_header, toast_icon, toast_msg = True, "Missing Name", "warning", "Please enter a name."
@@ -252,6 +526,7 @@ def register_callbacks(app):
                 ds = (desc or "").strip()
                 cat = (category or "").strip()
                 loc = (location or "").strip()
+                code = (location_code or "").strip()
                 nqty = _parse_qty(qty)
 
                 # Handle multiple image uploads
@@ -272,20 +547,21 @@ def register_callbacks(app):
                         existing_row = next((r for r in items if r.get("id") == editing_id), {})
                         existing_ocr = existing_row.get("ocr_text", "")
                         data.update_item(editing_id, nm, ds, nqty, img_filenames, existing_ocr,
-                                         category=cat, location=loc)
+                                         category=cat, location=loc, location_code=code,
+                                         specifications=specs, estimated_value=value,
+                                         dimensions=dims, tags=tags, product_url=producturl)
                         toast_header, toast_icon, toast_msg = "Item Updated", "success", f'"{nm}" updated.'
                     else:
-                        data.add_item(nm, ds, nqty, img_filenames, "", category=cat, location=loc)
+                        data.add_item(nm, ds, nqty, img_filenames, "", category=cat, location=loc,
+                                      location_code=code, specifications=specs, estimated_value=value,
+                                      dimensions=dims, tags=tags, product_url=producturl)
                         toast_header, toast_icon, toast_msg = "Item Added", "success", f'"{nm}" added.'
                 except ValueError as e:
                     toast_header, toast_icon, toast_msg = "Duplicate Name", "danger", str(e)
 
                 toast_open = True
-                # clear form (reset qty to 1 for quick repeat entry)
-                next_sel = []
-                next_name, next_desc, next_qty = "", "", 1
-                next_category, next_location = "", ""
-                next_editing, next_images, next_upload = None, [], None
+                # Save & Next keeps where-it-lives sticky for rapid batch scanning.
+                _clear_form(keep_location=(triggered == "save-next-button"))
                 # refresh items for table build
                 items = data.inventory()
 
@@ -295,18 +571,12 @@ def register_callbacks(app):
                 removed = data.remove_item(editing_id)
                 if removed:
                     toast_open, toast_header, toast_icon, toast_msg = True, "Item Deleted", "danger", f'"{removed.get("name","")}" deleted.'
-                next_sel = []
-                next_name, next_desc, next_qty = "", "", 1
-                next_category, next_location = "", ""
-                next_editing, next_images, next_upload = None, [], None
+                _clear_form()
                 items = data.inventory()
 
         # Cancel clears form
         elif triggered == "cancel-button":
-            next_sel = []
-            next_name, next_desc, next_qty = "", "", 1
-            next_category, next_location = "", ""
-            next_editing, next_images, next_upload = None, [], None
+            _clear_form()
 
         # Selecting a row populates form
         elif triggered == "inventory-table":
@@ -321,6 +591,12 @@ def register_callbacks(app):
                     next_qty = actual_row.get("qty", row.get("qty", None))
                     next_category = actual_row.get("category", "")
                     next_location = actual_row.get("location", "")
+                    next_code = actual_row.get("location_code", "")
+                    next_specs = _specs_to_text(actual_row.get("specifications", []))
+                    next_value = actual_row.get("estimated_value", "")
+                    next_dims = actual_row.get("dimensions", "")
+                    next_tags = _tags_to_text(actual_row.get("tags", []))
+                    next_url = actual_row.get("product_url", "")
                     next_editing = row.get("id")
                     next_images = actual_row.get("images", [])
                     # Discard any pending (unsaved) upload so it isn't attached to
@@ -338,6 +614,7 @@ def register_callbacks(app):
 
         return [
             out_rows, next_sel, next_name, next_desc, next_qty, next_category, next_location,
+            next_code, next_specs, next_value, next_dims, next_tags, next_url,
             next_editing, next_images, next_upload,
             toast_open, toast_header, toast_icon, toast_msg
         ]
@@ -348,6 +625,7 @@ def register_callbacks(app):
         Output("filter-location", "options"),
         Output("category-datalist", "children"),
         Output("location-datalist", "children"),
+        Output("location-code-datalist", "children"),
         Input("inventory-table", "data"),
         prevent_initial_call=False,
     )
@@ -357,11 +635,13 @@ def register_callbacks(app):
         all_items = data.inventory()
         cats = data.categories(all_items)
         locs = data.locations(all_items)
+        codes = data.location_codes(all_items)
         cat_opts = [{"label": c, "value": c} for c in cats]
         loc_opts = [{"label": l, "value": l} for l in locs]
         cat_dl = [html.Option(value=c) for c in cats]
         loc_dl = [html.Option(value=l) for l in locs]
-        return cat_opts, loc_opts, cat_dl, loc_dl
+        code_dl = [html.Option(value=c) for c in codes]
+        return cat_opts, loc_opts, cat_dl, loc_dl, code_dl
 
     # ---------- Image gallery display ----------
     @app.callback(
@@ -586,15 +866,25 @@ def register_callbacks(app):
         rows = data.inventory()
         buf = io.StringIO()
         writer = csv.writer(buf)
-        writer.writerow(["id", "name", "category", "location", "qty", "description", "ocr_text", "images"])
+        writer.writerow([
+            "id", "name", "category", "location", "bin", "qty", "description",
+            "specifications", "estimated_value", "dimensions", "tags",
+            "product_url", "ocr_text", "images",
+        ])
         for r in rows:
             writer.writerow([
                 r.get("id"),
                 r.get("name", ""),
                 r.get("category", ""),
                 r.get("location", ""),
+                r.get("location_code", ""),
                 r.get("qty", 0),
                 r.get("description", ""),
+                " | ".join(r.get("specifications", []) or []),
+                r.get("estimated_value", ""),
+                r.get("dimensions", ""),
+                ", ".join(r.get("tags", []) or []),
+                r.get("product_url", ""),
                 (r.get("ocr_text", "") or "").replace("\n", " ").strip(),
                 "; ".join(r.get("images", []) or []),
             ])
@@ -606,13 +896,18 @@ def register_callbacks(app):
         Output("identify-trigger", "data"),
         Input("identify-button", "n_clicks"),
         Input("close-identify-modal", "n_clicks"),
+        Input("apply-identify", "n_clicks"),
         State("current-images", "data"),
         State("image-upload", "contents"),
+        State("item-name", "value"),
+        State("item-category", "value"),
         prevent_initial_call=True,
     )
-    def toggle_identify(open_clicks, close_clicks, current_images, upload_contents):
+    def toggle_identify(open_clicks, close_clicks, apply_clicks,
+                        current_images, upload_contents, typed_name, typed_cat):
         trig = ctx.triggered_id
-        if trig == "close-identify-modal":
+        # Applying or closing dismisses the modal.
+        if trig in ("close-identify-modal", "apply-identify"):
             return False, no_update
         if trig != "identify-button":
             raise PreventUpdate
@@ -622,19 +917,30 @@ def register_callbacks(app):
             pending = upload_contents[0] if isinstance(upload_contents, list) else upload_contents
         primary = (current_images or [None])[0] if current_images else None
         # Include n_clicks so re-clicking on the same photo re-runs the lookup.
-        return True, {"pending": pending, "img": primary, "n": open_clicks}
+        return True, {
+            "pending": pending,
+            "img": primary,
+            "typed_name": (typed_name or "").strip(),
+            "typed_cat": (typed_cat or "").strip(),
+            "n": open_clicks,
+        }
 
     # ---------- Identify item from photo (run the vision lookup) ----------
     @app.callback(
         Output("identify-body", "children"),
+        Output("identify-result", "data"),
         Input("identify-trigger", "data"),
         prevent_initial_call=True,
     )
     def do_identify(trigger):
         if not trigger:
             raise PreventUpdate
+        import web_search
+
         pending = trigger.get("pending")
         primary = trigger.get("img")
+        typed_name = (trigger.get("typed_name") or "").strip()
+        typed_cat = (trigger.get("typed_cat") or "").strip()
 
         image = None
         if pending:
@@ -645,14 +951,346 @@ def register_callbacks(app):
                 image = path.read_bytes()
 
         if image is None:
+            # No photo — still offer a web text search for whatever name is typed.
+            if typed_name:
+                links = web_search.links_for(typed_name, None, None)
+                body = html.Div(
+                    [
+                        html.P("No photo to analyse, but you can still search the web:", className="mb-2"),
+                        _web_search_buttons(links),
+                    ]
+                )
+                store = {"data": None, "typed_name": typed_name, "typed_cat": typed_cat}
+                return body, store
             return html.Div(
                 "Select an item that has a photo (or take a new photo) first, then click Identify.",
                 className="text-warning",
-            )
+            ), no_update
 
-        import vision_lookup
+        import vision_lookup, web_detect
         res = vision_lookup.identify_item(image)
-        return _render_identify(res)
+        parsed = res.get("data") if isinstance(res.get("data"), dict) else None
+
+        # Automatic web lookup when a provider is configured; otherwise fully
+        # local. Only runs on click. SerpApi uses a public image URL (Lens) when
+        # available, else a Google search on the local model's best guess;
+        # Google Vision uses the image bytes directly.
+        local_query = ""
+        if parsed:
+            local_query = str(parsed.get("search_query") or parsed.get("name") or "").strip()
+        if not local_query:
+            local_query = typed_name
+        img_public = web_search.public_image_url(primary)  # "" if no public base
+        web = (
+            web_detect.detect_web(image, query=local_query, image_url=img_public)
+            if web_detect.is_configured() else None
+        )
+
+        # Merge: web reverse-image match wins the name; local model keeps
+        # category/value/dimensions/specs; entities fold into tags.
+        merged = web_detect.merge_into(parsed, web)
+        merged = merged if merged else parsed
+
+        # Best web-search query for the manual buttons.
+        name_for_search = ""
+        specs_for_search = None
+        source = merged or parsed
+        if source:
+            name_for_search = str(source.get("name") or "").strip()
+            sq = str(source.get("search_query") or "").strip()
+            specs_for_search = source.get("specifications")
+            if sq:
+                name_for_search, specs_for_search = sq, None
+        if web and web.get("ok") and web.get("best_guess"):
+            name_for_search = web["best_guess"]
+            specs_for_search = None
+        query_name = name_for_search or typed_name
+
+        links = web_search.links_for(query_name, specs_for_search, primary)
+
+        # Show the reverse-image match (if any) above the local-AI details.
+        res_display = dict(res)
+        if isinstance(merged, dict):
+            res_display["data"] = merged
+        body = html.Div([_render_web_match(web), _render_identify(res_display, links)])
+
+        # Payload the "Apply to item" button copies into the form.
+        store = {
+            "data": merged if isinstance(merged, dict) else parsed,
+            "typed_name": typed_name,
+            "typed_cat": typed_cat,
+            "product_url": (merged or {}).get("product_url", "") if isinstance(merged, dict) else "",
+        }
+        return body, store
+
+    # ---------- Apply identify result into the edit form ----------
+    @app.callback(
+        Output("item-name", "value", allow_duplicate=True),
+        Output("item-category", "value", allow_duplicate=True),
+        Output("item-desc", "value", allow_duplicate=True),
+        Output("item-specs", "value", allow_duplicate=True),
+        Output("item-value", "value", allow_duplicate=True),
+        Output("item-dims", "value", allow_duplicate=True),
+        Output("item-tags", "value", allow_duplicate=True),
+        Output("item-producturl", "value", allow_duplicate=True),
+        Output("more-details-collapse", "is_open", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("apply-identify", "n_clicks"),
+        State("identify-result", "data"),
+        State("item-name", "value"),
+        State("item-category", "value"),
+        State("item-desc", "value"),
+        State("item-producturl", "value"),
+        prevent_initial_call=True,
+    )
+    def apply_identify(n, result, cur_name, cur_cat, cur_desc, cur_url):
+        if not n or not result:
+            raise PreventUpdate
+        d = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(d, dict):
+            # Nothing structured to apply (e.g. vision failed) — tell the user.
+            return (no_update,) * 9 + (True, "Nothing to apply", "warning",
+                                       "The lookup didn't return structured details.")
+
+        def _s(v):
+            t = "" if v is None else str(v).strip()
+            return "" if t.lower() == "unknown" else t
+
+        name = _s(d.get("name")) or (cur_name or "")
+        category = _s(d.get("category")) or (cur_cat or "")
+        # Fold the AI description into any existing notes without clobbering them.
+        what = _s(d.get("what_it_is"))
+        desc = (cur_desc or "").strip()
+        if what and what.lower() not in desc.lower():
+            desc = (desc + "\n" + what).strip() if desc else what
+
+        specs = d.get("specifications")
+        specs_text = _specs_to_text(specs) if isinstance(specs, list) else _s(specs)
+        value = _s(d.get("estimated_value"))
+        dims = _s(d.get("dimensions"))
+        tags = d.get("tags")
+        tags_text = _tags_to_text(tags) if isinstance(tags, list) else _s(tags)
+        # Only fill the product link if the lookup found one and the user hasn't set it.
+        url = _s(d.get("product_url")) or (cur_url or "")
+
+        return (
+            name, category, desc, specs_text, value, dims, tags_text, url,
+            True,  # open the details section so the applied fields are visible
+            True, "Applied", "success", "Lookup details copied into the form — review and Save.",
+        )
+
+    # ---------- Apply identify result AND save straight onto the item ----------
+    @app.callback(
+        Output("item-name", "value", allow_duplicate=True),
+        Output("item-category", "value", allow_duplicate=True),
+        Output("item-desc", "value", allow_duplicate=True),
+        Output("item-specs", "value", allow_duplicate=True),
+        Output("item-value", "value", allow_duplicate=True),
+        Output("item-dims", "value", allow_duplicate=True),
+        Output("item-tags", "value", allow_duplicate=True),
+        Output("item-producturl", "value", allow_duplicate=True),
+        Output("editing-id", "data", allow_duplicate=True),
+        Output("identify-modal", "is_open", allow_duplicate=True),
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("apply-identify-save", "n_clicks"),
+        State("identify-result", "data"),
+        State("editing-id", "data"),
+        State("item-name", "value"),
+        State("item-desc", "value"),
+        State("item-qty", "value"),
+        State("item-category", "value"),
+        State("item-location", "value"),
+        State("item-location-code", "value"),
+        State("current-images", "data"),
+        prevent_initial_call=True,
+    )
+    def apply_and_save(n, result, editing_id, cur_name, cur_desc, cur_qty,
+                       cur_cat, cur_loc, cur_code, cur_imgs):
+        if not n or not result:
+            raise PreventUpdate
+        d = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(d, dict):
+            return (no_update,) * 11 + (True, "Nothing to apply", "warning",
+                                        "The lookup didn't return structured details.")
+
+        def _s(v):
+            t = "" if v is None else str(v).strip()
+            return "" if t.lower() == "unknown" else t
+
+        name = _s(d.get("name")) or (cur_name or "").strip()
+        if not name:
+            return (no_update,) * 11 + (True, "Missing name", "warning",
+                                        "Nothing to name this item — type a name first.")
+        category = _s(d.get("category")) or (cur_cat or "").strip()
+        what = _s(d.get("what_it_is"))
+        desc = (cur_desc or "").strip()
+        if what and what.lower() not in desc.lower():
+            desc = (desc + "\n" + what).strip() if desc else what
+        specs = d.get("specifications")
+        specs_text = _specs_to_text(specs) if isinstance(specs, list) else _s(specs)
+        value = _s(d.get("estimated_value"))
+        dims = _s(d.get("dimensions"))
+        tags = d.get("tags")
+        tags_text = _tags_to_text(tags) if isinstance(tags, list) else _s(tags)
+        url = _s(d.get("product_url"))
+        qty = _parse_qty(cur_qty)
+        images = list(cur_imgs or [])
+        loc = (cur_loc or "").strip()
+        code = (cur_code or "").strip()
+
+        try:
+            if editing_id:
+                existing = next((r for r in data.inventory() if r.get("id") == editing_id), {})
+                data.update_item(
+                    editing_id, name, desc, qty, images, existing.get("ocr_text", ""),
+                    category=category, location=loc, location_code=code,
+                    specifications=specs_text, estimated_value=value, dimensions=dims,
+                    tags=tags_text, product_url=url,
+                )
+                saved_id = editing_id
+                header, msg = "Item Updated", f'"{name}" updated from the lookup.'
+            else:
+                row = data.add_item(
+                    name, desc, qty, images, "", category=category, location=loc,
+                    location_code=code, specifications=specs_text, estimated_value=value,
+                    dimensions=dims, tags=tags_text, product_url=url,
+                )
+                saved_id = row.get("id")
+                header, msg = "Item Added", f'"{name}" added from the lookup.'
+        except ValueError as e:
+            # Duplicate name (add path) — keep the modal open so they can fix it.
+            return (no_update,) * 11 + (True, "Duplicate Name", "danger", str(e))
+
+        return (
+            name, category, desc, specs_text, value, dims, tags_text, url,
+            saved_id, False, time.time(),
+            True, header, "success", msg,
+        )
+
+    # ---------- Connect: show every URL this app is reachable at ----------
+    @app.callback(
+        Output("connect-modal", "is_open"),
+        Output("connect-body", "children"),
+        Input("open-connect", "n_clicks"),
+        Input("close-connect-modal", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def toggle_connect(open_n, close_n):
+        trig = ctx.triggered_id
+        if trig == "close-connect-modal":
+            return False, no_update
+        if trig != "open-connect":
+            raise PreventUpdate
+        import net_info
+        port = int(os.environ.get("PORT", 8001) or 8001)
+        scheme = os.environ.get("SCHEME", "http")
+        eps = net_info.access_endpoints(port, URL_PREFIX, scheme)
+        return True, _render_connect(eps)
+
+    # ---------- Form: "Search the web" link tracks the typed name ----------
+    @app.callback(
+        Output("form-web-search", "href"),
+        Input("item-name", "value"),
+        Input("item-category", "value"),
+        Input("item-tags", "value"),
+        prevent_initial_call=False,
+    )
+    def update_web_search_link(name, category, tags):
+        import web_search
+        query = web_search.build_query(name or "", tags or "", category or "")
+        return web_search.google_text_url(query) if query else "https://www.google.com"
+
+    # ---------- Form: collapse toggle for "More details" ----------
+    @app.callback(
+        Output("more-details-collapse", "is_open"),
+        Input("more-details-toggle", "n_clicks"),
+        State("more-details-collapse", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_more_details(n, is_open):
+        if not n:
+            raise PreventUpdate
+        return not is_open
+
+    # ---------- Form: Add vs Edit badge ----------
+    @app.callback(
+        Output("form-mode-badge", "children"),
+        Output("form-mode-badge", "className"),
+        Input("editing-id", "data"),
+        prevent_initial_call=False,
+    )
+    def update_form_mode(editing_id):
+        if editing_id:
+            return "Editing", "badge bg-warning text-dark ms-2"
+        return "New item", "badge bg-secondary ms-2"
+
+    # ---------- Storage: Smart Organize (preview plan) ----------
+    @app.callback(
+        Output("organize-modal", "is_open"),
+        Output("organize-body", "children"),
+        Output("organize-plan", "data"),
+        Input("organize-button", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def open_organize(n):
+        if not n:
+            raise PreventUpdate
+        rows = data.inventory()
+        if not rows:
+            return True, html.Div("No items yet — add a few, then organize.", className="text-muted"), []
+        plan = data.auto_organize(rows)
+        return True, _render_plan(plan), plan
+
+    @app.callback(
+        Output("organize-modal", "is_open", allow_duplicate=True),
+        Input("close-organize-modal", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def close_organize(n):
+        if not n:
+            raise PreventUpdate
+        return False
+
+    # ---------- Storage: apply the plan ----------
+    @app.callback(
+        Output("organize-modal", "is_open", allow_duplicate=True),
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("apply-organize", "n_clicks"),
+        State("organize-plan", "data"),
+        prevent_initial_call=True,
+    )
+    def apply_organize(n, plan):
+        if not n:
+            raise PreventUpdate
+        if not plan:
+            return False, no_update, True, "Nothing to organize", "warning", "There was no plan to apply."
+        count = data.apply_organization(plan)
+        bins = len(plan)
+        return (
+            False, time.time(),
+            True, "Organized", "success",
+            f"Assigned {count} item{'s' if count != 1 else ''} across {bins} bin{'s' if bins != 1 else ''}.",
+        )
+
+    # ---------- Storage: live 'what is in each bin' map ----------
+    @app.callback(
+        Output("storage-map", "children"),
+        Input("inventory-table", "data"),
+        prevent_initial_call=False,
+    )
+    def render_storage_map(_table_data):
+        return _render_storage_map(data.storage_map())
 
     # ---------- Load selected item image into OCR Lab ----------
     @app.callback(

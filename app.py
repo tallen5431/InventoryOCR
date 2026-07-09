@@ -16,7 +16,17 @@ from config import (
 from flask import send_from_directory
 
 # UI components
-from components import sidebar_form, inventory_table, detail_panel, kpi_bar, breakdown_card, identify_modal
+from components import (
+    sidebar_form,
+    inventory_table,
+    detail_panel,
+    kpi_bar,
+    breakdown_card,
+    identify_modal,
+    organize_card,
+    organize_modal,
+    connect_modal,
+)
 
 # Page layouts
 from components_ocr_lab import ocr_lab_layout
@@ -191,7 +201,19 @@ navbar = dbc.Navbar(
                 navbar=True,
             ),
             html.Div(
-                dbc.Switch(id="theme-switch", label="Dark", value=(THEME_DEFAULT_MODE == "dark"), className="ms-3"),
+                [
+                    dbc.Button(
+                        [html.I(className="bi bi-phone me-1"), "Connect"],
+                        id="open-connect",
+                        color="secondary",
+                        outline=True,
+                        size="sm",
+                        n_clicks=0,
+                        className="me-3",
+                        title="Open on your phone / another device",
+                    ),
+                    dbc.Switch(id="theme-switch", label="Dark", value=(THEME_DEFAULT_MODE == "dark")),
+                ],
                 className="ms-auto d-flex align-items-center",
             ),
         ],
@@ -222,7 +244,9 @@ def dashboard_layout():
                 className="g-3",
             ),
             dbc.Row([dbc.Col(breakdown_card(), width=12)]),
+            dbc.Row([dbc.Col(organize_card(), width=12)]),
             identify_modal(),
+            organize_modal(),
             dbc.Row([dbc.Col(detail_panel(), width=12)], className="mt-4"),
         ],
         fluid=True,
@@ -246,6 +270,7 @@ app.layout = html.Div(
             media=("all" if THEME_DEFAULT_MODE == "dark" else "not all"),
         ),
         navbar,
+        connect_modal(),
         # cross-page stores
         dcc.Store(id="image-contents"),
         dcc.Store(id="ocr-target"),

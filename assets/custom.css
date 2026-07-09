@@ -454,6 +454,47 @@ input[type="radio"] {
 }
 
 /* ============================================
+   STORAGE MAP / ORGANIZE
+   ============================================ */
+
+/* Keep the web-search link buttons tidy when they wrap on small screens */
+#identify-body .btn,
+#identify-body a.btn {
+    white-space: nowrap;
+}
+
+/* Storage map rows read like a compact list */
+#storage-map .badge {
+    font-size: 0.8rem;
+}
+
+/* Make the "More details" link button feel like a subtle disclosure */
+#more-details-toggle {
+    font-weight: 500;
+}
+
+/* Bin code cell in the table stands out a touch */
+.dash-table-container td[data-dash-column="location_code"] {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Smart Organize preview table stays inside the modal on phones */
+#organize-body .table-responsive {
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+/* Connect panel QR codes */
+.connect-qr {
+    width: 100%;
+    max-width: 180px;
+    height: auto;
+    background: #fff;          /* keep QR readable in dark mode */
+    padding: 8px;
+    border-radius: 8px;
+}
+
+/* ============================================
    UPLOAD AREA ENHANCEMENTS
    ============================================ */
 

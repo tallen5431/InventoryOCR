@@ -25,14 +25,30 @@ to find something or restock.
 - 🗂️ **Organize** — every item has a **Category** and **Location** (with
   type‑ahead suggestions from what you've already used), a **Quantity**, a
   description, and photos.
-- 🔎 **Find fast** — full‑text search across name / category / location / notes /
-  OCR text, plus dropdown filters for category and location.
+- ⚡ **Fast batch entry** — **Save & Next** stores the item and keeps the
+  category / location / bin so you can rip through a whole shelf without
+  re‑typing where things live.
+- 🔎 **Find fast** — full‑text search across name / category / location / bin /
+  notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters for
+  category and location.
 - 📊 **At‑a‑glance** — KPI cards (total items, total quantity, low‑stock count,
   categories) and an **Overview** grouped by location and by category.
-- 📤 **Export** — one‑click CSV of your whole inventory.
+- 📤 **Export** — one‑click CSV of your whole inventory (including bin, specs,
+  value, dimensions, tags, and product link).
 - 🔎 **Identify from photo** — send an item's photo to a local vision AI
-  (Ollama) to suggest what it is, its specifications, an estimated value, and
-  dimensions. Read-only — it never changes your item, you decide what to keep.
+  (Ollama) to suggest what it is, its specifications, an estimated value,
+  dimensions, and search keywords. **Apply to item** copies those into the form
+  in one click.
+- 🌐 **Look it up on the web** — open a **Google Lens** reverse‑image search
+  (when the app is on a public URL) or a plain **Google / Shopping** search for
+  the item's name and specs. Handy when local models can't nail an exact product.
+- 🧺 **Storage system** — give items a short **bin / location code**, or run
+  **Smart Organize** to group like items into labelled bins automatically. A live
+  **Storage map** shows what lives in each bin so a keyword search tells you
+  exactly where to look.
+- 📱 **Connect panel** — the navbar **Connect** button lists every address the app
+  is reachable at (local network, Tailscale, localhost) with **QR codes**, so you
+  can scan it open on your phone.
 - 🧪 **OCR Lab** — experiment with preprocessing and pull text off images when
   Tesseract is installed.
 - 🌗 **Dark/light theme**, responsive layout tuned for phones and tablets.
@@ -68,10 +84,16 @@ All settings are environment variables:
 | `PORT`            | `8001`        | Port to listen on |
 | `URL_PREFIX`      | `/inventory`  | Path prefix. **Set to empty** (`URL_PREFIX=`) to serve at the site root. |
 | `INVENTORY_THEME` | `dark`        | `dark` or `light` default theme |
-| `PUBLIC_BASE`     | *(unset)*     | Force the external base URL shown on startup |
+| `PUBLIC_BASE`     | *(unset)*     | Public base URL of the app. Also enables the **Google Lens by‑image** button (Google must be able to fetch the photo). |
+| `TAILSCALE_FUNNEL_BASE` | *(unset)* | Public [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) base (e.g. `https://host.tailnet.ts.net`). Alternative to `PUBLIC_BASE` for enabling Lens. |
 | `OLLAMA_HOST`     | `http://100.98.112.1:11434` | Ollama server for "Identify from photo" (a trailing `/v1` is accepted). |
 | `OLLAMA_VISION_MODEL` | `llama3.2-vision` | Vision model used for identification. Pull it first. |
 | `VISION_TIMEOUT`  | `60`          | Identify request timeout, in seconds |
+| `SERPAPI_KEY`     | *(unset)*     | **Free web lookup** during Identify (SerpApi — 100/mo, no credit card). Real product name, tags, links, and price. |
+| `GOOGLE_VISION_API_KEY` | *(unset)* | Alternative web lookup (Google Vision reverse‑image; free tier needs billing on). |
+| `WEB_DETECT_PROVIDER` | `auto`   | `auto` (serpapi if its key is set, else google_vision, else off), or force `serpapi` / `google_vision` / `none`. |
+| `WEB_DETECT_TIMEOUT` | `30`       | Web‑lookup request timeout, in seconds |
+| `WEB_DETECT_MAX_RESULTS` | `8`    | Max web entities / matching pages to keep |
 
 Serve at the root (e.g. when accessed directly at `http://host:8001/`):
 
@@ -125,6 +147,100 @@ export OLLAMA_VISION_MODEL=llama3.2-vision
 > ⚠️ Estimated values and specs are the model's best guess from the photo —
 > treat them as a starting point, not an appraisal.
 
+## Automatic web identification (free)
+
+Local vision models describe an item well but often miss the *exact* product.
+Configure a web‑lookup provider and the Identify button grounds the result in
+real web data automatically — no manual search or copy‑paste:
+
+1. Your local model runs as usual (category, dimensions, specs, a first guess).
+2. In parallel, a web lookup returns the accurate **product name**, keyword
+   tags, links to matching pages, and — when available — a **real price**.
+3. The two are merged: the web match wins the **name** and **price**, entities
+   become **tags**, the top page becomes the **product link**, and your local
+   model keeps category/dimensions/specs. **Apply to item** drops it all into
+   the form.
+
+### Provider options
+
+- **SerpApi — free, recommended.** Free tier is **100 searches/month with no
+  credit card**. Returns product names *and* real prices. Sign up at
+  [serpapi.com](https://serpapi.com), copy your key, and set:
+  ```
+  export SERPAPI_KEY=your-serpapi-key
+  ```
+  It uses Google Lens (reverse image) when the photo is reachable on a public
+  URL (`PUBLIC_BASE` / `TAILSCALE_FUNNEL_BASE`), and otherwise a Google search
+  grounded on your local model's guess — so it works even on a private LAN.
+
+- **Google Cloud Vision — reverse image from bytes.** Free tier is 1000/month
+  but requires enabling billing (a card). Accepts the photo bytes directly, so
+  no public URL is needed:
+  ```
+  export GOOGLE_VISION_API_KEY=AIza...your-key...
+  ```
+
+`WEB_DETECT_PROVIDER` selects the back‑end (`auto` by default: SerpApi if its key
+is set, else Vision, else off). **No key at all?** Identify stays fully local,
+plus the manual web‑search buttons below. Nothing is sent anywhere unless a
+provider is configured *and* you press Identify.
+
+## Look it up on the web (manual)
+
+The Identify panel and the form's **🌐 Search the web** button also give you two
+browser‑powered lookups that run in *your* browser (so they work on any network):
+
+- **Google / Shopping search** — always available. Opens a normal Google search
+  for the item's name + specs in a new tab. Runs in *your* browser, so it works
+  on any network.
+- **Google Lens (reverse image)** — appears when the app is reachable on a public
+  URL, because Google's servers must be able to fetch the photo. Set
+  `PUBLIC_BASE` or `TAILSCALE_FUNNEL_BASE` to enable it. Otherwise, right‑click
+  the photo in the modal and choose **“Search image with Google Lens”** — the
+  browser uploads the image directly and it works even on a private LAN.
+
+Two ways to keep a result:
+
+- **Apply to form** — fills the form with the details so you can tweak, then
+  **Save**. Best when you want to review first.
+- **Apply & Update** — writes the details straight onto the item (or adds a new
+  one) in a single click. Fastest during a big scan-in.
+
+Either way the name, category, specs, value, dimensions, tags, and product link
+are recorded.
+
+## Open on another device (Connect panel)
+
+The app binds every network interface, so it's reachable **at the same time** on
+localhost, your LAN IP, and your Tailscale IP. Click **Connect** in the navbar to
+see all of them as clickable links with **QR codes** — scan the local‑network one
+for speed, or the Tailscale one to reach it from anywhere. (QR codes need the
+optional `qrcode` package from `requirements.txt`; without it you still get the
+links.)
+
+## Storage & retrieval — find where you put things
+
+The whole point of scanning your stuff is being able to find it later. Two pieces
+make that fast:
+
+1. **Bins / location codes.** Each item can carry a short code (e.g. `BIN-01`,
+   `SHELF-A3`) alongside its human location. Type it in the **Bin / code** field,
+   or let the app assign one.
+2. **Smart Organize.** Click **Smart Organize** in the Storage map card to
+   generate a plan that groups *like items together* — one bin per category — and
+   assigns each a bin code. Review the plan, then **Apply plan** to stamp those
+   bin labels onto every item at once. Existing codes are preserved, so re‑running
+   it is safe and stable.
+
+The **Storage map** card then shows what physically lives in each bin. To find
+something later, just search a keyword (name, tag, spec, category…) — the results
+show the item **and its bin**, so you know exactly which box to open.
+
+A good workflow for a big scan‑in:
+
+> Snap → *Identify* / *Search web* → *Apply* → set quantity → **Save & Next**
+> (category/location stay put) … repeat for the shelf, then **Smart Organize**
+> once at the end to bin everything.
 
 ## Data & storage
 
@@ -149,9 +265,13 @@ This app ships as a bundled card in
 | File | Role |
 | ---- | ---- |
 | `app.py` | Dash app shell, routing, theme, asset routes, server entrypoint |
-| `components.py` | Dashboard UI (form, filters, KPIs, table, overview, modal) |
-| `callbacks.py` | Dashboard behavior (add/edit/delete, filter, KPIs, export) |
-| `data.py` | JSON persistence + organizing helpers (categories/locations/summaries) |
+| `components.py` | Dashboard UI (form, filters, KPIs, table, overview, modals, storage map) |
+| `callbacks.py` | Dashboard behavior (add/edit/delete, filter, KPIs, identify, web search, organize, export) |
+| `data.py` | JSON persistence + organizing/storage helpers (categories, locations, bins, Smart Organize) |
+| `vision_lookup.py` | Ollama vision client for "Identify from photo" |
+| `web_detect.py` | Automatic web lookup (SerpApi / Google Vision), pluggable |
+| `web_search.py` | Google Lens / Google / Shopping search URL builders |
+| `net_info.py` | Enumerates reachable URLs (LAN / Tailscale) + QR codes for the Connect panel |
 | `utils.py` | Image saving, thumbnails, asset URLs |
 | `image_processing.py` / `ocr_engine.py` | OCR preprocessing & extraction |
 | `components_ocr_lab.py` / `callbacks_ocr_lab.py` | OCR Lab page |

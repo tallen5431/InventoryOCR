@@ -15,3 +15,6 @@ waitress~=2.1
 
 # Compatibility for older Python versions
 typing-extensions>=4.8 ; python_version < "3.11"
+
+# QR codes for the Connect panel (optional; app works without it)
+qrcode~=7.4

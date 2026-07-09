@@ -48,7 +48,13 @@ def sidebar_form():
             dbc.Card(
                 [
                     dbc.CardHeader(
-                        html.Span([html.I(className="bi bi-plus-circle me-2"), "Add / Edit Item"])
+                        html.Div(
+                            [
+                                html.Span([html.I(className="bi bi-plus-circle me-2"), "Add / Edit Item"]),
+                                html.Span(id="form-mode-badge", className="badge bg-secondary ms-2"),
+                            ],
+                            className="d-flex align-items-center justify-content-between",
+                        )
                     ),
                     dbc.CardBody(
                         [
@@ -86,12 +92,40 @@ def sidebar_form():
                                 ],
                                 className="g-2",
                             ),
+
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Quantity", className="mt-2"),
+                                            dbc.Input(id="item-qty", type="number", min=0, step=1, value=1),
+                                        ],
+                                        xs=6,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label(
+                                                [html.I(className="bi bi-box2 me-1"), "Bin / code"],
+                                                className="mt-2",
+                                            ),
+                                            dbc.Input(
+                                                id="item-location-code",
+                                                debounce=True,
+                                                placeholder="e.g., BIN-01",
+                                                list="location-code-datalist",
+                                                autoComplete="off",
+                                            ),
+                                        ],
+                                        xs=6,
+                                    ),
+                                ],
+                                className="g-2",
+                            ),
+
                             # Datalists power the type-ahead suggestions above.
                             html.Datalist(id="category-datalist"),
                             html.Datalist(id="location-datalist"),
-
-                            dbc.Label("Quantity", className="mt-2"),
-                            dbc.Input(id="item-qty", type="number", min=0, step=1, value=1),
+                            html.Datalist(id="location-code-datalist"),
 
                             dbc.Label("Description", className="mt-2"),
                             dbc.Textarea(id="item-desc", placeholder="Optional details…", rows=2),
@@ -121,6 +155,90 @@ def sidebar_form():
                             ),
                             html.Div(id="image-gallery", className="mt-2"),
                             dcc.Store(id="current-images", data=[]),
+
+                            # ----- Identify + web search (fast lookup) -----
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        dbc.Button(
+                                            [html.I(className="bi bi-stars me-1"), "Identify from photo"],
+                                            id="identify-button",
+                                            color="info",
+                                            outline=True,
+                                            className="w-100 mt-3",
+                                        ),
+                                        xs=12, sm=6,
+                                    ),
+                                    dbc.Col(
+                                        html.A(
+                                            [html.I(className="bi bi-globe me-1"), "Search the web"],
+                                            id="form-web-search",
+                                            href="https://www.google.com",
+                                            target="_blank",
+                                            rel="noopener noreferrer",
+                                            className="btn btn-outline-secondary w-100 mt-3 mt-sm-3",
+                                        ),
+                                        xs=12, sm=6,
+                                    ),
+                                ],
+                                className="g-2",
+                            ),
+                            html.Div(
+                                "Local vision AI suggests what it is; the web button opens Google for the name/specs.",
+                                className="text-muted small mt-1",
+                            ),
+
+                            # ----- Collapsible catalogue details -----
+                            dbc.Button(
+                                [html.I(className="bi bi-sliders me-1"), "More details ", html.I(className="bi bi-chevron-down")],
+                                id="more-details-toggle",
+                                color="link",
+                                size="sm",
+                                className="px-0 mt-2 text-decoration-none",
+                                n_clicks=0,
+                            ),
+                            dbc.Collapse(
+                                html.Div(
+                                    [
+                                        dbc.Label("Specifications", className="mt-1"),
+                                        dbc.Textarea(
+                                            id="item-specs",
+                                            placeholder="One per line, or comma-separated",
+                                            rows=2,
+                                        ),
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(
+                                                    [
+                                                        dbc.Label("Est. value", className="mt-2"),
+                                                        dbc.Input(id="item-value", placeholder="e.g., $20–30"),
+                                                    ],
+                                                    xs=6,
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        dbc.Label("Dimensions", className="mt-2"),
+                                                        dbc.Input(id="item-dims", placeholder="e.g., 30×10 cm"),
+                                                    ],
+                                                    xs=6,
+                                                ),
+                                            ],
+                                            className="g-2",
+                                        ),
+                                        dbc.Label("Tags / keywords", className="mt-2"),
+                                        dbc.Input(
+                                            id="item-tags",
+                                            placeholder="comma-separated, e.g. cordless, 18v, dewalt",
+                                        ),
+                                        dbc.Label("Product link", className="mt-2"),
+                                        dbc.Input(id="item-producturl", placeholder="https://…", type="url"),
+                                    ]
+                                ),
+                                id="more-details-collapse",
+                                is_open=False,
+                            ),
+
+                            # ----- Primary actions -----
                             dbc.Row(
                                 [
                                     dbc.Col(
@@ -128,35 +246,37 @@ def sidebar_form():
                                             [html.I(className="bi bi-save me-1"), "Save"],
                                             id="save-button", color="primary", className="w-100 mt-3",
                                         ),
-                                        xs=12, sm=12, md=6, lg=6,
+                                        xs=12, sm=6, md=6, lg=6,
                                     ),
                                     dbc.Col(
                                         dbc.Button(
-                                            [html.I(className="bi bi-trash me-1"), "Delete"],
-                                            id="delete-button", color="danger", className="w-100 mt-3",
+                                            [html.I(className="bi bi-save2 me-1"), "Save & Next"],
+                                            id="save-next-button", color="success", className="w-100 mt-3",
+                                            title="Save this item and keep category/location for the next one",
                                         ),
-                                        xs=6, sm=6, md=3, lg=3,
-                                    ),
-                                    dbc.Col(
-                                        dbc.Button(
-                                            [html.I(className="bi bi-x-lg me-1"), "Cancel"],
-                                            id="cancel-button", color="secondary", className="w-100 mt-3",
-                                        ),
-                                        xs=6, sm=6, md=3, lg=3,
+                                        xs=12, sm=6, md=6, lg=6,
                                     ),
                                 ],
                                 className="g-2",
                             ),
-                            dbc.Button(
-                                [html.I(className="bi bi-search me-1"), "Identify from photo"],
-                                id="identify-button",
-                                color="info",
-                                outline=True,
-                                className="w-100 mt-3",
-                            ),
-                            html.Div(
-                                "Uses a local vision AI to suggest what it is, its specs, value & size.",
-                                className="text-muted small mt-1",
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        dbc.Button(
+                                            [html.I(className="bi bi-trash me-1"), "Delete"],
+                                            id="delete-button", color="outline-danger", outline=True, className="w-100 mt-2",
+                                        ),
+                                        xs=6,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Button(
+                                            [html.I(className="bi bi-x-lg me-1"), "Cancel"],
+                                            id="cancel-button", color="outline-secondary", outline=True, className="w-100 mt-2",
+                                        ),
+                                        xs=6,
+                                    ),
+                                ],
+                                className="g-2",
                             ),
                         ]
                     ),
@@ -235,6 +355,7 @@ def inventory_table():
         {"name": "Name", "id": "name"},
         {"name": "Category", "id": "category", "hideable": True},
         {"name": "Location", "id": "location", "hideable": True},
+        {"name": "Bin", "id": "location_code", "hideable": True},
         {"name": "Qty", "id": "qty", "type": "numeric"},
         {"name": "Description", "id": "description", "hideable": True},
         {"name": "OCR Text", "id": "ocr_text", "hideable": True},
@@ -284,6 +405,7 @@ def inventory_table():
             {"if": {"column_id": "name"}, "minWidth": "120px", "maxWidth": "220px", "fontWeight": "500"},
             {"if": {"column_id": "category"}, "minWidth": "90px", "maxWidth": "140px"},
             {"if": {"column_id": "location"}, "minWidth": "90px", "maxWidth": "160px"},
+            {"if": {"column_id": "location_code"}, "minWidth": "70px", "maxWidth": "110px", "fontWeight": "600", "textAlign": "center"},
             {"if": {"column_id": "description"}, "minWidth": "150px", "maxWidth": "300px", "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
             {"if": {"column_id": "ocr_text"}, "minWidth": "150px", "maxWidth": "400px", "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
             {"if": {"column_id": "image"}, "width": "120px", "minWidth": "100px", "maxWidth": "160px", "textAlign": "center"},
@@ -350,10 +472,13 @@ def breakdown_card():
 
 
 def identify_modal():
-    """Read-only panel showing what the vision AI found for an item's photo."""
+    """Panel showing what the vision AI + web lookup found for an item's photo."""
     return html.Div(
         [
             dcc.Store(id="identify-trigger"),
+            # Holds the parsed identify result so "Apply to item" can copy it
+            # into the edit form.
+            dcc.Store(id="identify-result"),
             dbc.Modal(
                 [
                     dbc.ModalHeader(
@@ -366,10 +491,134 @@ def identify_modal():
                         )
                     ),
                     dbc.ModalFooter(
-                        dbc.Button("Close", id="close-identify-modal", className="ms-auto", n_clicks=0)
+                        [
+                            html.Div(
+                                [
+                                    dbc.Button(
+                                        [html.I(className="bi bi-pencil-square me-1"), "Apply to form"],
+                                        id="apply-identify",
+                                        color="primary",
+                                        outline=True,
+                                        n_clicks=0,
+                                        title="Fill the form with these details so you can review, then Save.",
+                                        className="me-2",
+                                    ),
+                                    dbc.Button(
+                                        [html.I(className="bi bi-check2-circle me-1"), "Apply & Update"],
+                                        id="apply-identify-save",
+                                        color="primary",
+                                        n_clicks=0,
+                                        title="Write these details straight onto the item and save.",
+                                    ),
+                                ],
+                                className="d-flex flex-wrap gap-2",
+                            ),
+                            dbc.Button("Close", id="close-identify-modal", color="secondary", n_clicks=0),
+                        ],
+                        className="justify-content-between",
                     ),
                 ],
                 id="identify-modal",
+                is_open=False,
+                size="lg",
+                centered=True,
+                scrollable=True,
+            ),
+        ]
+    )
+
+
+def connect_modal():
+    """Shows every address the app is reachable at (LAN, Tailscale, localhost)."""
+    return html.Div(
+        [
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(
+                        dbc.ModalTitle([html.I(className="bi bi-phone me-2"), "Open on another device"])
+                    ),
+                    dbc.ModalBody(
+                        [
+                            html.P(
+                                "This app is reachable at every address below — pick your local "
+                                "network for speed, or Tailscale from anywhere. Scan a QR with "
+                                "your phone's camera to open it there.",
+                                className="text-muted small",
+                            ),
+                            dcc.Loading(html.Div(id="connect-body"), type="default"),
+                        ]
+                    ),
+                    dbc.ModalFooter(dbc.Button("Close", id="close-connect-modal", className="ms-auto", n_clicks=0)),
+                ],
+                id="connect-modal",
+                is_open=False,
+                size="lg",
+                centered=True,
+                scrollable=True,
+            ),
+        ]
+    )
+
+
+def organize_card():
+    """Storage system: Smart Organize + a live 'what's in each bin' map."""
+    return dbc.Card(
+        [
+            dbc.CardHeader(
+                html.Div(
+                    [
+                        html.Span([html.I(className="bi bi-boxes me-2"), "Storage map"]),
+                        dbc.Button(
+                            [html.I(className="bi bi-magic me-1"), "Smart Organize"],
+                            id="organize-button",
+                            color="primary",
+                            size="sm",
+                            n_clicks=0,
+                        ),
+                    ],
+                    className="d-flex align-items-center justify-content-between",
+                )
+            ),
+            dbc.CardBody(
+                [
+                    html.Div(
+                        "Group like items into labelled bins, then search a keyword to find "
+                        "which bin something lives in.",
+                        className="text-muted small mb-2",
+                    ),
+                    html.Div(id="storage-map"),
+                ]
+            ),
+        ],
+        className="mt-4 shadow-sm",
+    )
+
+
+def organize_modal():
+    """Preview + apply the auto-generated storage plan."""
+    return html.Div(
+        [
+            dcc.Store(id="organize-plan"),
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(
+                        dbc.ModalTitle([html.I(className="bi bi-magic me-2"), "Smart Organize"])
+                    ),
+                    dbc.ModalBody(html.Div(id="organize-body")),
+                    dbc.ModalFooter(
+                        [
+                            dbc.Button(
+                                [html.I(className="bi bi-check2-circle me-1"), "Apply plan"],
+                                id="apply-organize",
+                                color="success",
+                                n_clicks=0,
+                            ),
+                            dbc.Button("Cancel", id="close-organize-modal", color="secondary", n_clicks=0),
+                        ],
+                        className="justify-content-between",
+                    ),
+                ],
+                id="organize-modal",
                 is_open=False,
                 size="lg",
                 centered=True,
