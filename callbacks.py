@@ -210,6 +210,60 @@ def _render_storage_map(bins):
         )
     return html.Div(cards)
 
+def _render_fit(plan):
+    """Render a fit_to_containers() plan: per-bin capacity bars + overflow."""
+    if not plan or not plan.get("ok"):
+        msg = (plan or {}).get("error") or "Add your containers above, then Fit."
+        return html.Div(msg, className="text-muted")
+    cards = []
+    for a in plan.get("assignments", []):
+        used, cap = a.get("used", 0), a.get("capacity", 0)
+        over = cap and used > cap
+        pct = min(100, int(used * 100 / cap)) if cap else 0
+        bar = "danger" if over else ("warning" if pct >= 90 else "success")
+        contents = ", ".join(f"{g['name']} ({g['count']})" for g in a.get("groups", [])) or "— empty —"
+        cards.append(
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Span(a["code"], className="badge bg-primary me-2"),
+                            html.Strong(a["name"]),
+                            html.Span(f"{used}/{cap}",
+                                      className="ms-auto text-nowrap " + ("text-danger" if over else "text-muted")),
+                        ],
+                        className="d-flex align-items-center",
+                    ),
+                    dbc.Progress(value=pct, color=bar, className="my-1", style={"height": "6px"}),
+                    html.Div(contents, className="text-muted small"),
+                ],
+                className="py-2 border-bottom",
+            )
+        )
+    children = [html.Div(cards)]
+    overflow = plan.get("overflow_names", [])
+    if overflow:
+        children.append(
+            html.Div(
+                [
+                    html.I(className="bi bi-exclamation-triangle-fill me-2 text-warning"),
+                    html.Strong(f"{len(overflow)} item(s) didn't fit: "),
+                    html.Span(", ".join(overflow[:12]) + ("…" if len(overflow) > 12 else "")),
+                    html.Div("Add capacity or another container, then Fit again.", className="text-muted small"),
+                ],
+                className="alert alert-warning mt-2 mb-0 py-2",
+            )
+        )
+    else:
+        children.append(
+            html.Div(
+                [html.I(className="bi bi-check-circle me-2 text-success"), "Everything fits — Apply to save."],
+                className="text-success small mt-2",
+            )
+        )
+    return html.Div(children)
+
+
 def _render_connect(eps):
     """Render the list of access URLs (LAN / Tailscale / localhost) with QR codes."""
     if not eps:
@@ -1501,6 +1555,91 @@ def register_callbacks(app):
     )
     def render_storage_map(_table_data):
         return _render_storage_map(data.storage_map())
+
+    # ---------- Storage bins: open editor (load current containers) ----------
+    @app.callback(
+        Output("bins-modal", "is_open"),
+        Output("containers-text", "value"),
+        Input("open-bins", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def open_bins(n):
+        if not n:
+            raise PreventUpdate
+        return True, data.containers_to_text()
+
+    @app.callback(
+        Output("bins-modal", "is_open", allow_duplicate=True),
+        Input("close-bins-modal", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def close_bins(n):
+        if not n:
+            raise PreventUpdate
+        return False
+
+    # ---------- Storage bins: save the container definitions ----------
+    @app.callback(
+        Output("bins-status", "children"),
+        Output("containers-text", "value", allow_duplicate=True),
+        Input("save-containers", "n_clicks"),
+        State("containers-text", "value"),
+        prevent_initial_call=True,
+    )
+    def save_bins(n, text):
+        if not n:
+            raise PreventUpdate
+        conts = data.save_containers(data.parse_containers_text(text))
+        msg = html.Span(
+            [html.I(className="bi bi-check-circle me-1"), f"Saved {len(conts)} bin{'s' if len(conts) != 1 else ''}."],
+            className="text-success",
+        )
+        return msg, data.containers_to_text(conts)
+
+    # ---------- Storage bins: fit items into the containers ----------
+    @app.callback(
+        Output("fit-result", "children"),
+        Output("fit-plan", "data"),
+        Output("containers-text", "value", allow_duplicate=True),
+        Output("bins-status", "children", allow_duplicate=True),
+        Input("fit-bins", "n_clicks"),
+        State("containers-text", "value"),
+        prevent_initial_call=True,
+    )
+    def do_fit(n, text):
+        if not n:
+            raise PreventUpdate
+        conts = data.save_containers(data.parse_containers_text(text))
+        if not conts:
+            return (html.Div("Add at least one container above (CODE | Name | capacity), then Fit.",
+                             className="text-warning"),
+                    None, no_update, no_update)
+        plan = data.fit_to_containers(conts=conts)
+        return _render_fit(plan), plan, data.containers_to_text(conts), ""
+
+    # ---------- Storage bins: apply the fit onto every item ----------
+    @app.callback(
+        Output("bins-modal", "is_open", allow_duplicate=True),
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("apply-fit", "n_clicks"),
+        State("fit-plan", "data"),
+        prevent_initial_call=True,
+    )
+    def apply_fit_cb(n, plan):
+        if not n:
+            raise PreventUpdate
+        if not plan or not plan.get("assignments"):
+            return no_update, no_update, True, "Nothing to apply", "warning", "Run Fit first."
+        count = data.apply_fit(plan)
+        overflow = len(plan.get("overflow", []))
+        msg = f"Placed {count} item{'s' if count != 1 else ''} into bins."
+        if overflow:
+            msg += f" {overflow} didn't fit."
+        return False, time.time(), True, "Bins updated", ("warning" if overflow else "success"), msg
 
     # ---------- Load selected item image into OCR Lab ----------
     @app.callback(

@@ -651,12 +651,27 @@ def organize_card():
                 html.Div(
                     [
                         html.Span([html.I(className="bi bi-boxes me-2"), "Storage map"]),
-                        dbc.Button(
-                            [html.I(className="bi bi-magic me-1"), "Smart Organize"],
-                            id="organize-button",
-                            color="primary",
-                            size="sm",
-                            n_clicks=0,
+                        html.Div(
+                            [
+                                dbc.Button(
+                                    [html.I(className="bi bi-magic me-1"), "Smart Organize"],
+                                    id="organize-button",
+                                    color="primary",
+                                    size="sm",
+                                    n_clicks=0,
+                                    title="Group like items into auto-created bins",
+                                ),
+                                dbc.Button(
+                                    [html.I(className="bi bi-box-seam me-1"), "Fit to my bins"],
+                                    id="open-bins",
+                                    color="secondary",
+                                    size="sm",
+                                    n_clicks=0,
+                                    className="ms-2",
+                                    title="Define the containers you own and pack items into them",
+                                ),
+                            ],
+                            className="d-flex",
                         ),
                     ],
                     className="d-flex align-items-center justify-content-between",
@@ -675,6 +690,82 @@ def organize_card():
             ),
         ],
         className="mt-4 shadow-sm",
+    )
+
+
+def bins_modal():
+    """Define real containers (with capacities) and pack items into them."""
+    return html.Div(
+        [
+            dcc.Store(id="fit-plan"),
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(
+                        dbc.ModalTitle([html.I(className="bi bi-box-seam me-2"), "Storage bins & auto-fit"])
+                    ),
+                    dbc.ModalBody(
+                        [
+                            html.Div(
+                                [html.I(className="bi bi-pencil-square me-2"),
+                                 html.Strong("The containers you actually have")],
+                                className="mb-1",
+                            ),
+                            html.Div(
+                                "One per line —  CODE | Name | capacity  "
+                                "(capacity = how many different items fit).",
+                                className="text-muted small mb-1",
+                            ),
+                            dbc.Textarea(
+                                id="containers-text",
+                                rows=5,
+                                placeholder=("A1 | Small parts drawer | 20\n"
+                                             "B1 | Garage tote | 50\n"
+                                             "SHELF | Workshop shelf | 30"),
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        dbc.Button(
+                                            [html.I(className="bi bi-save me-1"), "Save bins"],
+                                            id="save-containers", color="secondary",
+                                            n_clicks=0, className="w-100 mt-2",
+                                        ),
+                                        xs=12, sm=6,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Button(
+                                            [html.I(className="bi bi-box-seam me-1"), "Fit items into bins"],
+                                            id="fit-bins", color="primary",
+                                            n_clicks=0, className="w-100 mt-2",
+                                        ),
+                                        xs=12, sm=6,
+                                    ),
+                                ],
+                                className="g-2",
+                            ),
+                            html.Div(id="bins-status", className="small mt-1"),
+                            html.Hr(),
+                            dcc.Loading(html.Div(id="fit-result"), type="default"),
+                        ]
+                    ),
+                    dbc.ModalFooter(
+                        [
+                            dbc.Button(
+                                [html.I(className="bi bi-check2-circle me-1"), "Apply fit"],
+                                id="apply-fit", color="success", n_clicks=0,
+                            ),
+                            dbc.Button("Close", id="close-bins-modal", color="secondary", n_clicks=0),
+                        ],
+                        className="justify-content-between",
+                    ),
+                ],
+                id="bins-modal",
+                is_open=False,
+                size="lg",
+                centered=True,
+                scrollable=True,
+            ),
+        ]
     )
 
 

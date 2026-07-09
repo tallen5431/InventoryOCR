@@ -267,6 +267,28 @@ make that fast:
    bin labels onto every item at once. Existing codes are preserved, so re‑running
    after you scan more items is safe and stable.
 
+3. **Fit to my bins.** Smart Organize invents as many bins as it needs — but in
+   real life you have a *fixed* set of drawers, totes and shelves. Click
+   **Fit to my bins** (next to Smart Organize) to describe the containers you
+   actually own and let the app pack everything into them. In the editor, list
+   one container per line as `CODE | Name | capacity`, for example:
+
+   ```
+   A1 | Small parts drawer | 20
+   B1 | Garage tote        | 50
+   SHELF | Workshop shelf   | 30
+   ```
+
+   *Capacity* is how many **different items** a container should hold. **Save
+   bins** remembers them (in `containers.json`); **Fit items into bins** runs a
+   bin‑packing pass that keeps related items together (the same Switches /
+   Resistors groups as Smart Organize), drops each group into the tightest
+   container it fits, and splits a group across containers only when it must. The
+   result shows a capacity bar for every bin and warns you about anything that
+   **didn't fit** — so you know when you need one more tote. **Apply fit** stamps
+   the chosen bin code and name onto every placed item at once. Re‑running is
+   safe: it re‑fits from your current inventory each time.
+
 The **Storage map** card then shows what physically lives in each bin. To find
 something later, just search a keyword (name, tag, spec, category…) — the results
 show the item **and its bin**, so you know exactly which box to open.
@@ -280,6 +302,8 @@ A good workflow for a big scan‑in:
 ## Data & storage
 
 - Items are stored in `inventory.json` (created automatically).
+- Your storage containers (for **Fit to my bins**) are stored in
+  `containers.json`.
 - Photos and thumbnails are saved under `assets/images/` and
   `assets/thumbnails/`.
 - These are git‑ignored so your data stays local and survives app updates.
@@ -302,7 +326,7 @@ This app ships as a bundled card in
 | `app.py` | Dash app shell, routing, theme, asset routes, server entrypoint |
 | `components.py` | Dashboard UI (form, filters, KPIs, table, overview, modals, storage map) |
 | `callbacks.py` | Dashboard behavior (add/edit/delete, filter, KPIs, identify, web search, organize, export) |
-| `data.py` | JSON persistence + organizing/storage helpers (categories, locations, bins, Smart Organize) |
+| `data.py` | JSON persistence + organizing/storage helpers (categories, locations, bins, Smart Organize, Fit to my bins) |
 | `vision_lookup.py` | Ollama vision client for "Identify from photo" |
 | `web_detect.py` | Automatic web lookup (SerpApi / Google Vision), pluggable |
 | `web_search.py` | Google Lens / Google / Shopping search URL builders |
