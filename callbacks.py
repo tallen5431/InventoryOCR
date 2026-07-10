@@ -624,7 +624,7 @@ def _render_identify(res, links=None):
                 html.P(
                     [
                         "Tip: set ", html.Code("OLLAMA_HOST"), " / ", html.Code("OLLAMA_VISION_MODEL"),
-                        " and pull a vision model, e.g. ", html.Code("ollama pull llama3.2-vision"), ".",
+                        " and pull a vision model, e.g. ", html.Code("ollama pull llava:13b"), ".",
                     ],
                     className="small text-muted",
                 ),

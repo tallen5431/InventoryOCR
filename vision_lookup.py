@@ -11,8 +11,8 @@ no extra Python dependencies are required (stdlib urllib + Pillow, already used)
 Configuration (environment variables):
   OLLAMA_HOST          Base URL of the Ollama server. Default http://100.98.112.1:11434
                        A trailing "/v1" (OpenAI-compat form) is accepted and stripped.
-  OLLAMA_VISION_MODEL  Vision-capable model to use. Default "llama3.2-vision".
-                       Pull one first, e.g.  ollama pull llama3.2-vision
+  OLLAMA_VISION_MODEL  Vision-capable model to use. Default "llava:13b".
+                       Pull one first, e.g.  ollama pull llava:13b
   VISION_TIMEOUT       Request timeout in seconds. Default 60.
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ def get_config() -> Dict[str, Any]:
     """Resolve the current Ollama config (read live so env edits take effect)."""
     return {
         "host": _normalize_base(_env("OLLAMA_HOST", "http://100.98.112.1:11434")),
-        "model": _env("OLLAMA_VISION_MODEL", "llama3.2-vision"),
+        "model": _env("OLLAMA_VISION_MODEL", "llava:13b"),
         "timeout": int(_env("VISION_TIMEOUT", "60") or 60),
     }
 
