@@ -19,10 +19,10 @@ to find something or restock.
 
 ## Features
 
-- 📷 **Phone‑first capture** — on mobile the Photos button opens the **camera
-  directly** (`capture="environment"`) so you snap an item and it saves; on a
-  desktop the same button opens the file picker. Attach multiple photos per item,
-  preview before saving, and view them full‑size in a carousel.
+- 📷 **Phone‑first capture** — on mobile the Photos button lets you **snap a new
+  picture or choose an existing photo** from the same chooser; on a desktop it
+  opens the file picker. Attach multiple photos per item, preview before saving,
+  and view them full‑size in a carousel.
 - 🗂️ **Organize** — every item has a **Category** and **Location** (with
   type‑ahead suggestions from what you've already used), a **Quantity**, a
   description, and photos.

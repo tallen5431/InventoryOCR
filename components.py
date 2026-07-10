@@ -151,8 +151,8 @@ def sidebar_form():
                                             ]
                                         ),
                                         html.Div(
-                                            "On your phone this opens the camera — snap an item and it saves. "
-                                            "On a computer it opens the file picker.",
+                                            "On your phone you can snap a new picture or pick an existing "
+                                            "photo. On a computer it opens the file picker.",
                                             className="text-muted small mt-1",
                                         ),
                                     ]

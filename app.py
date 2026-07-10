@@ -289,8 +289,6 @@ app.layout = html.Div(
         html.Div(id="diag", style={"display": "none"}),
         # sink for the clientside theme-attribute callback (below)
         html.Div(id="theme-attr-sink", style={"display": "none"}),
-        # sink for the clientside camera-capture callback (below)
-        html.Div(id="camera-attr-sink", style={"display": "none"}),
         # seed content so first paint isn't blank
         html.Div(id="page-content", children=dashboard_layout()),
     ]
@@ -358,30 +356,12 @@ app.clientside_callback(
     Input("theme-mode", "data"),
 )
 
-# Make the dashboard's photo button open the phone camera directly (rather than
-# the file picker). `capture` is honored on mobile browsers and ignored on the
-# desktop, where the normal file dialog still opens — so desktop uploads and
-# quick phone snaps both work. Re-applied on navigation + on a tick so it
-# survives the dashboard being re-rendered by the router.
-app.clientside_callback(
-    """
-    function(_n, _path) {
-        try {
-            var up = document.getElementById('image-upload');
-            if (up) {
-                var inp = up.querySelector('input[type=file]');
-                if (inp && !inp.getAttribute('capture')) {
-                    inp.setAttribute('capture', 'environment');
-                }
-            }
-        } catch (e) {}
-        return '';
-    }
-    """,
-    Output("camera-attr-sink", "children"),
-    Input("diag-interval", "n_intervals"),
-    Input("url", "pathname"),
-)
+# NOTE: we deliberately do NOT set the `capture` attribute on the photo input.
+# With a plain `<input type="file" accept="image/*">`, mobile browsers (iOS
+# Safari, Android Chrome) show a chooser offering BOTH "Take Photo" and "Photo
+# Library / Choose File", so the same button lets you snap a new picture or pick
+# an existing one. Forcing `capture="environment"` would open the camera
+# directly and hide the library option.
 
 # ---------- Diagnostics ----------
 @app.callback(Output("diag", "children"), Input("diag-interval", "n_intervals"), Input("url", "pathname"))
