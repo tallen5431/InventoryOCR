@@ -4,7 +4,7 @@ import re as _re_date
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from config import INVENTORY_JSON, ASSET_IMAGE_PATH
+from config import INVENTORY_JSON, ASSET_IMAGE_PATH, ASSET_THUMB_PATH
 
 # --------------------------------------------------------------------
 # Persistence helpers
@@ -365,6 +365,42 @@ def remove_item(item_id: int) -> Optional[Dict[str, Any]]:
         else:
             new.append(r)
     _save(new)
+    return removed
+
+
+def prune_unreferenced_images() -> int:
+    """Delete image/thumbnail files not referenced by any inventory item.
+
+    Photos are written to disk the moment they're taken/chosen (so several can
+    accumulate on an item before it's saved). If the entry is then cancelled, a
+    photo is removed, or an item is deleted, its files become orphans — this
+    reclaims them. Returns the number of files removed. Safe to call anytime:
+    anything still referenced by a saved item is kept.
+    """
+    referenced: set = set()
+    for r in _load():
+        imgs = r.get("images", [])
+        if isinstance(imgs, str):
+            imgs = [imgs]
+        for fn in imgs or []:
+            name = str(fn).strip()
+            if name:
+                referenced.add(name)
+        old = str(r.get("image_filename") or "").strip()
+        if old:
+            referenced.add(old)
+
+    removed = 0
+    for directory in (Path(ASSET_IMAGE_PATH), Path(ASSET_THUMB_PATH)):
+        if not directory.exists():
+            continue
+        for f in directory.iterdir():
+            if f.is_file() and f.name not in referenced:
+                try:
+                    f.unlink()
+                    removed += 1
+                except OSError:
+                    pass
     return removed
 
 

@@ -830,17 +830,10 @@ def register_callbacks(app):
                 code = (location_code or "").strip()
                 nqty = _parse_qty(qty)
 
-                # Handle multiple image uploads
+                # Photos were saved and appended to current-images as they were
+                # taken/chosen (so multiple snaps and file picks accumulate), so we
+                # just persist that set here — no re-saving of a pending upload.
                 img_filenames = list(current_images or [])
-                if img_contents:
-                    # Support both single and multiple uploads
-                    if isinstance(img_contents, list):
-                        for img_content in img_contents:
-                            saved = save_image(img_content, ASSET_IMAGE_PATH, base_name=nm)
-                            img_filenames.append(saved["filename"])
-                    else:
-                        saved = save_image(img_contents, ASSET_IMAGE_PATH, base_name=nm)
-                        img_filenames.append(saved["filename"])
 
                 try:
                     if editing_id:
@@ -875,11 +868,13 @@ def register_callbacks(app):
                 if removed:
                     toast_open, toast_header, toast_icon, toast_msg = True, "Item Deleted", "danger", f'"{removed.get("name","")}" deleted.'
                 _clear_form()
+                data.prune_unreferenced_images()  # reclaim the deleted item's photos
                 items = data.inventory()
 
-        # Cancel clears form
+        # Cancel clears form (and reclaims any just-taken photos that weren't saved)
         elif triggered == "cancel-button":
             _clear_form()
+            data.prune_unreferenced_images()
 
         # Selecting a single row populates the form for editing. When 2+ rows are
         # ticked the user is bulk-editing, so leave the form alone (the bulk bar
@@ -991,91 +986,84 @@ def register_callbacks(app):
             tips.append({"name": cell, "description": cell, "estimated_value": cell})
         return tips
 
+    def _render_gallery(img_list):
+        """Thumbnails for the current photo set, each with a remove (×) button."""
+        from dash import html as h
+        items = []
+        for i, img_filename in enumerate(img_list or []):
+            thumb_url = get_thumbnail_url(img_filename)
+            if not thumb_url:
+                continue
+            items.append(
+                h.Div(
+                    [
+                        h.Img(src=thumb_url, className="gallery-thumb"),
+                        h.Button(
+                            "×",
+                            id={"type": "delete-image", "index": i},
+                            className="btn btn-sm btn-danger delete-img-btn",
+                            title="Remove photo",
+                            n_clicks=0,
+                        ),
+                        h.Div(f"Photo {i + 1}", className="text-muted small text-center"),
+                    ],
+                    className="gallery-item",
+                )
+            )
+        if not items:
+            return h.Div(
+                "No photos yet. Take a photo or choose files — add as many as you like.",
+                className="text-muted small",
+            )
+        return h.Div(items, className="image-gallery-grid")
+
     # ---------- Image gallery display ----------
+    # Each capture/selection is saved and appended immediately, so repeated camera
+    # snaps and file picks ACCUMULATE (the browser replaces the file input's
+    # contents on every use, so holding a single "pending" one would lose the
+    # earlier shots). The input is cleared after each add to arm the next capture.
     @app.callback(
         Output("image-gallery", "children"),
         Output("current-images", "data", allow_duplicate=True),
+        Output("image-upload", "contents", allow_duplicate=True),
         Input("current-images", "data"),
         Input("image-upload", "contents"),
         State("image-upload", "filename"),
         State("current-images", "data"),
+        State("item-name", "value"),
         prevent_initial_call='initial_duplicate',
     )
-    def update_image_gallery(current_imgs, upload_contents, upload_filenames, existing_imgs):
-        from dash import html as h
+    def update_image_gallery(current_imgs, upload_contents, upload_filenames, existing_imgs, item_name):
+        img_list = list(existing_imgs or [])
+        out_imgs = no_update      # only rewrite the store when we actually add photos
+        clear_upload = no_update
 
-        # Start with existing images
-        img_list = existing_imgs or []
-        preview_data = []  # For showing upload previews before save
-
-        # If this was triggered by upload, process the uploads for preview
         if ctx.triggered_id == "image-upload" and upload_contents:
-            # Support both single and multiple uploads
             uploads = upload_contents if isinstance(upload_contents, list) else [upload_contents]
-            filenames = upload_filenames if isinstance(upload_filenames, list) else [upload_filenames]
+            base = (item_name or "").strip() or "photo"
+            for content in uploads:
+                if not content:
+                    continue
+                try:
+                    saved = save_image(content, ASSET_IMAGE_PATH, base_name=base)
+                    img_list.append(saved["filename"])
+                except Exception:
+                    # Skip anything that isn't a decodable image rather than break the form.
+                    continue
+            out_imgs = img_list
+            clear_upload = None  # reset the input so the next capture fires a fresh event
 
-            for content, filename in zip(uploads, filenames):
-                if content:
-                    # Store the upload data for preview (don't save to disk yet)
-                    preview_data.append({
-                        'content': content,
-                        'filename': filename,
-                        'is_preview': True
-                    })
-
-        # Create gallery of thumbnails with delete buttons
-        gallery_items = []
-
-        # Show existing saved images
-        for i, img_filename in enumerate(img_list):
-            thumb_url = get_thumbnail_url(img_filename)
-            if thumb_url:
-                gallery_items.append(
-                    h.Div(
-                        [
-                            h.Img(src=thumb_url, className="gallery-thumb"),
-                            h.Button(
-                                "×",
-                                id={"type": "delete-image", "index": i},
-                                className="btn btn-sm btn-danger delete-img-btn",
-                                title="Remove image",
-                                n_clicks=0,
-                            ),
-                            h.Div(f"Image {i+1}", className="text-muted small text-center"),
-                        ],
-                        className="gallery-item",
-                    )
-                )
-
-        # Show upload previews
-        for j, preview in enumerate(preview_data):
-            gallery_items.append(
-                h.Div(
-                    [
-                        h.Img(src=preview['content'], className="gallery-thumb", style={'maxHeight': '150px', 'maxWidth': '150px', 'objectFit': 'contain'}),
-                        h.Div(f"New: {preview['filename']}", className="text-muted small text-center"),
-                    ],
-                    className="gallery-item",
-                    style={'border': '2px dashed #28a745'}
-                )
-            )
-
-        if not gallery_items:
-            return h.Div("No photos yet. Take a photo or upload to get started.", className="text-muted small"), img_list
-
-        return h.Div(gallery_items, className="image-gallery-grid"), img_list
+        return _render_gallery(img_list), out_imgs, clear_upload
 
     # ---------- Remove image from gallery ----------
+    # Only updates the store; the gallery re-renders from its current-images Input.
     @app.callback(
         Output("current-images", "data", allow_duplicate=True),
-        Output("image-gallery", "children", allow_duplicate=True),
         Input({"type": "delete-image", "index": ALL}, "n_clicks"),
         State("current-images", "data"),
         prevent_initial_call=True,
     )
     def remove_image_from_gallery(n_clicks_list, current_imgs):
-        from dash import html as h
-
         if not ctx.triggered or not current_imgs:
             raise PreventUpdate
 
@@ -1083,40 +1071,13 @@ def register_callbacks(app):
         if not n_clicks_list or all(clicks is None or clicks == 0 for clicks in n_clicks_list):
             raise PreventUpdate
 
-        # Find which button was clicked
         triggered_id = ctx.triggered_id
         if triggered_id and isinstance(triggered_id, dict):
             index = triggered_id.get("index")
             if index is not None and 0 <= index < len(current_imgs):
-                # Remove the image at the specified index
                 updated_imgs = current_imgs.copy()
                 del updated_imgs[index]
-
-                # Rebuild gallery with updated list
-                gallery_items = []
-                for i, img_filename in enumerate(updated_imgs):
-                    thumb_url = get_thumbnail_url(img_filename)
-                    if thumb_url:
-                        gallery_items.append(
-                            h.Div(
-                                [
-                                    h.Img(src=thumb_url, className="gallery-thumb"),
-                                    h.Button(
-                                        "×",
-                                        id={"type": "delete-image", "index": i},
-                                        className="btn btn-sm btn-danger delete-img-btn",
-                                        title="Remove image",
-                                        n_clicks=0,
-                                    ),
-                                    h.Div(f"Image {i+1}", className="text-muted small text-center"),
-                                ],
-                                className="gallery-item",
-                            )
-                        )
-
-                gallery_div = h.Div(gallery_items, className="image-gallery-grid") if gallery_items else h.Div("No photos yet. Take a photo or upload to get started.", className="text-muted small")
-
-                return updated_imgs, gallery_div
+                return updated_imgs
 
         raise PreventUpdate
 
@@ -2028,6 +1989,52 @@ def register_callbacks(app):
         data.commit_undo()  # checkpoint so undo can detect later edits
         msg = f"Removed {removed} item{'s' if removed != 1 else ''}."
         return (time.time(), [], _undo_alert(msg), True, "Deleted", "success", msg)
+
+    # ---------- Bulk edit: merge the selected rows into one ----------
+    @app.callback(
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("inventory-table", "selected_rows", allow_duplicate=True),
+        Output("undo-bar", "children", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("bulk-merge", "n_clicks"),
+        State("inventory-table", "selected_rows"),
+        State("inventory-table", "data"),
+        prevent_initial_call=True,
+    )
+    def bulk_merge(n, sel_rows, rows):
+        if not n:
+            raise PreventUpdate
+        ids = _selected_ids(sel_rows, rows)
+        if len(ids) < 2:
+            return (no_update, no_update, no_update, True, "Pick at least two",
+                    "warning", "Tick two or more rows to merge them into one.")
+
+        inv = data.inventory()
+        by_id = {int(r["id"]): r for r in inv}
+        items = [by_id[i] for i in ids if i in by_id]
+        if len(items) < 2:
+            return (no_update, no_update, no_update, True, "Nothing to merge",
+                    "warning", "Couldn't find the selected rows — refresh and retry.")
+
+        # Auto-pick the richest entry as the survivor (same rule the duplicate
+        # finder uses); everything else folds into it.
+        preview = data.merge_preview(items)
+        primary_id = int(preview["_primary_id"])
+        merge_ids = [i for i in ids if i != primary_id]
+
+        data.snapshot_inventory()  # enable one-click undo
+        result = data.merge_group(primary_id, merge_ids)
+        data.commit_undo()
+
+        if result is None:
+            return (no_update, no_update, no_update, True, "Merge failed",
+                    "danger", "Could not merge the selected rows.")
+        name = result.get("name", "")
+        msg = f'Merged {len(merge_ids) + 1} items into "{name}".'
+        return (time.time(), [], _undo_alert(msg), True, "Merged", "success", msg)
 
     # ---------- Undo the last merge / bulk delete ----------
     @app.callback(

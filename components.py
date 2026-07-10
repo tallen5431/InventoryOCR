@@ -168,14 +168,15 @@ def sidebar_form():
                                         html.Div("📷", className="upload-icon"),
                                         html.Div(
                                             [
-                                                html.Strong("Take a photo"),
+                                                html.Strong("Take photos"),
                                                 " or ",
-                                                html.A("choose a file"),
+                                                html.A("choose files"),
                                             ]
                                         ),
                                         html.Div(
-                                            "On your phone you can snap a new picture or pick an existing "
-                                            "photo. On a computer it opens the file picker.",
+                                            "Add as many as you like — snap several shots or pick multiple "
+                                            "files, and they stack up on this item. On a phone you can also "
+                                            "pick an existing photo; on a computer it opens the file picker.",
                                             className="text-muted small mt-1",
                                         ),
                                     ]
@@ -442,8 +443,12 @@ def inventory_table():
         tooltip_delay=0,
         tooltip_duration=None,
         sort_action="native",
-        filter_action="native",
-        hidden_columns=["id", "all_images", "ocr_text"],
+        # No per-column filter row — the Find & Filter card (search + Type /
+        # Category / Location dropdowns) covers it without the extra clutter.
+        filter_action="none",
+        # Description is long; it's shown in full in the row's hover tooltip, so
+        # keep it out of the default view. Re-show any of these via Toggle Columns.
+        hidden_columns=["id", "all_images", "ocr_text", "description"],
         style_table={
             "height": "70vh",
             "overflowY": "auto",
@@ -474,6 +479,7 @@ def inventory_table():
         },
         style_cell_conditional=[
             {"if": {"column_id": "name"}, "minWidth": "160px", "maxWidth": "260px", "fontWeight": "600"},
+            {"if": {"column_id": "type"}, "minWidth": "96px", "maxWidth": "150px", "fontWeight": "600"},
             {"if": {"column_id": "category"}, "minWidth": "90px", "maxWidth": "150px"},
             {"if": {"column_id": "location"}, "minWidth": "90px", "maxWidth": "160px"},
             {"if": {"column_id": "location_code"}, "minWidth": "72px", "maxWidth": "110px", "fontWeight": "600", "textAlign": "center"},
@@ -514,41 +520,65 @@ def inventory_table():
 
 
 def _bulk_bar():
-    """Actions that appear when 2+ rows are ticked: set fields / delete."""
+    """Actions that appear when 2+ rows are ticked: set fields, merge, or delete."""
     return dbc.Card(
         dbc.CardBody(
             [
                 html.Div(
                     [html.I(className="bi bi-check2-square me-2"),
-                     html.Strong(id="bulk-count"), " — set these on all, then Apply:"],
+                     html.Strong(id="bulk-count"), " selected"],
                     className="mb-2 small",
                 ),
+
+                # --- Set the same field(s) on every selected row ---
+                html.Div("Set on all, then Apply:", className="text-muted small mb-1"),
                 dbc.Row(
                     [
                         dbc.Col(dbc.Input(id="bulk-type", placeholder="Type",
-                                          size="sm", list="type-datalist"), xs=12, sm=4, md=2),
+                                          size="sm", list="type-datalist"), xs=6, sm=4, md=3),
                         dbc.Col(dbc.Input(id="bulk-category", placeholder="Category",
-                                          size="sm", list="category-datalist"), xs=12, sm=4, md=3),
+                                          size="sm", list="category-datalist"), xs=6, sm=4, md=3),
                         dbc.Col(dbc.Input(id="bulk-location", placeholder="Location",
-                                          size="sm", list="location-datalist"), xs=12, sm=4, md=3),
+                                          size="sm", list="location-datalist"), xs=6, sm=4, md=2),
                         dbc.Col(dbc.Input(id="bulk-code", placeholder="Bin / code",
-                                          size="sm", list="location-code-datalist"), xs=12, sm=6, md=2),
+                                          size="sm", list="location-code-datalist"), xs=6, sm=6, md=2),
                         dbc.Col(
                             dbc.Button([html.I(className="bi bi-check2 me-1"), "Apply"],
                                        id="bulk-apply", color="primary", size="sm", className="w-100"),
-                            xs=6, sm=3, md=1,
+                            xs=12, sm=6, md=2,
+                        ),
+                    ],
+                    className="g-2 align-items-center",
+                ),
+
+                html.Hr(className="my-2"),
+
+                # --- Combine or remove the selected rows ---
+                html.Div("Do this with the selected rows:", className="text-muted small mb-1"),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            dbc.Button([html.I(className="bi bi-union me-1"), "Merge into one"],
+                                       id="bulk-merge", color="info", size="sm", className="w-100"),
+                            xs=12, sm=4,
                         ),
                         dbc.Col(
                             dbc.Button([html.I(className="bi bi-trash me-1"), "Delete"],
                                        id="bulk-delete", color="outline-danger", size="sm", className="w-100"),
-                            xs=6, sm=3, md=1,
+                            xs=6, sm=4,
+                        ),
+                        dbc.Col(
+                            dbc.Button("Clear selection", id="bulk-clear", color="link", size="sm",
+                                       className="w-100 text-muted"),
+                            xs=6, sm=4,
                         ),
                     ],
                     className="g-2 align-items-center",
                 ),
                 html.Div(
-                    dbc.Button("Clear selection", id="bulk-clear", color="link", size="sm",
-                               className="p-0 mt-1 text-muted"),
+                    "Merge keeps the richest entry, adds up the quantities, and combines "
+                    "every photo, spec and tag. One-click Undo after.",
+                    className="text-muted mt-1", style={"fontSize": "0.75rem"},
                 ),
             ]
         ),

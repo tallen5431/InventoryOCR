@@ -21,8 +21,9 @@ to find something or restock.
 
 - 📷 **Phone‑first capture** — on mobile the Photos button lets you **snap a new
   picture or choose an existing photo** from the same chooser; on a desktop it
-  opens the file picker. Attach multiple photos per item, preview before saving,
-  and view them full‑size in a carousel.
+  opens the file picker. **Add as many photos as you like** — take several shots
+  in a row or pick multiple files and they all **stack up** on the item — then
+  view them full‑size in a carousel.
 - 🗂️ **Organize** — every item has a coarse **Type**, a detailed **Category**,
   and a **Location** (all with type‑ahead suggestions from what you've already
   used), plus a **Quantity**, description, and photos.
@@ -42,9 +43,10 @@ to find something or restock.
 - 🔎 **Find fast** — full‑text search across name / type / category / location /
   bin / notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters
   for type, category, and location.
-- ✅ **Bulk edit** — tick several rows to set their type / category / location /
-  bin in one go, or delete them together — quick cleanup after a big scan. Merges
-  and bulk deletes offer a one‑click **Undo**.
+- ✅ **Bulk edit & merge** — tick several rows to set their type / category /
+  location / bin in one go, **merge them into a single entry** (keeps the richest
+  one, adds up the quantities, and combines every photo/spec/tag), or delete them
+  together. Merges and bulk deletes offer a one‑click **Undo**.
 - 📊 **At‑a‑glance** — KPI cards (total items, total quantity, low‑stock count,
   categories) and an **Overview** grouped by location and by category.
 - 📤 **Export** — one‑click CSV of your whole inventory (including bin, specs,
