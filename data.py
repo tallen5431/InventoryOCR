@@ -339,11 +339,37 @@ def _undo_path() -> Path:
     return p.with_name(p.stem + ".undo.json")
 
 
+def _undo_chk_path() -> Path:
+    """The state the destructive op produced — undo is only safe while it holds."""
+    p = Path(INVENTORY_JSON)
+    return p.with_name(p.stem + ".undo.chk.json")
+
+
+def _clear_undo() -> None:
+    for p in (_undo_path(), _undo_chk_path()):
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def snapshot_inventory() -> None:
     """Copy the current inventory aside so the next change can be undone."""
     src = Path(INVENTORY_JSON)
     try:
         _undo_path().write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        # A fresh snapshot invalidates any earlier op's validity checkpoint.
+        _undo_chk_path().unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def commit_undo() -> None:
+    """Record the state the op produced, so a later undo can confirm nothing
+    else has changed the inventory since (guards against clobbering new edits)."""
+    try:
+        _undo_chk_path().write_text(
+            Path(INVENTORY_JSON).read_text(encoding="utf-8"), encoding="utf-8")
     except Exception:
         pass
 
@@ -352,17 +378,32 @@ def has_undo() -> bool:
     return _undo_path().exists()
 
 
-def restore_inventory() -> bool:
-    """Roll inventory back to the last snapshot. Returns True if it restored."""
+def restore_inventory() -> str:
+    """Roll inventory back to the last snapshot.
+
+    Returns ``"restored"`` on success, ``"stale"`` if the inventory has changed
+    since the operation (so undoing would lose that change — refused), or
+    ``"none"`` if there's nothing to undo.
+    """
     bak = _undo_path()
     if not bak.exists():
-        return False
+        return "none"
+    chk = _undo_chk_path()
+    if chk.exists():
+        try:
+            current = json.loads(Path(INVENTORY_JSON).read_text(encoding="utf-8"))
+            produced = json.loads(chk.read_text(encoding="utf-8"))
+            if current != produced:
+                _clear_undo()  # user has since changed things — don't clobber them
+                return "stale"
+        except Exception:
+            pass
     try:
         Path(INVENTORY_JSON).write_text(bak.read_text(encoding="utf-8"), encoding="utf-8")
-        bak.unlink()  # one-shot: consume the snapshot so undo isn't repeatable
-        return True
+        _clear_undo()  # one-shot: consume the snapshot so undo isn't repeatable
+        return "restored"
     except Exception:
-        return False
+        return "none"
 
 def add_image_to_item(item_id: int, image_filename: str) -> Dict[str, Any]:
     """Add an image to an existing item's image list."""

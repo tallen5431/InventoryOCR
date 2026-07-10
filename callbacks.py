@@ -1867,6 +1867,7 @@ def register_callbacks(app):
             if data.merge_group(primary_id, merge_ids, overrides) is not None and merge_ids:
                 groups += 1
                 removed += len(merge_ids)
+        data.commit_undo()  # checkpoint so undo can detect later edits
         msg = (f"Merged {groups} group(s), removing {removed} duplicate "
                f"entr{'y' if removed == 1 else 'ies'}.")
         undo = _undo_alert(msg)
@@ -1971,6 +1972,7 @@ def register_callbacks(app):
                     "Tick some rows first.")
         data.snapshot_inventory()  # enable one-click undo
         removed = data.bulk_remove(ids)
+        data.commit_undo()  # checkpoint so undo can detect later edits
         msg = f"Removed {removed} item{'s' if removed != 1 else ''}."
         return (time.time(), [], _undo_alert(msg), True, "Deleted", "success", msg)
 
@@ -1988,8 +1990,12 @@ def register_callbacks(app):
     def undo_last(n):
         if not n:
             raise PreventUpdate
-        if data.restore_inventory():
+        status = data.restore_inventory()
+        if status == "restored":
             return (time.time(), "", True, "Undone", "success", "Restored the items from before.")
+        if status == "stale":
+            return (no_update, "", True, "Can't undo", "warning",
+                    "The inventory changed since — undo was cancelled to avoid losing that.")
         return (no_update, "", True, "Nothing to undo", "warning", "No recent change to undo.")
 
     # ---------- Bulk edit: clear the selection ----------
