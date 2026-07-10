@@ -52,6 +52,9 @@ HOST="${HOST:-0.0.0.0}"
 export FLASK_RUN_PORT="$PORT"
 export FLASK_RUN_HOST="$HOST"
 
+# --- Vision model (default to llava:13b; override with OLLAMA_VISION_MODEL env var) ---
+export OLLAMA_VISION_MODEL="${OLLAMA_VISION_MODEL:-llava:13b}"
+
 # --- Start the app ---
 if [[ -f "$APP_DIR/app.py" ]]; then
   echo "[RUN] Starting app.py with $PY_CMD (HOST=$HOST PORT=$PORT)"
