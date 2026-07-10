@@ -264,6 +264,83 @@ def _render_fit(plan):
     return html.Div(children)
 
 
+def _render_dups(plans):
+    """Render detected duplicate groups: a select-list + a preview card each."""
+    if not plans:
+        return html.Div(
+            [html.I(className="bi bi-check-circle me-2 text-success"),
+             "No duplicates found at this sensitivity. Try a looser setting to catch near-matches."],
+            className="text-muted",
+        )
+
+    total_dupes = sum(len(p["merge_ids"]) for p in plans)
+    options = []
+    cards = []
+    for i, p in enumerate(plans):
+        prev = p["preview"]
+        options.append({
+            "label": f"  #{i + 1}: keep “{p['primary_name']}” · combine {len(p['item_ids'])} "
+                     f"entries → qty {prev['qty']} · ~{p['match_pct']}% match",
+            "value": i,
+        })
+
+        # The entries being combined.
+        entry_rows = []
+        for r in p["items"]:
+            is_keep = int(r.get("id")) == p["primary_id"]
+            entry_rows.append(html.Tr([
+                html.Td(html.Span("keep", className="badge bg-success") if is_keep
+                        else html.Span("merge", className="badge bg-secondary")),
+                html.Td(r.get("name", "")),
+                html.Td(f"×{r.get('qty', 0)}", className="text-end"),
+                html.Td(r.get("location_code") or r.get("location") or "—", className="text-muted small"),
+                html.Td(f"{len(r.get('images') or [])}📷" if r.get("images") else "",
+                        className="text-muted small"),
+            ]))
+        becomes = html.Div(
+            [
+                html.I(className="bi bi-arrow-right-circle me-1 text-success"),
+                html.Strong("Becomes: "),
+                html.Span(f"{prev['name']} · qty {prev['qty']} · "
+                          f"{len(prev['images'])} photo(s) · {len(prev['tags'])} tag(s) · "
+                          f"{len(prev['specifications'])} spec(s)"),
+            ],
+            className="small mt-1",
+        )
+        conflict = html.Div()
+        if p["conflicts"]:
+            conflict = html.Div(
+                [html.I(className="bi bi-exclamation-triangle me-1 text-warning"),
+                 "Heads up — " + "; ".join(p["conflicts"]) + " (the top entry's value is kept)."],
+                className="small text-warning mt-1",
+            )
+        cards.append(
+            html.Div(
+                [
+                    html.Div(f"Group #{i + 1}", className="fw-semibold small text-muted"),
+                    dbc.Table(html.Tbody(entry_rows), size="sm", borderless=True,
+                              className="mb-1 align-middle"),
+                    becomes,
+                    conflict,
+                ],
+                className="py-2 border-bottom",
+            )
+        )
+
+    return html.Div([
+        html.Div(
+            [html.I(className="bi bi-collection me-2"),
+             html.Strong(f"Found {len(plans)} group(s)"),
+             f" — merging removes {total_dupes} duplicate entr{'y' if total_dupes == 1 else 'ies'}. "
+             "Untick any you want to keep separate, then Merge selected."],
+            className="alert alert-info py-2",
+        ),
+        dbc.Checklist(id="dups-select", options=options, value=list(range(len(plans)))),
+        html.Hr(className="my-2"),
+        html.Div(cards),
+    ])
+
+
 def _render_connect(eps):
     """Render the list of access URLs (LAN / Tailscale / localhost) with QR codes."""
     if not eps:
@@ -1640,6 +1717,78 @@ def register_callbacks(app):
         if overflow:
             msg += f" {overflow} didn't fit."
         return False, time.time(), True, "Bins updated", ("warning" if overflow else "success"), msg
+
+    # ---------- Duplicates: open / close the merge modal ----------
+    @app.callback(
+        Output("dups-modal", "is_open"),
+        Output("dups-result", "children"),
+        Output("dups-status", "children"),
+        Input("open-dups", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def open_dups(n):
+        if not n:
+            raise PreventUpdate
+        return True, "", ""
+
+    @app.callback(
+        Output("dups-modal", "is_open", allow_duplicate=True),
+        Input("close-dups-modal", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def close_dups(n):
+        if not n:
+            raise PreventUpdate
+        return False
+
+    # ---------- Duplicates: scan for similar entries ----------
+    @app.callback(
+        Output("dups-result", "children", allow_duplicate=True),
+        Output("dups-plan", "data"),
+        Output("dups-status", "children", allow_duplicate=True),
+        Input("dups-scan", "n_clicks"),
+        State("dups-level", "value"),
+        prevent_initial_call=True,
+    )
+    def do_scan(n, level):
+        if not n:
+            raise PreventUpdate
+        plans = data.find_duplicate_groups(level=level or "balanced")
+        slim = [{"primary_id": p["primary_id"], "merge_ids": p["merge_ids"]} for p in plans]
+        status = html.Span([html.I(className="bi bi-check-circle me-1"),
+                            f"Scanned {len(data.inventory())} items."], className="text-muted")
+        return _render_dups(plans), slim, status
+
+    # ---------- Duplicates: merge the selected groups ----------
+    @app.callback(
+        Output("dups-modal", "is_open", allow_duplicate=True),
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("dups-result", "children", allow_duplicate=True),
+        Output("dups-plan", "data", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("dups-apply", "n_clicks"),
+        State("dups-select", "value"),
+        State("dups-plan", "data"),
+        prevent_initial_call=True,
+    )
+    def apply_dups(n, selected, slim):
+        if not n:
+            raise PreventUpdate
+        if not slim:
+            return (no_update, no_update, no_update, no_update,
+                    True, "Nothing to merge", "warning", "Scan for duplicates first.")
+        chosen = [slim[i] for i in (selected or []) if 0 <= i < len(slim)]
+        if not chosen:
+            return (no_update, no_update, no_update, no_update,
+                    True, "Nothing selected", "warning", "Tick at least one group to merge.")
+        res = data.merge_groups(chosen)
+        removed = res["items_removed"]
+        msg = (f"Merged {res['groups']} group(s), removing {removed} duplicate "
+               f"entr{'y' if removed == 1 else 'ies'}.")
+        return (False, time.time(), "", None, True, "Duplicates merged", "success", msg)
 
     # ---------- Load selected item image into OCR Lab ----------
     @app.callback(

@@ -26,6 +26,7 @@ from components import (
     organize_card,
     organize_modal,
     bins_modal,
+    duplicates_modal,
     connect_modal,
 )
 
@@ -252,6 +253,7 @@ def dashboard_layout():
             identify_modal(),
             organize_modal(),
             bins_modal(),
+            duplicates_modal(),
             dbc.Row([dbc.Col(detail_panel(), width=12)], className="mt-4"),
         ],
         fluid=True,

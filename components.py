@@ -668,11 +668,18 @@ def organize_card():
                                     color="secondary",
                                     size="sm",
                                     n_clicks=0,
-                                    className="ms-2",
                                     title="Define the containers you own and pack items into them",
                                 ),
+                                dbc.Button(
+                                    [html.I(className="bi bi-layers me-1"), "Merge duplicates"],
+                                    id="open-dups",
+                                    color="secondary",
+                                    size="sm",
+                                    n_clicks=0,
+                                    title="Find identical / very similar items and combine them",
+                                ),
                             ],
-                            className="d-flex",
+                            className="d-flex flex-wrap gap-2",
                         ),
                     ],
                     className="d-flex align-items-center justify-content-between",
@@ -761,6 +768,79 @@ def bins_modal():
                     ),
                 ],
                 id="bins-modal",
+                is_open=False,
+                size="lg",
+                centered=True,
+                scrollable=True,
+            ),
+        ]
+    )
+
+
+def duplicates_modal():
+    """Find identical / very similar items and combine them into one."""
+    return html.Div(
+        [
+            dcc.Store(id="dups-plan"),  # scanned groups, for the apply step
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(
+                        dbc.ModalTitle([html.I(className="bi bi-layers me-2"), "Merge duplicate items"])
+                    ),
+                    dbc.ModalBody(
+                        [
+                            html.Div(
+                                "Scanned a pile of stuff and entered the same thing twice? This finds "
+                                "identical or very similar entries and combines them — adding up the "
+                                "quantities and keeping every photo, spec and tag.",
+                                className="text-muted small mb-2",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("How alike is 'a duplicate'?", className="small mb-1"),
+                                            dbc.RadioItems(
+                                                id="dups-level",
+                                                options=[
+                                                    {"label": " Identical only", "value": "identical"},
+                                                    {"label": " Similar (recommended)", "value": "balanced"},
+                                                    {"label": " Loosely similar", "value": "loose"},
+                                                ],
+                                                value="balanced",
+                                                inline=True,
+                                            ),
+                                        ],
+                                        xs=12, sm=8,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Button(
+                                            [html.I(className="bi bi-search me-1"), "Scan"],
+                                            id="dups-scan", color="primary",
+                                            n_clicks=0, className="w-100 mt-2 mt-sm-4",
+                                        ),
+                                        xs=12, sm=4,
+                                    ),
+                                ],
+                                className="g-2 align-items-start",
+                            ),
+                            html.Div(id="dups-status", className="small mt-2"),
+                            html.Hr(),
+                            dcc.Loading(html.Div(id="dups-result"), type="default"),
+                        ]
+                    ),
+                    dbc.ModalFooter(
+                        [
+                            dbc.Button(
+                                [html.I(className="bi bi-check2-all me-1"), "Merge selected"],
+                                id="dups-apply", color="success", n_clicks=0,
+                            ),
+                            dbc.Button("Close", id="close-dups-modal", color="secondary", n_clicks=0),
+                        ],
+                        className="justify-content-between",
+                    ),
+                ],
+                id="dups-modal",
                 is_open=False,
                 size="lg",
                 centered=True,

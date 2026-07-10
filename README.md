@@ -58,6 +58,10 @@ to find something or restock.
   **Smart Organize** to group like items into labelled bins automatically. A live
   **Storage map** shows what lives in each bin so a keyword search tells you
   exactly where to look.
+- 🧬 **Merge duplicates** — scanned the same thing twice? **Merge duplicates**
+  finds identical / very similar entries, previews the combined item (quantities
+  added, photos/specs/tags kept), and merges the ones you pick — while keeping
+  genuinely different sizes/models (AA vs 9V, M3 vs M5) apart.
 - 📱 **Connect panel** — the navbar **Connect** button lists every address the app
   is reachable at (local network, Tailscale, localhost) with **QR codes**, so you
   can scan it open on your phone.
@@ -322,8 +326,29 @@ show the item **and its bin**, so you know exactly which box to open.
 A good workflow for a big scan‑in:
 
 > Snap → *Identify* / *Search web* → *Apply* → set quantity → **Save & Next**
-> (category/location stay put) … repeat for the shelf, then **Smart Organize**
-> once at the end to bin everything.
+> (category/location stay put) … repeat for the shelf, then **Merge duplicates**
+> to combine anything entered twice, then **Smart Organize** once at the end to
+> bin everything.
+
+## Clean up duplicates
+
+When you scan fast, the same item lands in the list more than once — sometimes
+under slightly different names (*AA Battery* / *AA Batteries*), sometimes with the
+count split across entries. **Merge duplicates** (in the Storage map card) fixes
+that:
+
+1. Pick how alike counts as a duplicate — **Identical only**, **Similar**
+   (recommended), or **Loosely similar** — then **Scan**.
+2. Each group shows the entries it will combine and a **Becomes:** preview — the
+   quantities are **added up** and every photo, spec and tag is kept. The richest
+   entry (most photos/details) is kept as the survivor.
+3. Untick any group you'd rather leave alone, then **Merge selected**.
+
+It's deliberately careful about *size/model* differences: **AA vs 9V**, **M3 vs
+M5**, or two listings with different part numbers are held apart even when the
+rest of the name matches, so a quick clean‑up never collapses things that aren't
+actually the same. Matching happens on the item name, tags and category — nothing
+leaves your machine.
 
 ## Data & storage
 
@@ -353,7 +378,7 @@ This app ships as a bundled card in
 | `app.py` | Dash app shell, routing, theme, asset routes, server entrypoint |
 | `components.py` | Dashboard UI (form, filters, KPIs, table, overview, modals, storage map) |
 | `callbacks.py` | Dashboard behavior (add/edit/delete, filter, KPIs, identify, web search, organize, export) |
-| `data.py` | JSON persistence + organizing/storage helpers (categories, locations, bins, Smart Organize, Fit to my bins) |
+| `data.py` | JSON persistence + organizing/storage helpers (categories, locations, bins, Smart Organize, Fit to my bins, Merge duplicates) |
 | `vision_lookup.py` | Ollama vision client for "Identify from photo" |
 | `web_detect.py` | Automatic web lookup (SerpApi / Google Vision), pluggable |
 | `web_search.py` | Google Lens / Google / Shopping search URL builders |
