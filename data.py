@@ -794,3 +794,303 @@ def apply_fit(plan: Dict[str, Any]) -> int:
     if updated:
         _save(rows)
     return updated
+
+
+# --------------------------------------------------------------------
+# Duplicate detection + merge
+# --------------------------------------------------------------------
+# When you scan a big pile of stuff fast, the same thing gets entered more than
+# once (slightly different names, split quantities). These helpers find items
+# that are identical or very similar and combine them into one — summing the
+# quantities and keeping every photo / spec / tag.
+
+from difflib import SequenceMatcher as _SeqMatcher
+
+# Sensitivity presets for "how alike is alike enough" (higher = stricter).
+DUP_LEVELS = {"loose": 0.72, "balanced": 0.82, "identical": 0.95}
+
+
+def _norm_name(name: str) -> str:
+    """Lower-case, drop punctuation, collapse whitespace — for name comparison."""
+    s = _re.sub(r"[^a-z0-9]+", " ", (name or "").lower())
+    return _re.sub(r"\s+", " ", s).strip()
+
+
+def _norm_url(url: str) -> str:
+    u = (url or "").strip().lower().rstrip("/")
+    return _re.sub(r"^https?://(www\.)?", "", u)
+
+
+# Short alpha tokens that are meaningful *sizes/models* (kept as discriminators).
+_DEDUP_SIZE_WORDS = {"aa", "aaa", "aaaa"}
+
+
+def _singular(t: str) -> str:
+    """Cheap stemmer so 'batteries'/'cables'/'switches' match their singulars."""
+    if len(t) <= 3:
+        return t
+    if t.endswith("ies"):
+        return t[:-3] + "y"
+    if t.endswith(("ches", "shes", "ses", "xes", "zes")):
+        return t[:-2]
+    if t.endswith("s") and not t.endswith("ss"):
+        return t[:-1]
+    return t
+
+
+def _content_tokens(row: Dict[str, Any]) -> set:
+    """Significant, plural-normalised words for similarity (dedup-specific).
+
+    Unlike ``_tokenize`` this keeps digit-bearing codes (9v, cr2032) and battery
+    sizes (aa/aaa), and singularises plurals so 'battery' == 'batteries'.
+    """
+    text = " ".join([row.get("name", "")] + [str(t) for t in row.get("tags", []) or []]).lower()
+    out = set()
+    for t in _re.findall(r"[a-z0-9][a-z0-9\-]*", text):
+        t = t.strip("-")
+        if any(ch.isdigit() for ch in t):
+            out.add(t)                       # size/model code — keep verbatim
+        elif t in _DEDUP_SIZE_WORDS:
+            out.add(t)
+        elif len(t) >= 3 and t not in _GROUP_STOP:
+            out.add(_singular(t))
+    return out
+
+
+def _codes(row: Dict[str, Any]) -> set:
+    """Distinguishing size/model codes in the name (9v, cr2032, aa, m3, 6ft…)."""
+    text = (row.get("name", "") or "").lower()
+    out = set()
+    for t in _re.findall(r"[a-z0-9][a-z0-9\-]*", text):
+        t = t.strip("-")
+        if any(ch.isdigit() for ch in t) or t in _DEDUP_SIZE_WORDS:
+            out.add(t)
+    return out
+
+
+def item_similarity(a: Dict[str, Any], b: Dict[str, Any]) -> float:
+    """Similarity of two items in 0..1. 1.0 == a confident duplicate.
+
+    Strong signals short-circuit: an identical normalised name, or the same
+    non-empty product URL. Otherwise blend name closeness (typos / plurals) with
+    shared significant words, nudged up when the categories agree. Items whose
+    size/model codes exist but don't overlap (9V vs AA, M3 vs M5) are held apart.
+    """
+    na, nb = _norm_name(a.get("name", "")), _norm_name(b.get("name", ""))
+    if na and na == nb:
+        return 1.0
+    ua, ub = _norm_url(a.get("product_url", "")), _norm_url(b.get("product_url", ""))
+    if ua and ua == ub:
+        return 0.97
+
+    # A model/size mismatch is a strong "not the same thing" signal.
+    ca_codes, cb_codes = _codes(a), _codes(b)
+    if ca_codes and cb_codes and not (ca_codes & cb_codes):
+        return round(min(0.5, _SeqMatcher(None, na, nb).ratio()), 3)
+
+    name_ratio = _SeqMatcher(None, na, nb).ratio() if (na and nb) else 0.0
+    ta, tb = _content_tokens(a), _content_tokens(b)
+    jac = (len(ta & tb) / len(ta | tb)) if (ta or tb) else 0.0
+    score = 0.6 * name_ratio + 0.4 * jac
+
+    cat_a = (a.get("category") or "").strip().lower()
+    cat_b = (b.get("category") or "").strip().lower()
+    if cat_a and cat_b:
+        score = min(1.0, score + 0.05) if cat_a == cat_b else score * 0.9
+    return round(score, 3)
+
+
+def _pick_primary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The 'richest' entry becomes the one we keep (most data to preserve)."""
+    def richness(r):
+        return (
+            len(r.get("images", []) or []),
+            len(r.get("specifications", []) or []),
+            len(r.get("tags", []) or []),
+            len((r.get("description") or "")),
+            1 if (r.get("estimated_value") or "").strip() else 0,
+            1 if (r.get("dimensions") or "").strip() else 0,
+            1 if (r.get("product_url") or "").strip() else 0,
+            -int(r.get("id") or 0),  # tie-break: keep the earliest id
+        )
+    return max(items, key=richness)
+
+
+def _union_list(items: List[Dict[str, Any]], field: str) -> List[str]:
+    out: List[str] = []
+    for r in items:
+        for v in (r.get(field) or []):
+            v = str(v).strip()
+            if v and v not in out:
+                out.append(v)
+    return out
+
+
+def _first_nonempty(items: List[Dict[str, Any]], field: str) -> str:
+    for r in items:
+        v = (r.get(field) or "").strip()
+        if v:
+            return v
+    return ""
+
+
+def merge_preview(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute the combined item without saving. Primary listed first."""
+    if not items:
+        return {}
+    primary = _pick_primary(items)
+    ordered = [primary] + [r for r in items if r is not primary]
+
+    descriptions = [(r.get("description") or "").strip() for r in ordered]
+    longest_desc = max(descriptions, key=len) if any(descriptions) else ""
+
+    ocr_parts: List[str] = []
+    for r in ordered:
+        t = (r.get("ocr_text") or "").strip()
+        if t and t not in ocr_parts:
+            ocr_parts.append(t)
+
+    total_qty = sum(max(0, int(r.get("qty") or 0)) for r in ordered)
+
+    # Note anything the merge has to choose between, so the user isn't surprised.
+    conflicts: List[str] = []
+    locs = {(r.get("location") or "").strip() for r in ordered if (r.get("location") or "").strip()}
+    if len(locs) > 1:
+        conflicts.append("different locations: " + ", ".join(sorted(locs)))
+    codes = {(r.get("location_code") or "").strip() for r in ordered if (r.get("location_code") or "").strip()}
+    if len(codes) > 1:
+        conflicts.append("different bins: " + ", ".join(sorted(codes)))
+    vals = {(r.get("estimated_value") or "").strip() for r in ordered if (r.get("estimated_value") or "").strip()}
+    if len(vals) > 1:
+        conflicts.append("different values: " + ", ".join(sorted(vals)))
+
+    return {
+        "name": primary.get("name", ""),
+        "description": longest_desc,
+        "category": _first_nonempty(ordered, "category"),
+        "location": _first_nonempty(ordered, "location"),
+        "location_code": _first_nonempty(ordered, "location_code"),
+        "qty": total_qty,
+        "images": _union_list(ordered, "images"),
+        "ocr_text": "\n".join(ocr_parts),
+        "specifications": _union_list(ordered, "specifications"),
+        "estimated_value": _first_nonempty(ordered, "estimated_value"),
+        "dimensions": _first_nonempty(ordered, "dimensions"),
+        "product_url": _first_nonempty(ordered, "product_url"),
+        "tags": _union_list(ordered, "tags"),
+        "_primary_id": int(primary.get("id")),
+        "_conflicts": conflicts,
+    }
+
+
+def find_duplicate_groups(
+    rows: Optional[List[Dict[str, Any]]] = None,
+    level: str = "balanced",
+) -> List[Dict[str, Any]]:
+    """Cluster items that are identical / very similar into merge candidates.
+
+    ``level`` is one of DUP_LEVELS (loose / balanced / identical) or a float.
+    Returns a list of plans, biggest groups first::
+
+        {group, primary_id, primary_name, item_ids, merge_ids, items,
+         preview, match_pct, conflicts}
+    """
+    rows = rows if rows is not None else inventory()
+    threshold = DUP_LEVELS.get(level, level if isinstance(level, (int, float)) else 0.82)
+    n = len(rows)
+
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i, j):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[ri] = rj
+
+    # Track the weakest link used to join each cluster, for a shown match %.
+    pair_scores: List[float] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            s = item_similarity(rows[i], rows[j])
+            if s >= threshold:
+                union(i, j)
+                pair_scores.append(s)
+
+    clusters: Dict[int, List[int]] = {}
+    for i in range(n):
+        clusters.setdefault(find(i), []).append(i)
+
+    plans: List[Dict[str, Any]] = []
+    for gid, members in clusters.items():
+        if len(members) < 2:
+            continue
+        items = [rows[m] for m in members]
+        # Average pairwise similarity within this cluster (for display).
+        scores = []
+        for a in range(len(items)):
+            for b in range(a + 1, len(items)):
+                scores.append(item_similarity(items[a], items[b]))
+        match_pct = int(round(100 * (sum(scores) / len(scores)))) if scores else 100
+        prev = merge_preview(items)
+        primary_id = prev["_primary_id"]
+        plans.append({
+            "group": _norm_name(prev["name"]) or f"group-{gid}",
+            "primary_id": primary_id,
+            "primary_name": prev["name"],
+            "item_ids": [int(r.get("id")) for r in items],
+            "merge_ids": [int(r.get("id")) for r in items if int(r.get("id")) != primary_id],
+            "items": items,
+            "preview": prev,
+            "match_pct": match_pct,
+            "conflicts": prev.get("_conflicts", []),
+        })
+
+    plans.sort(key=lambda p: (-len(p["item_ids"]), -p["match_pct"]))
+    return plans
+
+
+def merge_group(primary_id: int, merge_ids: List[int],
+                overrides: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Combine ``merge_ids`` into ``primary_id`` and delete the merged rows.
+
+    Sums quantities and unions images / specs / tags. Returns the merged item.
+    """
+    rows = inventory()
+    by_id = {int(r.get("id")): r for r in rows}
+    primary = by_id.get(int(primary_id))
+    if not primary:
+        return None
+    ids = [int(i) for i in merge_ids if int(i) in by_id and int(i) != int(primary_id)]
+    if not ids:
+        return primary
+    group = [primary] + [by_id[i] for i in ids]
+    merged = merge_preview(group)
+    if overrides:
+        merged.update(overrides)
+
+    # Write the merged fields onto the primary row (keep its id), drop the rest.
+    for k in ("name", "description", "category", "location", "location_code", "qty",
+              "images", "ocr_text", "specifications", "estimated_value", "dimensions",
+              "product_url", "tags"):
+        primary[k] = merged.get(k, primary.get(k))
+
+    kept = [r for r in rows if int(r.get("id")) not in ids]
+    _save(kept)
+    return primary
+
+
+def merge_groups(plans: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Apply several merge plans. Returns {groups, items_removed}."""
+    removed = 0
+    done = 0
+    for p in plans or []:
+        res = merge_group(p.get("primary_id"), p.get("merge_ids", []))
+        if res is not None and p.get("merge_ids"):
+            removed += len(p["merge_ids"])
+            done += 1
+    return {"groups": done, "items_removed": removed}

@@ -19,9 +19,10 @@ to find something or restock.
 
 ## Features
 
-- 📷 **Phone‑first capture** — the Photos field opens your camera on mobile
-  (`accept="image/*"`); attach multiple photos per item, preview before saving,
-  and view them full‑size in a carousel.
+- 📷 **Phone‑first capture** — on mobile the Photos button opens the **camera
+  directly** (`capture="environment"`) so you snap an item and it saves; on a
+  desktop the same button opens the file picker. Attach multiple photos per item,
+  preview before saving, and view them full‑size in a carousel.
 - 🗂️ **Organize** — every item has a **Category** and **Location** (with
   type‑ahead suggestions from what you've already used), a **Quantity**, a
   description, and photos.
@@ -49,10 +50,18 @@ to find something or restock.
 - 🔗 **Import from a product page** — found it online? Paste the product URL (or,
   when a store blocks bots, paste/upload the page's HTML) and the app reads the
   embedded product data (name, price, brand, specs) and fills the item for you.
+- 💲 **Price Compare** — drop several saved listing `.html` files for the same
+  product and the app works out each one's **price per unit** (handling packs of
+  many), ranks the best deal, and can **track prices over time** across repeat
+  runs.
 - 🧺 **Storage system** — give items a short **bin / location code**, or run
   **Smart Organize** to group like items into labelled bins automatically. A live
   **Storage map** shows what lives in each bin so a keyword search tells you
   exactly where to look.
+- 🧬 **Merge duplicates** — scanned the same thing twice? **Merge duplicates**
+  finds identical / very similar entries, previews the combined item (quantities
+  added, photos/specs/tags kept), and merges the ones you pick — while keeping
+  genuinely different sizes/models (AA vs 9V, M3 vs M5) apart.
 - 📱 **Connect panel** — the navbar **Connect** button lists every address the app
   is reachable at (local network, Tailscale, localhost) with **QR codes**, so you
   can scan it open on your phone.
@@ -249,6 +258,27 @@ Then **Apply to form** (to review) or **Apply & Update** (one click) records it.
 The importer only reads embedded structured data — no login or account scraping —
 and URL fetches are limited to public hosts.
 
+## Compare prices — find the best deal per unit
+
+The **💲 Price Compare** page (in the top nav) answers a different question:
+*of all the listings I found for this thing, which is actually the cheapest?* —
+without trawling tabs by hand.
+
+1. Open a few listings for the **same kind of product** and **Save Page As**
+   (`.html`) each one.
+2. Drop them all on the **Product pages** dropzone and hit **Compare prices**.
+3. Each page is scraped for its name and price, its **pack size** is detected
+   (e.g. `150PCS`, `24 Pack`, `Pack of 6`, `x500`, `Qty: 50`), and the
+   **price per unit** is worked out — so a 48‑pack at \$22.99 correctly beats an
+   8‑pack at \$7.49. The table ranks cheapest‑per‑unit first and 🏆 marks the
+   winner. If a listing matches something already in your inventory, it says so.
+
+**Track prices over time.** Give the comparison a name (e.g. *AA Batteries*) and
+**Save** — it's stored as a dated snapshot in `price_compare.json`. Re‑run the
+same name later (new listings, new prices) and each run adds a snapshot, so the
+**Tracked searches** panel shows the best unit price over time with a little
+trend line — handy for knowing when a price is actually a good one.
+
 ## Storage & retrieval — find where you put things
 
 The whole point of scanning your stuff is being able to find it later. Two pieces
@@ -296,14 +326,36 @@ show the item **and its bin**, so you know exactly which box to open.
 A good workflow for a big scan‑in:
 
 > Snap → *Identify* / *Search web* → *Apply* → set quantity → **Save & Next**
-> (category/location stay put) … repeat for the shelf, then **Smart Organize**
-> once at the end to bin everything.
+> (category/location stay put) … repeat for the shelf, then **Merge duplicates**
+> to combine anything entered twice, then **Smart Organize** once at the end to
+> bin everything.
+
+## Clean up duplicates
+
+When you scan fast, the same item lands in the list more than once — sometimes
+under slightly different names (*AA Battery* / *AA Batteries*), sometimes with the
+count split across entries. **Merge duplicates** (in the Storage map card) fixes
+that:
+
+1. Pick how alike counts as a duplicate — **Identical only**, **Similar**
+   (recommended), or **Loosely similar** — then **Scan**.
+2. Each group shows the entries it will combine and a **Becomes:** preview — the
+   quantities are **added up** and every photo, spec and tag is kept. The richest
+   entry (most photos/details) is kept as the survivor.
+3. Untick any group you'd rather leave alone, then **Merge selected**.
+
+It's deliberately careful about *size/model* differences: **AA vs 9V**, **M3 vs
+M5**, or two listings with different part numbers are held apart even when the
+rest of the name matches, so a quick clean‑up never collapses things that aren't
+actually the same. Matching happens on the item name, tags and category — nothing
+leaves your machine.
 
 ## Data & storage
 
 - Items are stored in `inventory.json` (created automatically).
 - Your storage containers (for **Fit to my bins**) are stored in
   `containers.json`.
+- **Price Compare** history is stored in `price_compare.json`.
 - Photos and thumbnails are saved under `assets/images/` and
   `assets/thumbnails/`.
 - These are git‑ignored so your data stays local and survives app updates.
@@ -326,13 +378,15 @@ This app ships as a bundled card in
 | `app.py` | Dash app shell, routing, theme, asset routes, server entrypoint |
 | `components.py` | Dashboard UI (form, filters, KPIs, table, overview, modals, storage map) |
 | `callbacks.py` | Dashboard behavior (add/edit/delete, filter, KPIs, identify, web search, organize, export) |
-| `data.py` | JSON persistence + organizing/storage helpers (categories, locations, bins, Smart Organize, Fit to my bins) |
+| `data.py` | JSON persistence + organizing/storage helpers (categories, locations, bins, Smart Organize, Fit to my bins, Merge duplicates) |
 | `vision_lookup.py` | Ollama vision client for "Identify from photo" |
 | `web_detect.py` | Automatic web lookup (SerpApi / Google Vision), pluggable |
 | `web_search.py` | Google Lens / Google / Shopping search URL builders |
 | `product_import.py` | Extract product details from a page URL or pasted/saved HTML (JSON‑LD / OG) |
+| `price_compare.py` | Price‑per‑unit comparison across saved listings + price‑over‑time history |
 | `net_info.py` | Enumerates reachable URLs (LAN / Tailscale) + QR codes for the Connect panel |
 | `utils.py` | Image saving, thumbnails, asset URLs |
 | `image_processing.py` / `ocr_engine.py` | OCR preprocessing & extraction |
 | `components_ocr_lab.py` / `callbacks_ocr_lab.py` | OCR Lab page |
+| `components_price_compare.py` / `callbacks_price_compare.py` | Price Compare page |
 | `config.py` | Paths, theme, thresholds, Tesseract wiring |
