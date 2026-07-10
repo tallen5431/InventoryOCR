@@ -326,6 +326,44 @@ def bulk_remove(ids: List[int]) -> int:
         _save(kept)
     return removed
 
+
+# --------------------------------------------------------------------
+# One-step undo for destructive operations (merge / bulk delete)
+# --------------------------------------------------------------------
+# Snapshot inventory.json just before a destructive change so it can be rolled
+# back in one click. Single level — the newest snapshot wins.
+
+def _undo_path() -> Path:
+    # Name ends in .json so it's covered by the *.json gitignore (stays local).
+    p = Path(INVENTORY_JSON)
+    return p.with_name(p.stem + ".undo.json")
+
+
+def snapshot_inventory() -> None:
+    """Copy the current inventory aside so the next change can be undone."""
+    src = Path(INVENTORY_JSON)
+    try:
+        _undo_path().write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def has_undo() -> bool:
+    return _undo_path().exists()
+
+
+def restore_inventory() -> bool:
+    """Roll inventory back to the last snapshot. Returns True if it restored."""
+    bak = _undo_path()
+    if not bak.exists():
+        return False
+    try:
+        Path(INVENTORY_JSON).write_text(bak.read_text(encoding="utf-8"), encoding="utf-8")
+        bak.unlink()  # one-shot: consume the snapshot so undo isn't repeatable
+        return True
+    except Exception:
+        return False
+
 def add_image_to_item(item_id: int, image_filename: str) -> Dict[str, Any]:
     """Add an image to an existing item's image list."""
     rows = inventory()
@@ -995,11 +1033,18 @@ def _first_nonempty(items: List[Dict[str, Any]], field: str) -> str:
     return ""
 
 
-def merge_preview(items: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Compute the combined item without saving. Primary listed first."""
+def merge_preview(items: List[Dict[str, Any]],
+                  primary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Compute the combined item without saving.
+
+    The *primary* (survivor) is listed first, so its single-value fields
+    (category, location, value…) win. Pass ``primary`` to honour a user's choice;
+    otherwise the richest entry is picked automatically.
+    """
     if not items:
         return {}
-    primary = _pick_primary(items)
+    if primary is None or primary not in items:
+        primary = _pick_primary(items)
     ordered = [primary] + [r for r in items if r is not primary]
 
     descriptions = [(r.get("description") or "").strip() for r in ordered]
@@ -1156,7 +1201,8 @@ def merge_group(primary_id: int, merge_ids: List[int],
     if not ids:
         return primary
     group = [primary] + [by_id[i] for i in ids]
-    merged = merge_preview(group)
+    # The chosen survivor's single-value fields (category, location, value…) win.
+    merged = merge_preview(group, primary=primary)
     if overrides:
         merged.update(overrides)
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os, time
-from dash import Input, Output, State, ctx, no_update, ALL, html, dcc
+from dash import Input, Output, State, ctx, no_update, ALL, MATCH, html, dcc
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 import data
@@ -265,7 +265,7 @@ def _render_fit(plan):
 
 
 def _render_dups(plans):
-    """Render detected duplicate groups: a select-list + a preview card each."""
+    """Render detected duplicate groups, each with survivor + rename controls."""
     if not plans:
         return html.Div(
             [html.I(className="bi bi-check-circle me-2 text-success"),
@@ -274,56 +274,74 @@ def _render_dups(plans):
         )
 
     total_dupes = sum(len(p["merge_ids"]) for p in plans)
-    options = []
     cards = []
     for i, p in enumerate(plans):
         prev = p["preview"]
-        options.append({
-            "label": f"  #{i + 1}: keep “{p['primary_name']}” · combine {len(p['item_ids'])} "
-                     f"entries → qty {prev['qty']} · ~{p['match_pct']}% match",
-            "value": i,
-        })
 
         # The entries being combined.
         entry_rows = []
         for r in p["items"]:
-            is_keep = int(r.get("id")) == p["primary_id"]
             entry_rows.append(html.Tr([
-                html.Td(html.Span("keep", className="badge bg-success") if is_keep
-                        else html.Span("merge", className="badge bg-secondary")),
                 html.Td(r.get("name", "")),
                 html.Td(f"×{r.get('qty', 0)}", className="text-end"),
+                html.Td(r.get("category") or "—", className="text-muted small"),
                 html.Td(r.get("location_code") or r.get("location") or "—", className="text-muted small"),
                 html.Td(f"{len(r.get('images') or [])}📷" if r.get("images") else "",
                         className="text-muted small"),
             ]))
+
+        keep_opts = [{"label": f"{r.get('name', '(no name)')} (×{r.get('qty', 0)}"
+                               f"{', ' + str(len(r.get('images') or [])) + ' photos' if r.get('images') else ''})",
+                      "value": int(r.get("id"))} for r in p["items"]]
+
+        controls = dbc.Row(
+            [
+                dbc.Col(
+                    [dbc.Label("Keep which entry?", className="small mb-1"),
+                     dcc.Dropdown(id={"type": "dup-primary", "index": i}, options=keep_opts,
+                                  value=p["primary_id"], clearable=False, className="pc-dropdown")],
+                    xs=12, sm=6,
+                ),
+                dbc.Col(
+                    [dbc.Label("Name after merge", className="small mb-1"),
+                     dbc.Input(id={"type": "dup-name", "index": i}, value=prev["name"], size="sm")],
+                    xs=12, sm=6,
+                ),
+            ],
+            className="g-2",
+        )
+
         becomes = html.Div(
             [
                 html.I(className="bi bi-arrow-right-circle me-1 text-success"),
-                html.Strong("Becomes: "),
-                html.Span(f"{prev['name']} · qty {prev['qty']} · "
-                          f"{len(prev['images'])} photo(s) · {len(prev['tags'])} tag(s) · "
-                          f"{len(prev['specifications'])} spec(s)"),
+                html.Strong("Combined: "),
+                html.Span(f"qty {prev['qty']} · {len(prev['images'])} photo(s) · "
+                          f"{len(prev['tags'])} tag(s) · {len(prev['specifications'])} spec(s)"),
             ],
-            className="small mt-1",
+            className="small mt-2",
         )
         conflict = html.Div()
         if p["conflicts"]:
             conflict = html.Div(
                 [html.I(className="bi bi-exclamation-triangle me-1 text-warning"),
-                 "Heads up — " + "; ".join(p["conflicts"]) + " (the top entry's value is kept)."],
+                 "Heads up — " + "; ".join(p["conflicts"]) + " (the kept entry's value is used)."],
                 className="small text-warning mt-1",
             )
         cards.append(
-            html.Div(
-                [
-                    html.Div(f"Group #{i + 1}", className="fw-semibold small text-muted"),
-                    dbc.Table(html.Tbody(entry_rows), size="sm", borderless=True,
-                              className="mb-1 align-middle"),
-                    becomes,
-                    conflict,
-                ],
-                className="py-2 border-bottom",
+            dbc.Card(
+                dbc.CardBody(
+                    [
+                        dbc.Switch(id={"type": "dup-include", "index": i}, value=True,
+                                   label=f"Merge these {len(p['item_ids'])} (~{p['match_pct']}% match)",
+                                   className="fw-semibold"),
+                        dbc.Table(html.Tbody(entry_rows), size="sm", borderless=True,
+                                  className="mb-2 align-middle"),
+                        controls,
+                        becomes,
+                        conflict,
+                    ]
+                ),
+                className="mb-2",
             )
         )
 
@@ -331,14 +349,28 @@ def _render_dups(plans):
         html.Div(
             [html.I(className="bi bi-collection me-2"),
              html.Strong(f"Found {len(plans)} group(s)"),
-             f" — merging removes {total_dupes} duplicate entr{'y' if total_dupes == 1 else 'ies'}. "
-             "Untick any you want to keep separate, then Merge selected."],
+             f" — merging removes up to {total_dupes} duplicate "
+             f"entr{'y' if total_dupes == 1 else 'ies'}. Pick the survivor / name per group, "
+             "toggle off any to keep separate, then Merge selected."],
             className="alert alert-info py-2",
         ),
-        dbc.Checklist(id="dups-select", options=options, value=list(range(len(plans)))),
-        html.Hr(className="my-2"),
         html.Div(cards),
     ])
+
+
+def _undo_alert(msg):
+    """A dismissible bar offering to roll back the last destructive change."""
+    return dbc.Alert(
+        [
+            html.I(className="bi bi-arrow-counterclockwise me-2"),
+            html.Span(msg + " "),
+            dbc.Button([html.I(className="bi bi-arrow-90deg-left me-1"), "Undo"],
+                       id="undo-apply", color="warning", size="sm", className="ms-2",
+                       n_clicks=0),
+        ],
+        color="secondary", className="py-2 mb-3 d-flex align-items-center",
+        dismissable=True,
+    )
 
 
 def _render_connect(eps):
@@ -1720,18 +1752,29 @@ def register_callbacks(app):
             msg += f" {overflow} didn't fit."
         return False, time.time(), True, "Bins updated", ("warning" if overflow else "success"), msg
 
-    # ---------- Duplicates: open / close the merge modal ----------
+    def _scan_and_render(level):
+        """Run a duplicate scan and return (result view, plan store, status)."""
+        plans = data.find_duplicate_groups(level=level or "balanced")
+        plan_store = [{"item_ids": p["item_ids"]} for p in plans]
+        status = html.Span([html.I(className="bi bi-check-circle me-1"),
+                            f"Scanned {len(data.inventory())} items."], className="text-muted")
+        return _render_dups(plans), plan_store, status
+
+    # ---------- Duplicates: open the modal + auto-scan ----------
     @app.callback(
         Output("dups-modal", "is_open"),
         Output("dups-result", "children"),
+        Output("dups-plan", "data"),
         Output("dups-status", "children"),
         Input("open-dups", "n_clicks"),
+        State("dups-level", "value"),
         prevent_initial_call=True,
     )
-    def open_dups(n):
+    def open_dups(n, level):
         if not n:
             raise PreventUpdate
-        return True, "", ""
+        view, plan, status = _scan_and_render(level or "balanced")
+        return True, view, plan, status
 
     @app.callback(
         Output("dups-modal", "is_open", allow_duplicate=True),
@@ -1743,10 +1786,10 @@ def register_callbacks(app):
             raise PreventUpdate
         return False
 
-    # ---------- Duplicates: scan for similar entries ----------
+    # ---------- Duplicates: re-scan (e.g. after changing sensitivity) ----------
     @app.callback(
         Output("dups-result", "children", allow_duplicate=True),
-        Output("dups-plan", "data"),
+        Output("dups-plan", "data", allow_duplicate=True),
         Output("dups-status", "children", allow_duplicate=True),
         Input("dups-scan", "n_clicks"),
         State("dups-level", "value"),
@@ -1755,11 +1798,22 @@ def register_callbacks(app):
     def do_scan(n, level):
         if not n:
             raise PreventUpdate
-        plans = data.find_duplicate_groups(level=level or "balanced")
-        slim = [{"primary_id": p["primary_id"], "merge_ids": p["merge_ids"]} for p in plans]
-        status = html.Span([html.I(className="bi bi-check-circle me-1"),
-                            f"Scanned {len(data.inventory())} items."], className="text-muted")
-        return _render_dups(plans), slim, status
+        return _scan_and_render(level)
+
+    # ---------- Duplicates: keep the rename field in step with the survivor ----------
+    @app.callback(
+        Output({"type": "dup-name", "index": MATCH}, "value"),
+        Input({"type": "dup-primary", "index": MATCH}, "value"),
+        State("dups-plan", "data"),
+        prevent_initial_call=True,
+    )
+    def sync_dup_name(primary_id, plan):
+        idx = (ctx.triggered_id or {}).get("index")
+        if primary_id is None or plan is None or idx is None or idx >= len(plan):
+            raise PreventUpdate
+        by_id = {int(r.get("id")): r for r in data.inventory()}
+        row = by_id.get(int(primary_id))
+        return row.get("name", "") if row else no_update
 
     # ---------- Duplicates: merge the selected groups ----------
     @app.callback(
@@ -1767,30 +1821,56 @@ def register_callbacks(app):
         Output("refresh-seq", "data", allow_duplicate=True),
         Output("dups-result", "children", allow_duplicate=True),
         Output("dups-plan", "data", allow_duplicate=True),
+        Output("undo-bar", "children", allow_duplicate=True),
         Output("action-toast", "is_open", allow_duplicate=True),
         Output("action-toast", "header", allow_duplicate=True),
         Output("action-toast", "icon", allow_duplicate=True),
         Output("action-toast", "children", allow_duplicate=True),
         Input("dups-apply", "n_clicks"),
-        State("dups-select", "value"),
+        State({"type": "dup-include", "index": ALL}, "value"),
+        State({"type": "dup-primary", "index": ALL}, "value"),
+        State({"type": "dup-name", "index": ALL}, "value"),
         State("dups-plan", "data"),
         prevent_initial_call=True,
     )
-    def apply_dups(n, selected, slim):
+    def apply_dups(n, includes, primaries, names, plan):
         if not n:
             raise PreventUpdate
-        if not slim:
-            return (no_update, no_update, no_update, no_update,
-                    True, "Nothing to merge", "warning", "Scan for duplicates first.")
-        chosen = [slim[i] for i in (selected or []) if 0 <= i < len(slim)]
-        if not chosen:
-            return (no_update, no_update, no_update, no_update,
-                    True, "Nothing selected", "warning", "Tick at least one group to merge.")
-        res = data.merge_groups(chosen)
-        removed = res["items_removed"]
-        msg = (f"Merged {res['groups']} group(s), removing {removed} duplicate "
+        if not plan:
+            return (no_update,) * 5 + (True, "Nothing to merge", "warning",
+                                       "Scan for duplicates first.")
+        # Map pattern-matched control values back to their group index.
+        inc = {s["id"]["index"]: s.get("value") for s in (ctx.states_list[0] or [])}
+        pri = {s["id"]["index"]: s.get("value") for s in (ctx.states_list[1] or [])}
+        nam = {s["id"]["index"]: s.get("value") for s in (ctx.states_list[2] or [])}
+
+        jobs = []
+        for i, grp in enumerate(plan):
+            if not inc.get(i, True):
+                continue
+            item_ids = [int(x) for x in grp.get("item_ids", [])]
+            if len(item_ids) < 2:
+                continue
+            primary_id = pri.get(i) or item_ids[0]
+            primary_id = int(primary_id)
+            merge_ids = [x for x in item_ids if x != primary_id]
+            name = (nam.get(i) or "").strip()
+            jobs.append((primary_id, merge_ids, {"name": name} if name else None))
+
+        if not jobs:
+            return (no_update,) * 5 + (True, "Nothing selected", "warning",
+                                       "Toggle on at least one group to merge.")
+
+        data.snapshot_inventory()  # enable one-click undo
+        groups = removed = 0
+        for primary_id, merge_ids, overrides in jobs:
+            if data.merge_group(primary_id, merge_ids, overrides) is not None and merge_ids:
+                groups += 1
+                removed += len(merge_ids)
+        msg = (f"Merged {groups} group(s), removing {removed} duplicate "
                f"entr{'y' if removed == 1 else 'ies'}.")
-        return (False, time.time(), "", None, True, "Duplicates merged", "success", msg)
+        undo = _undo_alert(msg)
+        return (False, time.time(), "", None, undo, True, "Duplicates merged", "success", msg)
 
     # ---------- Auto-flag duplicates: badge on the Merge button ----------
     @app.callback(
@@ -1872,6 +1952,7 @@ def register_callbacks(app):
     @app.callback(
         Output("refresh-seq", "data", allow_duplicate=True),
         Output("inventory-table", "selected_rows", allow_duplicate=True),
+        Output("undo-bar", "children", allow_duplicate=True),
         Output("action-toast", "is_open", allow_duplicate=True),
         Output("action-toast", "header", allow_duplicate=True),
         Output("action-toast", "icon", allow_duplicate=True),
@@ -1886,10 +1967,30 @@ def register_callbacks(app):
             raise PreventUpdate
         ids = _selected_ids(sel_rows, rows)
         if not ids:
-            return (no_update, no_update, True, "Nothing selected", "warning", "Tick some rows first.")
+            return (no_update, no_update, no_update, True, "Nothing selected", "warning",
+                    "Tick some rows first.")
+        data.snapshot_inventory()  # enable one-click undo
         removed = data.bulk_remove(ids)
-        return (time.time(), [], True, "Deleted",
-                "success", f"Removed {removed} item{'s' if removed != 1 else ''}.")
+        msg = f"Removed {removed} item{'s' if removed != 1 else ''}."
+        return (time.time(), [], _undo_alert(msg), True, "Deleted", "success", msg)
+
+    # ---------- Undo the last merge / bulk delete ----------
+    @app.callback(
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("undo-bar", "children", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("undo-apply", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def undo_last(n):
+        if not n:
+            raise PreventUpdate
+        if data.restore_inventory():
+            return (time.time(), "", True, "Undone", "success", "Restored the items from before.")
+        return (no_update, "", True, "Nothing to undo", "warning", "No recent change to undo.")
 
     # ---------- Bulk edit: clear the selection ----------
     @app.callback(
