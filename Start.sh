@@ -55,6 +55,12 @@ export FLASK_RUN_HOST="$HOST"
 # --- Vision model (default to llava:13b; override with OLLAMA_VISION_MODEL env var) ---
 export OLLAMA_VISION_MODEL="${OLLAMA_VISION_MODEL:-llava:13b}"
 
+# --- URL prefix: serve at the site root by default. The HTTP_Server manager
+# accesses the app directly at http://<host>:<port>/, so an empty prefix is
+# correct here. Override (e.g. URL_PREFIX="/inventory") only when running behind
+# a reverse proxy that mounts the app under a subpath. ---
+export URL_PREFIX="${URL_PREFIX:-}"
+
 # --- Start the app ---
 if [[ -f "$APP_DIR/app.py" ]]; then
   echo "[RUN] Starting app.py with $PY_CMD (HOST=$HOST PORT=$PORT)"
