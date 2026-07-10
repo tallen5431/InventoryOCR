@@ -1103,13 +1103,51 @@ def _codes(row: Dict[str, Any]) -> set:
     return out
 
 
+def _desc_tokens(row: Dict[str, Any]) -> set:
+    """Significant words from the *description*, normalised like content tokens.
+
+    Used only as a light cross-check: a sparsely-named item ("7mm Shallow
+    Socket") whose description mentions the brand/kind of a richer item ("Kobalt
+    …socket") should read as related even though the names barely overlap.
+    """
+    text = (row.get("description") or "").lower()
+    out = set()
+    for t in _re.findall(r"[a-z0-9][a-z0-9\-]*", text):
+        t = t.strip("-")
+        if any(ch.isdigit() for ch in t):
+            out.add(t)
+        elif t in _DEDUP_SIZE_WORDS:
+            out.add(t)
+        elif len(t) >= 3 and t not in _GROUP_STOP:
+            out.add(_singular(t))
+    return out
+
+
+def _head_noun(row: Dict[str, Any]) -> str:
+    """The item's 'kind' — the last significant, non-code word of the name
+    (socket, battery, screwdriver). Lets us tell 'same kind, different size'
+    (a loose match worth surfacing) apart from two unrelated items."""
+    na = _norm_name(row.get("name", ""))
+    nouns = [w for w in na.split()
+             if not any(ch.isdigit() for ch in w) and len(w) >= 3 and w not in _GROUP_STOP]
+    return _singular(nouns[-1]) if nouns else ""
+
+
 def item_similarity(a: Dict[str, Any], b: Dict[str, Any]) -> float:
     """Similarity of two items in 0..1. 1.0 == a confident duplicate.
 
     Strong signals short-circuit: an identical normalised name, or the same
     non-empty product URL. Otherwise blend name closeness (typos / plurals) with
-    shared significant words, nudged up when the categories agree. Items whose
-    size/model codes exist but don't overlap (9V vs AA, M3 vs M5) are held apart.
+    shared significant words — using an overlap coefficient so a sparse name
+    that's a subset of a richer one still scores — then nudge up for a matching
+    category, the same head noun ("both sockets"), or a description that echoes
+    the other item's words.
+
+    Size/model codes that exist but don't overlap (9V vs AA, 1/4" vs 7mm) still
+    hold items apart, but as a *graduated* penalty rather than a hard cut: two
+    items that are otherwise the same kind of thing can surface at the loosest
+    setting (where the user decides) while staying below the auto-merge tiers;
+    genuinely different things are pushed well down.
     """
     na, nb = _norm_name(a.get("name", "")), _norm_name(b.get("name", ""))
     if na and na == nb:
@@ -1118,21 +1156,47 @@ def item_similarity(a: Dict[str, Any], b: Dict[str, Any]) -> float:
     if ua and ua == ub:
         return 0.97
 
-    # A model/size mismatch is a strong "not the same thing" signal.
-    ca_codes, cb_codes = _codes(a), _codes(b)
-    if ca_codes and cb_codes and not (ca_codes & cb_codes):
-        return round(min(0.5, _SeqMatcher(None, na, nb).ratio()), 3)
-
     name_ratio = _SeqMatcher(None, na, nb).ratio() if (na and nb) else 0.0
+
     ta, tb = _content_tokens(a), _content_tokens(b)
-    jac = (len(ta & tb) / len(ta | tb)) if (ta or tb) else 0.0
-    score = 0.6 * name_ratio + 0.4 * jac
+    inter = len(ta & tb)
+    jac = (inter / len(ta | tb)) if (ta or tb) else 0.0
+    # Overlap coefficient rescues sparse names: if the shorter item's words are
+    # mostly contained in the richer one, that's a strong signal Jaccard hides.
+    overlap = (inter / min(len(ta), len(tb))) if (ta and tb) else 0.0
+    tok = 0.5 * jac + 0.5 * overlap
+
+    score = 0.6 * name_ratio + 0.4 * tok
+
+    # Light description cross-check (bounded nudge): one item's description
+    # naming the other's brand/kind is a real "these belong together" signal.
+    da, db = _desc_tokens(a), _desc_tokens(b)
+    if (da & tb) or (db & ta):
+        score = min(1.0, score + 0.08)
 
     cat_a = (a.get("category") or "").strip().lower()
     cat_b = (b.get("category") or "").strip().lower()
+    same_cat = bool(cat_a and cat_b and cat_a == cat_b)
+    same_kind = bool(_head_noun(a)) and _head_noun(a) == _head_noun(b)
+
     if cat_a and cat_b:
-        score = min(1.0, score + 0.05) if cat_a == cat_b else score * 0.9
-    return round(score, 3)
+        score = min(1.0, score + 0.05) if same_cat else score * 0.9
+    # Same category *and* same kind of thing → surface as a near-match.
+    if same_cat and same_kind:
+        score = min(1.0, score + 0.08)
+
+    # Size/model code mismatch.
+    ca_codes, cb_codes = _codes(a), _codes(b)
+    if ca_codes and cb_codes and not (ca_codes & cb_codes):
+        if same_cat and same_kind:
+            # Same kind, different size: keep it in the "loose" band — visible to
+            # a user who asks for near-matches, but never auto-merged by default.
+            score = min(score, DUP_LEVELS["balanced"] - 0.02)
+        else:
+            # Different things that also disagree on size/model — push down hard.
+            score = min(score, 0.55)
+
+    return round(min(1.0, score), 3)
 
 
 def _pick_primary(items: List[Dict[str, Any]]) -> Dict[str, Any]:

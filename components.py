@@ -877,6 +877,13 @@ def duplicates_modal():
                                                 value="balanced",
                                                 inline=True,
                                             ),
+                                            html.Div(
+                                                "Loosely similar also groups same-kind items that differ only "
+                                                "by size or model — e.g. a 1/4\" drive and a 7mm socket — so you "
+                                                "can decide whether to combine them.",
+                                                className="text-muted mt-1",
+                                                style={"fontSize": "0.78rem"},
+                                            ),
                                         ],
                                         xs=12, sm=8,
                                     ),
