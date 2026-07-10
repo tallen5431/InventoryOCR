@@ -69,6 +69,28 @@ def sidebar_form():
                             ),
 
                             dbc.Row(
+                                dbc.Col(
+                                    [
+                                        dbc.Label("Type", className="mt-2"),
+                                        dbc.Input(
+                                            id="item-type",
+                                            debounce=True,
+                                            placeholder="Tools, Components, Cables & Adapters…",
+                                            list="type-datalist",
+                                            autoComplete="off",
+                                        ),
+                                        html.Div(
+                                            "Top-level group for browsing. Leave blank to auto-group "
+                                            "from the name/category.",
+                                            className="text-muted", style={"fontSize": "0.75rem"},
+                                        ),
+                                    ],
+                                    xs=12,
+                                ),
+                                className="g-2",
+                            ),
+
+                            dbc.Row(
                                 [
                                     dbc.Col(
                                         [
@@ -76,7 +98,7 @@ def sidebar_form():
                                             dbc.Input(
                                                 id="item-category",
                                                 debounce=True,
-                                                placeholder="e.g., Tools",
+                                                placeholder="e.g., Sockets, USB Cables",
                                                 list="category-datalist",
                                                 autoComplete="off",
                                             ),
@@ -130,6 +152,7 @@ def sidebar_form():
                             ),
 
                             # Datalists power the type-ahead suggestions above.
+                            html.Datalist(id="type-datalist"),
                             html.Datalist(id="category-datalist"),
                             html.Datalist(id="location-datalist"),
                             html.Datalist(id="location-code-datalist"),
@@ -330,12 +353,21 @@ def filter_card():
                         [
                             dbc.Col(
                                 dcc.Dropdown(
+                                    id="filter-type",
+                                    placeholder="All types",
+                                    clearable=True,
+                                    options=[],
+                                ),
+                                xs=12, sm=4, className="mt-2",
+                            ),
+                            dbc.Col(
+                                dcc.Dropdown(
                                     id="filter-category",
                                     placeholder="All categories",
                                     clearable=True,
                                     options=[],
                                 ),
-                                xs=12, sm=6, className="mt-2",
+                                xs=12, sm=4, className="mt-2",
                             ),
                             dbc.Col(
                                 dcc.Dropdown(
@@ -344,7 +376,7 @@ def filter_card():
                                     clearable=True,
                                     options=[],
                                 ),
-                                xs=12, sm=6, className="mt-2",
+                                xs=12, sm=4, className="mt-2",
                             ),
                         ],
                         className="g-2",
@@ -390,6 +422,7 @@ def inventory_table():
         {"name": "Name", "id": "name"},
         {"name": "Qty", "id": "qty", "type": "numeric"},
         {"name": "Added", "id": "added", "hideable": True},
+        {"name": "Type", "id": "type", "hideable": True},
         {"name": "Category", "id": "category", "hideable": True},
         {"name": "Location", "id": "location", "hideable": True},
         {"name": "Bin", "id": "location_code", "hideable": True},
@@ -492,21 +525,23 @@ def _bulk_bar():
                 ),
                 dbc.Row(
                     [
+                        dbc.Col(dbc.Input(id="bulk-type", placeholder="Type",
+                                          size="sm", list="type-datalist"), xs=12, sm=4, md=2),
                         dbc.Col(dbc.Input(id="bulk-category", placeholder="Category",
                                           size="sm", list="category-datalist"), xs=12, sm=4, md=3),
                         dbc.Col(dbc.Input(id="bulk-location", placeholder="Location",
                                           size="sm", list="location-datalist"), xs=12, sm=4, md=3),
                         dbc.Col(dbc.Input(id="bulk-code", placeholder="Bin / code",
-                                          size="sm", list="location-code-datalist"), xs=12, sm=4, md=2),
+                                          size="sm", list="location-code-datalist"), xs=12, sm=6, md=2),
                         dbc.Col(
                             dbc.Button([html.I(className="bi bi-check2 me-1"), "Apply"],
                                        id="bulk-apply", color="primary", size="sm", className="w-100"),
-                            xs=6, sm=6, md=2,
+                            xs=6, sm=3, md=1,
                         ),
                         dbc.Col(
                             dbc.Button([html.I(className="bi bi-trash me-1"), "Delete"],
                                        id="bulk-delete", color="outline-danger", size="sm", className="w-100"),
-                            xs=6, sm=6, md=2,
+                            xs=6, sm=3, md=1,
                         ),
                     ],
                     className="g-2 align-items-center",

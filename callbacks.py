@@ -62,6 +62,7 @@ def _build_rows(filtered):
             row["all_images"] = []
 
         # Keep organizing fields present for the table (and CSV/native filters)
+        row["type"] = (row.get("type") or "").strip()
         row["category"] = (row.get("category") or "").strip()
         row["location"] = (row.get("location") or "").strip()
         row["estimated_value"] = (row.get("estimated_value") or "").strip()
@@ -91,8 +92,10 @@ def _build_rows(filtered):
         out_rows.append(row)
     return out_rows
 
-def _apply_filters(items, search, filter_cat, filter_loc):
+def _apply_filters(items, search, filter_cat, filter_loc, filter_type=None):
     filtered = data.search(search) if search else items
+    if filter_type:
+        filtered = [r for r in filtered if (r.get("type") or "").strip() == filter_type]
     if filter_cat:
         filtered = [r for r in filtered if (r.get("category") or "").strip() == filter_cat]
     if filter_loc:
@@ -722,6 +725,7 @@ def register_callbacks(app):
             Output("item-name", "value"),
             Output("item-desc", "value"),
             Output("item-qty", "value"),
+            Output("item-type", "value"),
             Output("item-category", "value"),
             Output("item-location", "value"),
             Output("item-location-code", "value"),
@@ -746,6 +750,7 @@ def register_callbacks(app):
             Input("inventory-table", "selected_rows"),
             Input("cancel-button", "n_clicks"),
             Input("search-bar", "value"),
+            Input("filter-type", "value"),
             Input("filter-category", "value"),
             Input("filter-location", "value"),
             Input("sort-by", "value"),
@@ -755,6 +760,7 @@ def register_callbacks(app):
             State("item-name", "value"),
             State("item-desc", "value"),
             State("item-qty", "value"),
+            State("item-type", "value"),
             State("item-category", "value"),
             State("item-location", "value"),
             State("item-location-code", "value"),
@@ -771,8 +777,8 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def manage_table(pathname, save_clicks, save_next_clicks, delete_clicks, sel_rows, cancel_clicks,
-                     search, filter_cat, filter_loc, sort_by, _refresh_seq,
-                     name, desc, qty, category, location, location_code,
+                     search, filter_type, filter_cat, filter_loc, sort_by, _refresh_seq,
+                     name, desc, qty, item_type, category, location, location_code,
                      specs, value, dims, tags, producturl, img_contents,
                      current_images, editing_id, current_rows):
         triggered = (ctx.triggered_id or "")
@@ -782,21 +788,21 @@ def register_callbacks(app):
         # would immediately hide the success toast, so leave it untouched instead.
         toast_open, toast_header, toast_icon, toast_msg = no_update, no_update, no_update, no_update
         next_sel = sel_rows or []
-        next_name = next_desc = next_qty = next_category = next_location = no_update
+        next_name = next_desc = next_qty = next_type = next_category = next_location = no_update
         next_code = next_specs = next_value = next_dims = next_tags = next_url = no_update
         next_editing = next_images = next_upload = no_update
 
         def _clear_form(keep_location=False):
-            """Reset the form. When keep_location, the category/location/bin stay so
-            you can scan a run of similar items without re-typing where they live."""
-            nonlocal next_name, next_desc, next_qty, next_category, next_location
+            """Reset the form. When keep_location, the type/category/location/bin stay
+            so you can scan a run of similar items without re-typing where they live."""
+            nonlocal next_name, next_desc, next_qty, next_type, next_category, next_location
             nonlocal next_code, next_specs, next_value, next_dims, next_tags, next_url
             nonlocal next_editing, next_images, next_upload, next_sel
             next_sel = []
             next_name, next_desc, next_qty = "", "", 1
             next_specs, next_value, next_dims, next_tags, next_url = "", "", "", "", ""
             if not keep_location:
-                next_category, next_location, next_code = "", "", ""
+                next_type, next_category, next_location, next_code = "", "", "", ""
             next_editing, next_images, next_upload = None, [], None
 
         # Always load latest items
@@ -819,6 +825,7 @@ def register_callbacks(app):
             else:
                 ds = (desc or "").strip()
                 cat = (category or "").strip()
+                typ = (item_type or "").strip()
                 loc = (location or "").strip()
                 code = (location_code or "").strip()
                 nqty = _parse_qty(qty)
@@ -843,12 +850,14 @@ def register_callbacks(app):
                         data.update_item(editing_id, nm, ds, nqty, img_filenames, existing_ocr,
                                          category=cat, location=loc, location_code=code,
                                          specifications=specs, estimated_value=value,
-                                         dimensions=dims, tags=tags, product_url=producturl)
+                                         dimensions=dims, tags=tags, product_url=producturl,
+                                         item_type=typ)
                         toast_header, toast_icon, toast_msg = "Item Updated", "success", f'"{nm}" updated.'
                     else:
                         data.add_item(nm, ds, nqty, img_filenames, "", category=cat, location=loc,
                                       location_code=code, specifications=specs, estimated_value=value,
-                                      dimensions=dims, tags=tags, product_url=producturl)
+                                      dimensions=dims, tags=tags, product_url=producturl,
+                                      item_type=typ)
                         toast_header, toast_icon, toast_msg = "Item Added", "success", f'"{nm}" added.'
                 except ValueError as e:
                     toast_header, toast_icon, toast_msg = "Duplicate Name", "danger", str(e)
@@ -885,6 +894,7 @@ def register_callbacks(app):
                     next_name = actual_row.get("name", row.get("name", ""))
                     next_desc = actual_row.get("description", row.get("description", ""))
                     next_qty = actual_row.get("qty", row.get("qty", None))
+                    next_type = actual_row.get("type", "")
                     next_category = actual_row.get("category", "")
                     next_location = actual_row.get("location", "")
                     next_code = actual_row.get("location_code", "")
@@ -901,16 +911,16 @@ def register_callbacks(app):
 
         # Search / filter / sort change: drop the stale selection highlight (the
         # edit form and editing-id are intentionally left as-is).
-        elif triggered in ("search-bar", "filter-category", "filter-location", "sort-by"):
+        elif triggered in ("search-bar", "filter-type", "filter-category", "filter-location", "sort-by"):
             next_sel = []
 
         # Filter/search, then order for display.
-        filtered = _apply_filters(items, search, filter_cat, filter_loc)
+        filtered = _apply_filters(items, search, filter_cat, filter_loc, filter_type)
         filtered = _apply_sort(filtered, sort_by)
         out_rows = _build_rows(filtered)
 
         return [
-            out_rows, next_sel, next_name, next_desc, next_qty, next_category, next_location,
+            out_rows, next_sel, next_name, next_desc, next_qty, next_type, next_category, next_location,
             next_code, next_specs, next_value, next_dims, next_tags, next_url,
             next_editing, next_images, next_upload,
             toast_open, toast_header, toast_icon, toast_msg
@@ -918,8 +928,10 @@ def register_callbacks(app):
 
     # ---------- Populate filter dropdowns & type-ahead suggestions ----------
     @app.callback(
+        Output("filter-type", "options"),
         Output("filter-category", "options"),
         Output("filter-location", "options"),
+        Output("type-datalist", "children"),
         Output("category-datalist", "children"),
         Output("location-datalist", "children"),
         Output("location-code-datalist", "children"),
@@ -930,15 +942,21 @@ def register_callbacks(app):
         # Always derive from the FULL inventory (not the filtered view) so you can
         # switch between filters freely and newly-added values show up immediately.
         all_items = data.inventory()
+        present_types = data.types(all_items)
         cats = data.categories(all_items)
         locs = data.locations(all_items)
         codes = data.location_codes(all_items)
+        type_opts = [{"label": t, "value": t} for t in present_types]
         cat_opts = [{"label": c, "value": c} for c in cats]
         loc_opts = [{"label": l, "value": l} for l in locs]
+        # Datalist suggestions for Type: always offer the canonical groups, plus
+        # any custom values already in use, so the form nudges toward consistency.
+        type_choices = list(data.TYPE_GROUPS) + [t for t in present_types if t not in data.TYPE_GROUPS]
+        type_dl = [html.Option(value=t) for t in type_choices]
         cat_dl = [html.Option(value=c) for c in cats]
         loc_dl = [html.Option(value=l) for l in locs]
         code_dl = [html.Option(value=c) for c in codes]
-        return cat_opts, loc_opts, cat_dl, loc_dl, code_dl
+        return type_opts, cat_opts, loc_opts, type_dl, cat_dl, loc_dl, code_dl
 
     # ---------- Rich hover tooltips (full extracted details per row) ----------
     @app.callback(
@@ -1197,7 +1215,7 @@ def register_callbacks(app):
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow([
-            "id", "name", "category", "location", "bin", "qty", "added", "description",
+            "id", "name", "type", "category", "location", "bin", "qty", "added", "description",
             "specifications", "estimated_value", "dimensions", "tags",
             "product_url", "ocr_text", "images",
         ])
@@ -1205,6 +1223,7 @@ def register_callbacks(app):
             writer.writerow([
                 r.get("id"),
                 r.get("name", ""),
+                r.get("type", ""),
                 r.get("category", ""),
                 r.get("location", ""),
                 r.get("location_code", ""),
@@ -1947,6 +1966,7 @@ def register_callbacks(app):
     @app.callback(
         Output("refresh-seq", "data", allow_duplicate=True),
         Output("inventory-table", "selected_rows", allow_duplicate=True),
+        Output("bulk-type", "value"),
         Output("bulk-category", "value"),
         Output("bulk-location", "value"),
         Output("bulk-code", "value"),
@@ -1957,27 +1977,29 @@ def register_callbacks(app):
         Input("bulk-apply", "n_clicks"),
         State("inventory-table", "selected_rows"),
         State("inventory-table", "data"),
+        State("bulk-type", "value"),
         State("bulk-category", "value"),
         State("bulk-location", "value"),
         State("bulk-code", "value"),
         prevent_initial_call=True,
     )
-    def bulk_apply(n, sel_rows, rows, cat, loc, code):
+    def bulk_apply(n, sel_rows, rows, typ, cat, loc, code):
         if not n:
             raise PreventUpdate
         ids = _selected_ids(sel_rows, rows)
         # Only patch fields the user actually filled in (blank = leave as-is).
+        typ = typ.strip() if isinstance(typ, str) and typ.strip() else None
         cat = cat.strip() if isinstance(cat, str) and cat.strip() else None
         loc = loc.strip() if isinstance(loc, str) and loc.strip() else None
         code = code.strip() if isinstance(code, str) and code.strip() else None
         if not ids:
-            return (no_update, no_update, no_update, no_update, no_update,
+            return (no_update, no_update, no_update, no_update, no_update, no_update,
                     True, "Nothing selected", "warning", "Tick some rows first.")
-        if cat is None and loc is None and code is None:
-            return (no_update, no_update, no_update, no_update, no_update,
-                    True, "Nothing to set", "warning", "Fill in Category, Location or Bin first.")
-        changed = data.bulk_set_fields(ids, category=cat, location=loc, location_code=code)
-        return (time.time(), [], "", "", "", True, "Bulk update",
+        if typ is None and cat is None and loc is None and code is None:
+            return (no_update, no_update, no_update, no_update, no_update, no_update,
+                    True, "Nothing to set", "warning", "Fill in Type, Category, Location or Bin first.")
+        changed = data.bulk_set_fields(ids, category=cat, location=loc, location_code=code, item_type=typ)
+        return (time.time(), [], "", "", "", "", True, "Bulk update",
                 "success", f"Updated {changed} item{'s' if changed != 1 else ''}.")
 
     # ---------- Bulk edit: delete the selected items ----------

@@ -160,6 +160,7 @@ def inventory() -> List[Dict[str, Any]]:
             "name": r.get("name", ""),
             "description": r.get("description", ""),
             "category": (r.get("category") or "").strip(),
+            "type": (r.get("type") or "").strip(),
             "location": (r.get("location") or "").strip(),
             "location_code": (r.get("location_code") or "").strip(),
             "qty": int(r.get("qty") or 0),
@@ -173,6 +174,10 @@ def inventory() -> List[Dict[str, Any]]:
             "product_url": (r.get("product_url") or "").strip(),
             "tags": _norm_list(r.get("tags")),
         }
+        # Coarse Type: keep a stored/hand-edited value, else auto-classify from
+        # the category/name/tags so grouping works without a manual pass.
+        if not rec["type"]:
+            rec["type"] = _classify_type(rec)
         # When it was added: keep the stored value, else derive from the images.
         rec["created_at"] = (r.get("created_at") or "").strip() or _derive_created_at(rec)
         norm.append(rec)
@@ -246,6 +251,7 @@ def add_item(
     dimensions: str = "",
     product_url: str = "",
     tags: Any = None,
+    item_type: str = "",
 ) -> Dict[str, Any]:
     rows = inventory()
     # Unique by name
@@ -270,6 +276,8 @@ def add_item(
         "product_url": (product_url or "").strip(),
         "tags": _norm_list(tags),
     }
+    # Use the given Type, else auto-classify so new items are grouped on entry.
+    row["type"] = (item_type or "").strip() or _classify_type(row)
     rows.append(row)
     _save(rows)
     return row
@@ -295,6 +303,7 @@ def update_item(
     dimensions: Any = _KEEP,
     product_url: Any = _KEEP,
     tags: Any = _KEEP,
+    item_type: Any = _KEEP,
 ) -> Dict[str, Any]:
     rows = inventory()
     found = None
@@ -309,6 +318,10 @@ def update_item(
             r["images"] = _clean_images(images)
             r["ocr_text"] = ocr_text or ""
             # Optional fields: only overwrite when the caller supplied a value.
+            if item_type is not _KEEP:
+                # Blank Type falls back to an auto-classification rather than
+                # being left empty, so an edited item stays grouped.
+                r["type"] = (item_type or "").strip() or _classify_type(r)
             if location_code is not _KEEP:
                 r["location_code"] = (location_code or "").strip()
             if specifications is not _KEEP:
@@ -356,7 +369,7 @@ def remove_item(item_id: int) -> Optional[Dict[str, Any]]:
 
 
 # Fields that may be patched in place without a full form round-trip.
-_PATCHABLE = {"name", "description", "category", "location", "location_code",
+_PATCHABLE = {"name", "description", "category", "type", "location", "location_code",
               "qty", "estimated_value", "dimensions", "product_url"}
 
 
@@ -378,8 +391,10 @@ def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
 
 def bulk_set_fields(ids: List[int], category: Optional[str] = None,
                     location: Optional[str] = None,
-                    location_code: Optional[str] = None) -> int:
-    """Set category / location / bin on many items at once (only given fields).
+                    location_code: Optional[str] = None,
+                    item_type: Optional[str] = None) -> int:
+    """Set type / category / location / bin on many items at once (only given
+    fields).
 
     Passing ``None`` leaves a field untouched; passing ``""`` clears it.
     Returns the number of items changed.
@@ -391,6 +406,8 @@ def bulk_set_fields(ids: List[int], category: Optional[str] = None,
     changed = 0
     for r in rows:
         if int(r.get("id") or 0) in id_set:
+            if item_type is not None:
+                r["type"] = item_type.strip()
             if category is not None:
                 r["category"] = category.strip()
             if location is not None:
@@ -542,6 +559,7 @@ def _haystack(r: Dict[str, Any]) -> str:
         str(r.get("name", "")),
         str(r.get("description", "")),
         str(r.get("category", "")),
+        str(r.get("type", "")),
         str(r.get("location", "")),
         str(r.get("location_code", "")),
         str(r.get("ocr_text", "")),
@@ -579,6 +597,117 @@ def locations(rows: Optional[List[Dict[str, Any]]] = None) -> List[str]:
     rows = rows if rows is not None else inventory()
     seen = {(r.get("location") or "").strip() for r in rows}
     return sorted((l for l in seen if l), key=str.lower)
+
+
+# --------------------------------------------------------------------
+# Type (coarse top-level grouping)
+# --------------------------------------------------------------------
+# The scraped `category` field is granular and noisy (Amazon breadcrumbs), so a
+# short, stable top-level "Type" makes browsing sane: tools with tools, parts
+# with parts. `category` stays as the detailed sub-label underneath.
+TYPE_GROUPS = ["Tools", "Components", "Cables & Adapters", "Devices",
+               "Consumables", "Other"]
+
+# Ordered keyword rules for auto-classifying an item into a TYPE_GROUP. First
+# match wins, so the order resolves overlaps between the noisy scraped strings:
+#   - Tools before Consumables so "tape measure" isn't read as "tape".
+#   - Tools before Other so a "desoldering pump" isn't read as a "pump".
+#   - Consumables before Cables so "cable ties" aren't read as a "cable".
+#   - Components (connectors/modules) before Cables so a "JST connector kit"
+#     whose name also says "cable" lands in Components, while a plain flat/ribbon
+#     cable falls through to Cables.
+#   - Devices last (before Other) so a network cable's name mentioning
+#     "router/modem" doesn't win over its cable signal.
+# Keywords with a leading space only match at a word boundary (" brush" won't
+# match "airbrush"). Matched against category + name + tags, never the long
+# description (too noisy).
+_TYPE_RULES: List[tuple] = [
+    ("Tools", [
+        "tape measure", "measuring tool", "wrench", "socket", "screwdriver",
+        "plier", "scalpel", "lab knife", " knife", "blade", "wire brush",
+        " brush", "desolder", "solder sucker", "solder removal", "sand drum",
+        "mandrel", "dremel", "rotary tool", "caliper", "hex key", "allen key",
+        "chisel", "hammer", "drill bit", "utility knife", "hand tool", "tool set",
+    ]),
+    ("Consumables", [
+        "cable tie", "zip tie", "fastening", "electrical tape", "duct tape",
+        " tape", "glue", "adhesive", "sewing", "thread", "office supplies",
+        "craft", "solder wire", "flux",
+    ]),
+    ("Components", [
+        "jst", "pin header", "header connector", " header", "dupont", "breadboard",
+        "led segment", "dot matrix", "max7219", "segment display", "led display",
+        "slide switch", " switch", "buck", "boost", "converter", "regulator",
+        "trigger board", "charging board", "charger module", "tp4056", "voltage",
+        "diode", "emitter", "receiver", "resistor", "capacitor", "transistor",
+        "single board", "camera module", "module", " lens", "sensor", "ic chip",
+        "potentiometer",
+    ]),
+    ("Cables & Adapters", [
+        "cable", "cord", "pigtail", "ribbon", "ffc", "fpc", "flex", "ethernet",
+        "cat6", "cat 6", "patch cord", "csi", "hdmi", "sd card", "microsd",
+        "memory card", "sd memory", "adapter",
+    ]),
+    ("Devices", [
+        "speaker", "amplifier", "flash drive", "thumb drive", "headphone",
+        "earbud", "microphone", " webcam", "power bank", "bluetooth", "soundbar",
+    ]),
+    ("Other", [
+        "cooler", "backpack", "water pump", " pump", "bottle", " bag", "fountain",
+    ]),
+]
+
+
+def _classify_type(row: Dict[str, Any]) -> str:
+    """Best-guess TYPE_GROUP for an item from its category, name, and tags.
+
+    Deterministic and side-effect free. Always returns one of TYPE_GROUPS,
+    defaulting to "Other" when nothing matches.
+    """
+    hay = " ".join([
+        str(row.get("category", "")),
+        str(row.get("name", "")),
+        " ".join(str(t) for t in (row.get("tags") or [])),
+    ]).lower()
+    # Pad so a leading-space keyword can also match a term at the very start.
+    hay = " " + hay
+    for group, keywords in _TYPE_RULES:
+        if any(kw in hay for kw in keywords):
+            return group
+    return "Other"
+
+
+def types(rows: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """Distinct type groups present, ordered by the canonical TYPE_GROUPS."""
+    rows = rows if rows is not None else inventory()
+    present = {(r.get("type") or "").strip() for r in rows}
+    present.discard("")
+    ordered = [g for g in TYPE_GROUPS if g in present]
+    # Include any non-canonical values a user typed, after the known groups.
+    ordered += sorted(present - set(TYPE_GROUPS), key=str.lower)
+    return ordered
+
+
+def assign_types(overwrite: bool = False) -> int:
+    """Persist an auto-classified Type onto stored items.
+
+    By default only fills items that don't already have a stored Type (so manual
+    choices are preserved); pass ``overwrite=True`` to reclassify everything.
+    Returns the number of items changed.
+    """
+    rows = _load()
+    changed = 0
+    for r in rows:
+        current = (r.get("type") or "").strip()
+        if current and not overwrite:
+            continue
+        new_type = _classify_type(r)
+        if new_type != current:
+            r["type"] = new_type
+            changed += 1
+    if changed:
+        _save(rows)
+    return changed
 
 def summary_by(field: str, rows: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """
@@ -1274,6 +1403,7 @@ def merge_preview(items: List[Dict[str, Any]],
         "name": primary.get("name", ""),
         "description": longest_desc,
         "category": _first_nonempty(ordered, "category"),
+        "type": _first_nonempty(ordered, "type"),
         "location": _first_nonempty(ordered, "location"),
         "location_code": _first_nonempty(ordered, "location_code"),
         "qty": total_qty,
@@ -1410,7 +1540,7 @@ def merge_group(primary_id: int, merge_ids: List[int],
         merged.update(overrides)
 
     # Write the merged fields onto the primary row (keep its id), drop the rest.
-    for k in ("name", "description", "category", "location", "location_code", "qty",
+    for k in ("name", "description", "category", "type", "location", "location_code", "qty",
               "images", "ocr_text", "specifications", "estimated_value", "dimensions",
               "product_url", "tags", "created_at"):
         primary[k] = merged.get(k, primary.get(k))

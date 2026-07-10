@@ -23,22 +23,28 @@ to find something or restock.
   picture or choose an existing photo** from the same chooser; on a desktop it
   opens the file picker. Attach multiple photos per item, preview before saving,
   and view them full‑size in a carousel.
-- 🗂️ **Organize** — every item has a **Category** and **Location** (with
-  type‑ahead suggestions from what you've already used), a **Quantity**, a
-  description, and photos.
+- 🗂️ **Organize** — every item has a coarse **Type**, a detailed **Category**,
+  and a **Location** (all with type‑ahead suggestions from what you've already
+  used), plus a **Quantity**, description, and photos.
+- 🏷️ **Type (top‑level grouping)** — a short, stable group for browsing:
+  **Tools · Components · Cables & Adapters · Devices · Consumables · Other**.
+  Leave it blank and the app **auto‑groups** each item from its name/category
+  (so a shelf of scraped listings sorts itself into tools‑with‑tools,
+  parts‑with‑parts), while **Category** keeps the specific sub‑label underneath.
+  Filter, and sort by Type from the dashboard.
 - ⚡ **Fast batch entry** — **Save & Next** stores the item and keeps the
-  category / location / bin so you can rip through a whole shelf without
+  type / category / location / bin so you can rip through a whole shelf without
   re‑typing where things live.
 - 📷 **Quick phone scan** — on your phone, just snap a photo and tap **Save &
   Next**: a blank name **auto‑numbers** (Item 0001, Item 0002 …), so you can bang
   through a pile of items with photos only, then fill in real names/details later
   from a desktop.
-- 🔎 **Find fast** — full‑text search across name / category / location / bin /
-  notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters for
-  category and location.
-- ✅ **Bulk edit** — tick several rows to set their category / location / bin in
-  one go, or delete them together — quick cleanup after a big scan. Merges and
-  bulk deletes offer a one‑click **Undo**.
+- 🔎 **Find fast** — full‑text search across name / type / category / location /
+  bin / notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters
+  for type, category, and location.
+- ✅ **Bulk edit** — tick several rows to set their type / category / location /
+  bin in one go, or delete them together — quick cleanup after a big scan. Merges
+  and bulk deletes offer a one‑click **Undo**.
 - 📊 **At‑a‑glance** — KPI cards (total items, total quantity, low‑stock count,
   categories) and an **Overview** grouped by location and by category.
 - 📤 **Export** — one‑click CSV of your whole inventory (including bin, specs,
