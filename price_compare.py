@@ -101,9 +101,12 @@ def detect_quantity(name: str, specs: Optional[List[str]] = None,
     # "Pack of 6", "Set of 3", "Box of 24"
     for m in re.finditer(rf"\b({_UNIT_WORDS})\s+of\s+(\d[\d,]*)", text, re.I):
         _add(m.group(2).replace(",", ""), _norm_unit(m.group(1)))
-    # "x100" / "100x"
-    for m in re.finditer(r"\bx\s*(\d{2,})\b|\b(\d{2,})\s*x\b", text, re.I):
-        _add((m.group(1) or m.group(2)), "each")
+    # "x100" / "100x" bundle notation — but NOT a dimension like "16x24" or
+    # "10 x 20 x 5 cm", where the 'x' has digits on both sides.
+    for m in re.finditer(r"(?<![\dx])x\s*(\d{2,})(?!\s*[x\d])", text, re.I):
+        _add(m.group(1), "each")
+    for m in re.finditer(r"(?<![\dx])(\d{2,})\s*x(?!\s*[\dx])", text, re.I):
+        _add(m.group(1), "each")
     # "Qty: 50" / "Quantity 50"
     for m in re.finditer(r"\b(?:qty|quantity)\.?\s*[:=]?\s*(\d[\d,]*)", text, re.I):
         _add(m.group(1).replace(",", ""), "each")
@@ -246,7 +249,12 @@ def suggest_label(products: List[Dict[str, Any]]) -> str:
 
 def _slug(label: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (label or "").lower()).strip("-")
-    return s or "search"
+    if s:
+        return s
+    # Non-ASCII / punctuation-only labels (電池, "$$$") would all collapse to the
+    # same id and cross-contaminate their histories — give each a stable hash.
+    import hashlib
+    return "s-" + hashlib.md5((label or "").encode("utf-8")).hexdigest()[:8]
 
 
 def _today() -> str:

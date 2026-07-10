@@ -265,6 +265,67 @@ def remove_item(item_id: int) -> Optional[Dict[str, Any]]:
     _save(new)
     return removed
 
+
+# Fields that may be patched in place without a full form round-trip.
+_PATCHABLE = {"name", "description", "category", "location", "location_code",
+              "qty", "estimated_value", "dimensions", "product_url"}
+
+
+def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
+    """Patch specific fields on one item (e.g. write a price back). Returns it."""
+    rows = inventory()
+    found = None
+    for r in rows:
+        if int(r.get("id") or 0) == int(item_id):
+            for k, v in fields.items():
+                if k in _PATCHABLE and v is not None:
+                    r[k] = int(v) if k == "qty" else (str(v).strip() if isinstance(v, str) else v)
+            found = r
+            break
+    if found is not None:
+        _save(rows)
+    return found
+
+
+def bulk_set_fields(ids: List[int], category: Optional[str] = None,
+                    location: Optional[str] = None,
+                    location_code: Optional[str] = None) -> int:
+    """Set category / location / bin on many items at once (only given fields).
+
+    Passing ``None`` leaves a field untouched; passing ``""`` clears it.
+    Returns the number of items changed.
+    """
+    id_set = {int(i) for i in ids or []}
+    if not id_set:
+        return 0
+    rows = inventory()
+    changed = 0
+    for r in rows:
+        if int(r.get("id") or 0) in id_set:
+            if category is not None:
+                r["category"] = category.strip()
+            if location is not None:
+                r["location"] = location.strip()
+            if location_code is not None:
+                r["location_code"] = location_code.strip()
+            changed += 1
+    if changed:
+        _save(rows)
+    return changed
+
+
+def bulk_remove(ids: List[int]) -> int:
+    """Delete many items at once. Returns the number removed."""
+    id_set = {int(i) for i in ids or []}
+    if not id_set:
+        return 0
+    rows = inventory()
+    kept = [r for r in rows if int(r.get("id") or 0) not in id_set]
+    removed = len(rows) - len(kept)
+    if removed:
+        _save(kept)
+    return removed
+
 def add_image_to_item(item_id: int, image_filename: str) -> Dict[str, Any]:
     """Add an image to an existing item's image list."""
     rows = inventory()
@@ -844,7 +905,7 @@ def _content_tokens(row: Dict[str, Any]) -> set:
     Unlike ``_tokenize`` this keeps digit-bearing codes (9v, cr2032) and battery
     sizes (aa/aaa), and singularises plurals so 'battery' == 'batteries'.
     """
-    text = " ".join([row.get("name", "")] + [str(t) for t in row.get("tags", []) or []]).lower()
+    text = " ".join([row.get("name") or ""] + [str(t) for t in row.get("tags", []) or []]).lower()
     out = set()
     for t in _re.findall(r"[a-z0-9][a-z0-9\-]*", text):
         t = t.strip("-")
@@ -859,7 +920,7 @@ def _content_tokens(row: Dict[str, Any]) -> set:
 
 def _codes(row: Dict[str, Any]) -> set:
     """Distinguishing size/model codes in the name (9v, cr2032, aa, m3, 6ft…)."""
-    text = (row.get("name", "") or "").lower()
+    text = (row.get("name") or "").lower()
     out = set()
     for t in _re.findall(r"[a-z0-9][a-z0-9\-]*", text):
         t = t.strip("-")
@@ -1012,14 +1073,40 @@ def find_duplicate_groups(
         if ri != rj:
             parent[ri] = rj
 
-    # Track the weakest link used to join each cluster, for a shown match %.
-    pair_scores: List[float] = []
-    for i in range(n):
-        for j in range(i + 1, n):
-            s = item_similarity(rows[i], rows[j])
-            if s >= threshold:
-                union(i, j)
-                pair_scores.append(s)
+    # Blocking: rather than compare all n² pairs (slow past a few hundred items),
+    # only compare items that share a signal — a significant word, a name prefix
+    # (to still catch typos), the same product URL, or the same full name. This
+    # keeps a big "scan everything" inventory responsive without missing real dups.
+    buckets: Dict[Any, List[int]] = {}
+
+    def _bucket(key, idx):
+        buckets.setdefault(key, []).append(idx)
+
+    for i, r in enumerate(rows):
+        na = _norm_name(r.get("name", ""))
+        if na:
+            _bucket(("name", na), i)
+            _bucket(("pfx", na[:5]), i)
+        u = _norm_url(r.get("product_url", ""))
+        if u:
+            _bucket(("url", u), i)
+        for t in _content_tokens(r):
+            _bucket(("tok", t), i)
+
+    candidates: set = set()
+    for key, idxs in buckets.items():
+        # Skip over-common keys (a token shared by hundreds of items isn't a
+        # useful discriminator and would reintroduce the n² blow-up).
+        if len(idxs) < 2 or len(idxs) > 400:
+            continue
+        for a in range(len(idxs)):
+            for b in range(a + 1, len(idxs)):
+                i, j = idxs[a], idxs[b]
+                candidates.add((i, j) if i < j else (j, i))
+
+    for i, j in candidates:
+        if item_similarity(rows[i], rows[j]) >= threshold:
+            union(i, j)
 
     clusters: Dict[int, List[int]] = {}
     for i in range(n):
