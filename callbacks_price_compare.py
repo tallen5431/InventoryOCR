@@ -2,7 +2,7 @@
 from __future__ import annotations
 import base64
 
-from dash import html, dcc, Input, Output, State, no_update, ctx
+from dash import html, dcc, Input, Output, State, no_update, ctx, ALL
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
@@ -60,12 +60,12 @@ def _comparison_table(res):
         return html.Div("Upload a few product pages, then Compare.", className="text-muted")
 
     header = html.Thead(html.Tr([
-        html.Th("#"), html.Th("Product"), html.Th("Pack", className="text-end"),
+        html.Th("#"), html.Th("Product"), html.Th("Pack qty", className="text-end"),
         html.Th("Price", className="text-end"), html.Th("Per unit", className="text-end"),
         html.Th("In inventory"), html.Th(""),
     ]))
     rows = []
-    for i, p in enumerate(products, 1):
+    for i, p in enumerate(products):
         cur = p.get("currency", "$")
         best = p.get("best")
         name_cell = [html.Div(p["name"], className="fw-semibold"),
@@ -76,12 +76,17 @@ def _comparison_table(res):
         link = (html.A(html.I(className="bi bi-box-arrow-up-right"), href=p["url"],
                        target="_blank", rel="noopener noreferrer", title="Open listing")
                 if p.get("url") else "")
-        rank = html.Span("🏆", title="Best price per unit") if best else str(i)
+        rank = html.Span("🏆", title="Best price per unit") if best else str(i + 1)
+        # Editable pack size — correct a mis-detected count and Recalculate.
+        qty_cell = dbc.Input(id={"type": "pc-qty", "index": i}, type="number",
+                             min=1, step=1, value=p.get("quantity", 1),
+                             size="sm", style={"width": "72px", "display": "inline-block"},
+                             className="text-end")
         rows.append(html.Tr(
             [
                 html.Td(rank),
                 html.Td(name_cell),
-                html.Td(f"{p.get('quantity', 1)} {p.get('unit', 'each')}", className="text-end text-nowrap"),
+                html.Td(qty_cell, className="text-end text-nowrap"),
                 html.Td(_money(p.get("price_value"), cur), className="text-end text-nowrap"),
                 html.Td(html.Strong(_unit_money(p.get("unit_price"), cur)),
                         className="text-end text-nowrap"),
@@ -90,8 +95,14 @@ def _comparison_table(res):
             ],
             className=("table-success" if best else ""),
         ))
-    return dbc.Table([header, html.Tbody(rows)], striped=True, hover=True,
-                     responsive=True, className="align-middle pc-compare-table")
+    table = dbc.Table([header, html.Tbody(rows)], striped=True, hover=True,
+                      responsive=True, className="align-middle pc-compare-table")
+    recalc = html.Div(
+        dbc.Button([html.I(className="bi bi-arrow-repeat me-1"), "Recalculate after editing pack sizes"],
+                   id="pc-recalc", color="outline-secondary", size="sm", n_clicks=0),
+        className="mt-1",
+    )
+    return html.Div([table, recalc])
 
 
 def _sparkline(points, cur="$"):
@@ -275,6 +286,38 @@ def register_price_compare_callbacks(app):
                             f"Compared {ok} product(s)."], className="text-success")
         name = (current_name or "").strip() or pc.suggest_label(res["products"])
         return res, _comparison_table(res), _best_banner(res), errbox, status, name, _writeback_bar(res)
+
+    # ---- Recompute after the user corrects a pack size ----
+    @app.callback(
+        Output("pc-results", "data", allow_duplicate=True),
+        Output("pc-table", "children", allow_duplicate=True),
+        Output("pc-best", "children", allow_duplicate=True),
+        Output("pc-writeback", "children", allow_duplicate=True),
+        Input("pc-recalc", "n_clicks"),
+        State({"type": "pc-qty", "index": ALL}, "value"),
+        State("pc-results", "data"),
+        prevent_initial_call=True,
+    )
+    def recalc(n, qtys, results):
+        if not n or not results:
+            raise PreventUpdate
+        products = results.get("products", [])
+        # Map each pack-size input back to its product by index.
+        qmap = {s["id"]["index"]: s.get("value") for s in (ctx.states_list[0] or [])}
+        for i, p in enumerate(products):
+            q = qmap.get(i)
+            try:
+                q = int(q)
+            except (TypeError, ValueError):
+                q = p.get("quantity", 1)
+            q = max(1, q)
+            p["quantity"] = q
+            pv = p.get("price_value")
+            p["unit_price"] = round(pv / q, 4) if pv is not None else None
+        ranked = pc._rank(products)
+        res = {**results, "products": ranked,
+               "best": next((p for p in ranked if p.get("best")), None)}
+        return res, _comparison_table(res), _best_banner(res), _writeback_bar(res)
 
     # ---- Save the current comparison as a dated snapshot ----
     @app.callback(
