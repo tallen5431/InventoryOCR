@@ -37,7 +37,8 @@ to find something or restock.
   notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters for
   category and location.
 - ✅ **Bulk edit** — tick several rows to set their category / location / bin in
-  one go, or delete them together — quick cleanup after a big scan.
+  one go, or delete them together — quick cleanup after a big scan. Merges and
+  bulk deletes offer a one‑click **Undo**.
 - 📊 **At‑a‑glance** — KPI cards (total items, total quantity, low‑stock count,
   categories) and an **Overview** grouped by location and by category.
 - 📤 **Export** — one‑click CSV of your whole inventory (including bin, specs,
@@ -276,6 +277,8 @@ without trawling tabs by hand.
    **price per unit** is worked out — so a 48‑pack at \$22.99 correctly beats an
    8‑pack at \$7.49. The table ranks cheapest‑per‑unit first and 🏆 marks the
    winner. If a listing matches something already in your inventory, it says so.
+4. Detection got a pack size wrong? The **Pack qty** cells are editable — fix a
+   number and hit **Recalculate** to re‑price and re‑rank.
 
 **Track prices over time.** Give the comparison a name (e.g. *AA Batteries*) and
 **Save** — it's stored as a dated snapshot in `price_compare.json`. Re‑run the
@@ -346,12 +349,17 @@ under slightly different names (*AA Battery* / *AA Batteries*), sometimes with t
 count split across entries. **Merge duplicates** (in the Storage map card) fixes
 that:
 
-1. Pick how alike counts as a duplicate — **Identical only**, **Similar**
-   (recommended), or **Loosely similar** — then **Scan**.
-2. Each group shows the entries it will combine and a **Becomes:** preview — the
-   quantities are **added up** and every photo, spec and tag is kept. The richest
-   entry (most photos/details) is kept as the survivor.
-3. Untick any group you'd rather leave alone, then **Merge selected**.
+1. Open it — it **scans right away** (at the *Similar* level). Change the
+   sensitivity — **Identical only**, **Similar** (recommended), or **Loosely
+   similar** — and **Scan** again if you like.
+2. Each group shows the entries it will combine. **Choose which entry survives**
+   (its name is offered, and picking a survivor sets that field to its name) and
+   **rename** the result if you want; the quantities are **added up** and every
+   photo, spec and tag is kept.
+3. Toggle off any group you'd rather leave alone, then **Merge selected**.
+
+Changed your mind? An **Undo** bar appears after a merge (and after a bulk
+delete) — one click rolls it straight back.
 
 It's deliberately careful about *size/model* differences: **AA vs 9V**, **M3 vs
 M5**, or two listings with different part numbers are held apart even when the

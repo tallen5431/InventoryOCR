@@ -326,6 +326,91 @@ def bulk_remove(ids: List[int]) -> int:
         _save(kept)
     return removed
 
+
+# --------------------------------------------------------------------
+# One-step undo for destructive operations (merge / bulk delete)
+# --------------------------------------------------------------------
+# Snapshot inventory.json just before a destructive change so it can be rolled
+# back in one click. Single level — the newest snapshot wins.
+
+def _undo_path() -> Path:
+    # Name ends in .json so it's covered by the *.json gitignore (stays local).
+    p = Path(INVENTORY_JSON)
+    return p.with_name(p.stem + ".undo.json")
+
+
+def _undo_chk_path() -> Path:
+    """The state the destructive op produced — undo is only safe while it holds."""
+    p = Path(INVENTORY_JSON)
+    return p.with_name(p.stem + ".undo.chk.json")
+
+
+def _clear_undo() -> None:
+    for p in (_undo_path(), _undo_chk_path()):
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def snapshot_inventory() -> None:
+    """Copy the current inventory aside so the next change can be undone."""
+    src = Path(INVENTORY_JSON)
+    try:
+        _undo_path().write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        # A fresh snapshot invalidates any earlier op's validity checkpoint.
+        _undo_chk_path().unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def commit_undo() -> None:
+    """Record the state the op produced, so a later undo can confirm nothing
+    else has changed the inventory since (guards against clobbering new edits)."""
+    try:
+        _undo_chk_path().write_text(
+            Path(INVENTORY_JSON).read_text(encoding="utf-8"), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def has_undo() -> bool:
+    return _undo_path().exists()
+
+
+def restore_inventory() -> str:
+    """Roll inventory back to the last snapshot.
+
+    Returns ``"restored"`` on success, ``"stale"`` if the inventory has changed
+    since the operation (so undoing would lose that change — refused), or
+    ``"none"`` if there's nothing to undo.
+    """
+    bak = _undo_path()
+    if not bak.exists():
+        return "none"
+    # Require a checkpoint that still matches the current inventory. If it's
+    # missing (checkpoint write failed / crash) or differs (edited since), refuse
+    # rather than blindly overwriting — never trade a convenience for data loss.
+    chk = _undo_chk_path()
+    if not chk.exists():
+        _clear_undo()
+        return "stale"
+    try:
+        current = json.loads(Path(INVENTORY_JSON).read_text(encoding="utf-8"))
+        produced = json.loads(chk.read_text(encoding="utf-8"))
+    except Exception:
+        _clear_undo()
+        return "stale"
+    if current != produced:
+        _clear_undo()  # user has since changed things — don't clobber them
+        return "stale"
+    try:
+        Path(INVENTORY_JSON).write_text(bak.read_text(encoding="utf-8"), encoding="utf-8")
+        _clear_undo()  # one-shot: consume the snapshot so undo isn't repeatable
+        return "restored"
+    except Exception:
+        return "none"
+
 def add_image_to_item(item_id: int, image_filename: str) -> Dict[str, Any]:
     """Add an image to an existing item's image list."""
     rows = inventory()
@@ -995,11 +1080,18 @@ def _first_nonempty(items: List[Dict[str, Any]], field: str) -> str:
     return ""
 
 
-def merge_preview(items: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Compute the combined item without saving. Primary listed first."""
+def merge_preview(items: List[Dict[str, Any]],
+                  primary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Compute the combined item without saving.
+
+    The *primary* (survivor) is listed first, so its single-value fields
+    (category, location, value…) win. Pass ``primary`` to honour a user's choice;
+    otherwise the richest entry is picked automatically.
+    """
     if not items:
         return {}
-    primary = _pick_primary(items)
+    if primary is None or primary not in items:
+        primary = _pick_primary(items)
     ordered = [primary] + [r for r in items if r is not primary]
 
     descriptions = [(r.get("description") or "").strip() for r in ordered]
@@ -1156,7 +1248,8 @@ def merge_group(primary_id: int, merge_ids: List[int],
     if not ids:
         return primary
     group = [primary] + [by_id[i] for i in ids]
-    merged = merge_preview(group)
+    # The chosen survivor's single-value fields (category, location, value…) win.
+    merged = merge_preview(group, primary=primary)
     if overrides:
         merged.update(overrides)
 

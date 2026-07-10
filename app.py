@@ -241,6 +241,7 @@ def dashboard_layout():
                 className="text-center text-muted mb-3",
             ),
             kpi_bar(),
+            html.Div(id="undo-bar"),
             dbc.Row(
                 [
                     dbc.Col(sidebar_form(), xs=12, sm=12, md=12, lg=4, xl=4, className="mb-3 mb-lg-0"),
