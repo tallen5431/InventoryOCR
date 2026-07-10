@@ -7,6 +7,7 @@ from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
 import price_compare as pc
+import data
 
 
 # --------------------------------------------------------------------
@@ -122,6 +123,39 @@ def _sparkline(points, cur="$"):
     )
 
 
+def _matched_best(products):
+    """Best (lowest unit-price) listing per matched inventory item id."""
+    best = {}
+    for p in products or []:
+        mid = p.get("matched_item_id")
+        up = p.get("unit_price")
+        if mid is None or up is None:
+            continue
+        cur = best.get(mid)
+        if cur is None or up < cur["unit_price"]:
+            best[mid] = p
+    return best
+
+
+def _writeback_bar(res):
+    """Offer to write the best unit price + link onto matched inventory items."""
+    matched = _matched_best(res.get("products", []))
+    if not matched:
+        return html.Div()
+    n = len(matched)
+    return dbc.Alert(
+        [
+            html.I(className="bi bi-box-seam me-2"),
+            html.Span(f"{n} of these match item(s) already in your inventory. "),
+            dbc.Button([html.I(className="bi bi-tag me-1"),
+                        f"Save best price to {n} item{'s' if n != 1 else ''}"],
+                       id="pc-writeback-apply", color="success", size="sm", className="ms-2"),
+            html.Div(id="pc-writeback-status", className="small mt-1"),
+        ],
+        color="secondary", className="py-2 mt-2",
+    )
+
+
 def _history_view(search):
     if not search:
         return html.Div("Pick a saved search to see its price history.", className="text-muted")
@@ -199,6 +233,7 @@ def register_price_compare_callbacks(app):
         Output("pc-errors", "children"),
         Output("pc-status", "children"),
         Output("pc-name", "value"),
+        Output("pc-writeback", "children"),
         Input("pc-compare", "n_clicks"),
         State("pc-upload", "contents"),
         State("pc-upload", "filename"),
@@ -212,7 +247,8 @@ def register_price_compare_callbacks(app):
         filenames = filenames if isinstance(filenames, list) else ([filenames] if filenames else [])
         if not contents:
             return no_update, no_update, no_update, no_update, \
-                html.Span("Drop at least one .html file first.", className="text-warning"), no_update
+                html.Span("Drop at least one .html file first.", className="text-warning"), \
+                no_update, no_update
 
         files = []
         for c, fn in zip(contents, filenames):
@@ -222,7 +258,8 @@ def register_price_compare_callbacks(app):
 
         if not files:
             return no_update, no_update, no_update, no_update, \
-                html.Span("Couldn't read those files.", className="text-warning"), no_update
+                html.Span("Couldn't read those files.", className="text-warning"), \
+                no_update, no_update
 
         res = pc.analyze_htmls(files)
         errbox = html.Div()
@@ -237,7 +274,7 @@ def register_price_compare_callbacks(app):
         status = html.Span([html.I(className="bi bi-check-circle me-1"),
                             f"Compared {ok} product(s)."], className="text-success")
         name = (current_name or "").strip() or pc.suggest_label(res["products"])
-        return res, _comparison_table(res), _best_banner(res), errbox, status, name
+        return res, _comparison_table(res), _best_banner(res), errbox, status, name, _writeback_bar(res)
 
     # ---- Save the current comparison as a dated snapshot ----
     @app.callback(
@@ -260,6 +297,29 @@ def register_price_compare_callbacks(app):
                          f'Saved to "{search["label"]}" ({runs} run{"s" if runs != 1 else ""}).'],
                         className="text-success")
         return msg, search["id"]
+
+    # ---- Write the best price + link back onto matched inventory items ----
+    @app.callback(
+        Output("pc-writeback-status", "children"),
+        Input("pc-writeback-apply", "n_clicks"),
+        State("pc-results", "data"),
+        prevent_initial_call=True,
+    )
+    def apply_writeback(n, results):
+        if not n:
+            raise PreventUpdate
+        matched = _matched_best((results or {}).get("products", []))
+        if not matched:
+            return html.Span("No matched items to update.", className="text-warning")
+        updated = 0
+        for mid, p in matched.items():
+            val = _unit_money(p.get("unit_price"), p.get("currency", "$"))
+            url = (p.get("url") or "").strip() or None
+            if data.update_item_fields(mid, estimated_value=val, product_url=url) is not None:
+                updated += 1
+        return html.Span([html.I(className="bi bi-check-circle me-1"),
+                          f"Updated {updated} item{'s' if updated != 1 else ''} with best unit price."],
+                         className="text-success")
 
     # ---- Populate / refresh the saved-search dropdown ----
     @app.callback(

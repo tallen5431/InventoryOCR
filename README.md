@@ -36,6 +36,8 @@ to find something or restock.
 - 🔎 **Find fast** — full‑text search across name / category / location / bin /
   notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters for
   category and location.
+- ✅ **Bulk edit** — tick several rows to set their category / location / bin in
+  one go, or delete them together — quick cleanup after a big scan.
 - 📊 **At‑a‑glance** — KPI cards (total items, total quantity, low‑stock count,
   categories) and an **Overview** grouped by location and by category.
 - 📤 **Export** — one‑click CSV of your whole inventory (including bin, specs,
@@ -53,7 +55,8 @@ to find something or restock.
 - 💲 **Price Compare** — drop several saved listing `.html` files for the same
   product and the app works out each one's **price per unit** (handling packs of
   many), ranks the best deal, and can **track prices over time** across repeat
-  runs.
+  runs. If a listing matches something you own, one click **writes the best unit
+  price + link back** onto that item.
 - 🧺 **Storage system** — give items a short **bin / location code**, or run
   **Smart Organize** to group like items into labelled bins automatically. A live
   **Storage map** shows what lives in each bin so a keyword search tells you
@@ -61,7 +64,8 @@ to find something or restock.
 - 🧬 **Merge duplicates** — scanned the same thing twice? **Merge duplicates**
   finds identical / very similar entries, previews the combined item (quantities
   added, photos/specs/tags kept), and merges the ones you pick — while keeping
-  genuinely different sizes/models (AA vs 9V, M3 vs M5) apart.
+  genuinely different sizes/models (AA vs 9V, M3 vs M5) apart. A badge on the
+  button flags likely duplicates automatically so you don't have to remember to look.
 - 📱 **Connect panel** — the navbar **Connect** button lists every address the app
   is reachable at (local network, Tailscale, localhost) with **QR codes**, so you
   can scan it open on your phone.
@@ -279,6 +283,11 @@ same name later (new listings, new prices) and each run adds a snapshot, so the
 **Tracked searches** panel shows the best unit price over time with a little
 trend line — handy for knowing when a price is actually a good one.
 
+**Write it back to your inventory.** If any compared listing matches an item you
+already have, a bar appears offering to **save the best unit price** (and the
+listing link) straight onto that item — so the value in your catalogue reflects
+the best deal you found.
+
 ## Storage & retrieval — find where you put things
 
 The whole point of scanning your stuff is being able to find it later. Two pieces
@@ -349,6 +358,13 @@ M5**, or two listings with different part numbers are held apart even when the
 rest of the name matches, so a quick clean‑up never collapses things that aren't
 actually the same. Matching happens on the item name, tags and category — nothing
 leaves your machine.
+
+You don't have to remember to check: the **Merge duplicates** button shows a
+badge with the number of likely duplicate groups whenever some are detected.
+
+> **Bulk edit tip:** after a scan, tick several rows in the table to reveal the
+> bulk bar — set their category / location / bin at once, or delete them
+> together. Ticking a single row still opens it in the edit form as usual.
 
 ## Data & storage
 

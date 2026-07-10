@@ -91,6 +91,7 @@ def price_compare_layout():
                         [
                             html.Div(id="pc-best"),
                             dcc.Loading(html.Div(id="pc-table"), type="default"),
+                            html.Div(id="pc-writeback"),
                             html.Div(id="pc-errors", className="mt-2"),
                         ],
                         xs=12, lg=8,

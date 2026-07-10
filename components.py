@@ -384,7 +384,7 @@ def inventory_table():
         columns=columns,
         data=[],
         page_size=DATATABLE_PAGE_SIZE,
-        row_selectable="single",
+        row_selectable="multi",
         selected_rows=[],
         tooltip_delay=0,
         tooltip_duration=None,
@@ -447,13 +447,58 @@ def inventory_table():
         [
             html.Div(
                 html.Span(
-                    ["Tap a row to edit · tap a ", html.I(className="bi bi-image"), " thumbnail to view photos"],
+                    ["Tick one row to edit · tick several to bulk-edit · tap a ",
+                     html.I(className="bi bi-image"), " thumbnail to view photos"],
                     className="text-muted small",
                 ),
                 className="mb-2",
             ),
+            _bulk_bar(),
             html.Div([table], className="table-responsive"),
         ]
+    )
+
+
+def _bulk_bar():
+    """Actions that appear when 2+ rows are ticked: set fields / delete."""
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                html.Div(
+                    [html.I(className="bi bi-check2-square me-2"),
+                     html.Strong(id="bulk-count"), " — set these on all, then Apply:"],
+                    className="mb-2 small",
+                ),
+                dbc.Row(
+                    [
+                        dbc.Col(dbc.Input(id="bulk-category", placeholder="Category",
+                                          size="sm", list="category-datalist"), xs=12, sm=4, md=3),
+                        dbc.Col(dbc.Input(id="bulk-location", placeholder="Location",
+                                          size="sm", list="location-datalist"), xs=12, sm=4, md=3),
+                        dbc.Col(dbc.Input(id="bulk-code", placeholder="Bin / code",
+                                          size="sm", list="location-code-datalist"), xs=12, sm=4, md=2),
+                        dbc.Col(
+                            dbc.Button([html.I(className="bi bi-check2 me-1"), "Apply"],
+                                       id="bulk-apply", color="primary", size="sm", className="w-100"),
+                            xs=6, sm=6, md=2,
+                        ),
+                        dbc.Col(
+                            dbc.Button([html.I(className="bi bi-trash me-1"), "Delete"],
+                                       id="bulk-delete", color="outline-danger", size="sm", className="w-100"),
+                            xs=6, sm=6, md=2,
+                        ),
+                    ],
+                    className="g-2 align-items-center",
+                ),
+                html.Div(
+                    dbc.Button("Clear selection", id="bulk-clear", color="link", size="sm",
+                               className="p-0 mt-1 text-muted"),
+                ),
+            ]
+        ),
+        id="bulk-bar",
+        className="mb-2 border-primary",
+        style={"display": "none"},
     )
 
 
@@ -671,7 +716,8 @@ def organize_card():
                                     title="Define the containers you own and pack items into them",
                                 ),
                                 dbc.Button(
-                                    [html.I(className="bi bi-layers me-1"), "Merge duplicates"],
+                                    [html.I(className="bi bi-layers me-1"), "Merge duplicates",
+                                     html.Span(id="dup-count-badge", className="ms-1")],
                                     id="open-dups",
                                     color="secondary",
                                     size="sm",

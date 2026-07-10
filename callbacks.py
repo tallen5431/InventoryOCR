@@ -811,9 +811,11 @@ def register_callbacks(app):
         elif triggered == "cancel-button":
             _clear_form()
 
-        # Selecting a row populates form
+        # Selecting a single row populates the form for editing. When 2+ rows are
+        # ticked the user is bulk-editing, so leave the form alone (the bulk bar
+        # handles it) and don't load anything.
         elif triggered == "inventory-table":
-            if sel_rows:
+            if sel_rows and len(sel_rows) == 1:
                 idx = sel_rows[0]
                 if isinstance(idx, int) and 0 <= idx < len(current_rows or []):
                     row = (current_rows or [])[idx]
@@ -1789,6 +1791,116 @@ def register_callbacks(app):
         msg = (f"Merged {res['groups']} group(s), removing {removed} duplicate "
                f"entr{'y' if removed == 1 else 'ies'}.")
         return (False, time.time(), "", None, True, "Duplicates merged", "success", msg)
+
+    # ---------- Auto-flag duplicates: badge on the Merge button ----------
+    @app.callback(
+        Output("dup-count-badge", "children"),
+        Input("refresh-seq", "data"),
+        Input("url", "pathname"),
+        prevent_initial_call=False,
+    )
+    def dup_badge(_seq, _path):
+        try:
+            n = len(data.find_duplicate_groups(level="balanced"))
+        except Exception:
+            n = 0
+        if not n:
+            return ""
+        return dbc.Badge(str(n), color="warning", pill=True, className="ms-1",
+                         title=f"{n} likely duplicate group(s) — click to review")
+
+    # ---------- Bulk edit: show the bar + count when 2+ rows ticked ----------
+    @app.callback(
+        Output("bulk-bar", "style"),
+        Output("bulk-count", "children"),
+        Input("inventory-table", "selected_rows"),
+        prevent_initial_call=True,
+    )
+    def bulk_bar(sel_rows):
+        n = len(sel_rows or [])
+        if n >= 2:
+            return {"display": "block"}, f"{n} items selected"
+        return {"display": "none"}, ""
+
+    def _selected_ids(sel_rows, rows):
+        ids = []
+        for i in (sel_rows or []):
+            if isinstance(i, int) and 0 <= i < len(rows or []):
+                rid = (rows[i] or {}).get("id")
+                if rid is not None:
+                    ids.append(int(rid))
+        return ids
+
+    # ---------- Bulk edit: apply category / location / bin ----------
+    @app.callback(
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("inventory-table", "selected_rows", allow_duplicate=True),
+        Output("bulk-category", "value"),
+        Output("bulk-location", "value"),
+        Output("bulk-code", "value"),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("bulk-apply", "n_clicks"),
+        State("inventory-table", "selected_rows"),
+        State("inventory-table", "data"),
+        State("bulk-category", "value"),
+        State("bulk-location", "value"),
+        State("bulk-code", "value"),
+        prevent_initial_call=True,
+    )
+    def bulk_apply(n, sel_rows, rows, cat, loc, code):
+        if not n:
+            raise PreventUpdate
+        ids = _selected_ids(sel_rows, rows)
+        # Only patch fields the user actually filled in (blank = leave as-is).
+        cat = cat.strip() if isinstance(cat, str) and cat.strip() else None
+        loc = loc.strip() if isinstance(loc, str) and loc.strip() else None
+        code = code.strip() if isinstance(code, str) and code.strip() else None
+        if not ids:
+            return (no_update, no_update, no_update, no_update, no_update,
+                    True, "Nothing selected", "warning", "Tick some rows first.")
+        if cat is None and loc is None and code is None:
+            return (no_update, no_update, no_update, no_update, no_update,
+                    True, "Nothing to set", "warning", "Fill in Category, Location or Bin first.")
+        changed = data.bulk_set_fields(ids, category=cat, location=loc, location_code=code)
+        return (time.time(), [], "", "", "", True, "Bulk update",
+                "success", f"Updated {changed} item{'s' if changed != 1 else ''}.")
+
+    # ---------- Bulk edit: delete the selected items ----------
+    @app.callback(
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("inventory-table", "selected_rows", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("bulk-delete", "n_clicks"),
+        State("inventory-table", "selected_rows"),
+        State("inventory-table", "data"),
+        prevent_initial_call=True,
+    )
+    def bulk_delete(n, sel_rows, rows):
+        if not n:
+            raise PreventUpdate
+        ids = _selected_ids(sel_rows, rows)
+        if not ids:
+            return (no_update, no_update, True, "Nothing selected", "warning", "Tick some rows first.")
+        removed = data.bulk_remove(ids)
+        return (time.time(), [], True, "Deleted",
+                "success", f"Removed {removed} item{'s' if removed != 1 else ''}.")
+
+    # ---------- Bulk edit: clear the selection ----------
+    @app.callback(
+        Output("inventory-table", "selected_rows", allow_duplicate=True),
+        Input("bulk-clear", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def bulk_clear(n):
+        if not n:
+            raise PreventUpdate
+        return []
 
     # ---------- Load selected item image into OCR Lab ----------
     @app.callback(
