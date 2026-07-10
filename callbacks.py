@@ -66,6 +66,10 @@ def _build_rows(filtered):
         row["location"] = (row.get("location") or "").strip()
         row["estimated_value"] = (row.get("estimated_value") or "").strip()
 
+        # "Added" column: show just the date (YYYY-MM-DD). This form also sorts
+        # correctly under the table's native column sort.
+        row["added"] = (row.get("created_at") or "")[:10]
+
         # Truncate the description so rows stay compact — the full text (and the
         # extracted specs) are shown in the row's hover tooltip.
         full_desc = (row.get("description") or "").strip()
@@ -94,6 +98,30 @@ def _apply_filters(items, search, filter_cat, filter_loc):
     if filter_loc:
         filtered = [r for r in filtered if (r.get("location") or "").strip() == filter_loc]
     return filtered
+
+
+def _apply_sort(rows, sort_by):
+    """Order rows for the table. Defaults to newest-added first.
+
+    Items missing a created_at (e.g. no image to derive one from) sort last under
+    the date orderings so the dated ones lead.
+    """
+    sb = sort_by or "date_desc"
+    if sb in ("date_desc", "date_asc"):
+        desc = sb == "date_desc"
+        # Empty created_at should always fall to the bottom, regardless of
+        # direction, so pair each row with a "has date" flag for the sort key.
+        def key(r):
+            c = r.get("created_at") or ""
+            return (bool(c), c) if desc else (not bool(c), c)
+        return sorted(rows, key=key, reverse=desc)
+    if sb in ("name_asc", "name_desc"):
+        return sorted(rows, key=lambda r: (r.get("name") or "").lower(),
+                      reverse=(sb == "name_desc"))
+    if sb in ("qty_asc", "qty_desc"):
+        return sorted(rows, key=lambda r: int(r.get("qty") or 0),
+                      reverse=(sb == "qty_desc"))
+    return rows
 
 def _breakdown_list(groups):
     """Render a summary_by() result as a compact list with quantity badges."""
@@ -720,6 +748,7 @@ def register_callbacks(app):
             Input("search-bar", "value"),
             Input("filter-category", "value"),
             Input("filter-location", "value"),
+            Input("sort-by", "value"),
             Input("refresh-seq", "data"),
         ],
         [
@@ -742,7 +771,7 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def manage_table(pathname, save_clicks, save_next_clicks, delete_clicks, sel_rows, cancel_clicks,
-                     search, filter_cat, filter_loc, _refresh_seq,
+                     search, filter_cat, filter_loc, sort_by, _refresh_seq,
                      name, desc, qty, category, location, location_code,
                      specs, value, dims, tags, producturl, img_contents,
                      current_images, editing_id, current_rows):
@@ -870,13 +899,14 @@ def register_callbacks(app):
                     # the item we just switched to.
                     next_upload = None
 
-        # Search / filter change: drop the stale selection highlight (the edit form
-        # and editing-id are intentionally left as-is).
-        elif triggered in ("search-bar", "filter-category", "filter-location"):
+        # Search / filter / sort change: drop the stale selection highlight (the
+        # edit form and editing-id are intentionally left as-is).
+        elif triggered in ("search-bar", "filter-category", "filter-location", "sort-by"):
             next_sel = []
 
-        # Filter/search
+        # Filter/search, then order for display.
         filtered = _apply_filters(items, search, filter_cat, filter_loc)
+        filtered = _apply_sort(filtered, sort_by)
         out_rows = _build_rows(filtered)
 
         return [
@@ -1167,7 +1197,7 @@ def register_callbacks(app):
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow([
-            "id", "name", "category", "location", "bin", "qty", "description",
+            "id", "name", "category", "location", "bin", "qty", "added", "description",
             "specifications", "estimated_value", "dimensions", "tags",
             "product_url", "ocr_text", "images",
         ])
@@ -1179,6 +1209,7 @@ def register_callbacks(app):
                 r.get("location", ""),
                 r.get("location_code", ""),
                 r.get("qty", 0),
+                r.get("created_at", ""),
                 r.get("description", ""),
                 " | ".join(r.get("specifications", []) or []),
                 r.get("estimated_value", ""),

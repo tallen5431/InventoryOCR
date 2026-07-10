@@ -1,8 +1,10 @@
 from __future__ import annotations
 import json
+import re as _re_date
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from config import INVENTORY_JSON
+from config import INVENTORY_JSON, ASSET_IMAGE_PATH
 
 # --------------------------------------------------------------------
 # Persistence helpers
@@ -28,6 +30,89 @@ def _load() -> List[Dict[str, Any]]:
 
 def _save(rows: List[Dict[str, Any]]) -> None:
     Path(INVENTORY_JSON).write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+# --------------------------------------------------------------------
+# "Date added" tracking
+# --------------------------------------------------------------------
+# Every item carries a created_at ISO timestamp so the dashboard can sort by
+# when it was scanned in. New items are stamped on save. Legacy items (added
+# before this field existed) are backfilled from their images: app-saved photos
+# embed the upload time in the filename (…-<ms>.<ext>), which is exactly "when it
+# was submitted to the index"; otherwise we fall back to the photo's EXIF capture
+# time, then the image file's modification time.
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+# App-saved images end in "-<13-digit-ms>.<ext>" (see utils.save_image).
+_STAMP_RE = _re_date.compile(r"-(\d{13})\.[A-Za-z0-9]+$")
+
+
+def _dt_from_filename(filename: str) -> Optional[datetime]:
+    m = _STAMP_RE.search(filename or "")
+    if not m:
+        return None
+    try:
+        return datetime.fromtimestamp(int(m.group(1)) / 1000.0)
+    except (ValueError, OSError, OverflowError):
+        return None
+
+
+def _dt_from_exif(path: Path) -> Optional[datetime]:
+    """Read a photo's capture time (EXIF DateTimeOriginal/DateTime), if present."""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            exif = im.getexif()
+            if not exif:
+                return None
+            val = None
+            try:
+                ifd = exif.get_ifd(0x8769)  # Exif sub-IFD
+                val = ifd.get(36867) or ifd.get(36868)  # DateTimeOriginal / Digitized
+            except Exception:
+                val = None
+            val = val or exif.get(306)  # DateTime (base IFD)
+            if val:
+                return datetime.strptime(str(val).strip(), "%Y:%m:%d %H:%M:%S")
+    except Exception:
+        return None
+    return None
+
+
+def _derive_created_at(record: Dict[str, Any]) -> str:
+    """Best-effort 'date added' for a record with no stored created_at.
+
+    Uses the earliest signal across the item's images: upload stamp embedded in
+    the filename → EXIF capture time → file mtime. Returns an ISO string or "".
+    """
+    images = record.get("images") or []
+    if isinstance(images, str):
+        images = [images]
+    best: Optional[datetime] = None
+    for fn in images:
+        if not fn:
+            continue
+        dt = _dt_from_filename(fn)
+        if dt is None:
+            p = Path(ASSET_IMAGE_PATH) / fn
+            dt = _dt_from_exif(p)
+            if dt is None:
+                try:
+                    dt = datetime.fromtimestamp(p.stat().st_mtime)
+                except (OSError, OverflowError):
+                    dt = None
+        if dt is not None and (best is None or dt < best):
+            best = dt
+    return best.isoformat(timespec="seconds") if best else ""
+
+
+def _earliest_created(items: List[Dict[str, Any]]) -> str:
+    """Earliest non-empty created_at across items (ISO strings compare correctly)."""
+    vals = [(r.get("created_at") or "") for r in items]
+    vals = [v for v in vals if v]
+    return min(vals) if vals else ""
+
 
 def inventory() -> List[Dict[str, Any]]:
     rows = _load()
@@ -70,7 +155,7 @@ def inventory() -> List[Dict[str, Any]]:
             if old_img:
                 images = [old_img]
 
-        norm.append({
+        rec = {
             "id": rid,
             "name": r.get("name", ""),
             "description": r.get("description", ""),
@@ -87,7 +172,10 @@ def inventory() -> List[Dict[str, Any]]:
             "dimensions": (r.get("dimensions") or "").strip(),
             "product_url": (r.get("product_url") or "").strip(),
             "tags": _norm_list(r.get("tags")),
-        })
+        }
+        # When it was added: keep the stored value, else derive from the images.
+        rec["created_at"] = (r.get("created_at") or "").strip() or _derive_created_at(rec)
+        norm.append(rec)
     return norm
 
 
@@ -175,6 +263,7 @@ def add_item(
         "qty": int(qty or 0),
         "images": _clean_images(images),
         "ocr_text": ocr_text or "",
+        "created_at": _now_iso(),
         "specifications": _norm_list(specifications),
         "estimated_value": (estimated_value or "").strip(),
         "dimensions": (dimensions or "").strip(),
@@ -1131,6 +1220,9 @@ def merge_preview(items: List[Dict[str, Any]],
         "dimensions": _first_nonempty(ordered, "dimensions"),
         "product_url": _first_nonempty(ordered, "product_url"),
         "tags": _union_list(ordered, "tags"),
+        # Keep the earliest scan date so the merged item reflects when it first
+        # entered the inventory.
+        "created_at": _earliest_created(ordered),
         "_primary_id": int(primary.get("id")),
         "_conflicts": conflicts,
     }
@@ -1256,7 +1348,7 @@ def merge_group(primary_id: int, merge_ids: List[int],
     # Write the merged fields onto the primary row (keep its id), drop the rest.
     for k in ("name", "description", "category", "location", "location_code", "qty",
               "images", "ocr_text", "specifications", "estimated_value", "dimensions",
-              "product_url", "tags"):
+              "product_url", "tags", "created_at"):
         primary[k] = merged.get(k, primary.get(k))
 
     kept = [r for r in rows if int(r.get("id")) not in ids]

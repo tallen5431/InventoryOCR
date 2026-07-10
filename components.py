@@ -349,6 +349,25 @@ def filter_card():
                         ],
                         className="g-2",
                     ),
+                    dbc.Row(
+                        dbc.Col(
+                            dcc.Dropdown(
+                                id="sort-by",
+                                clearable=False,
+                                options=[
+                                    {"label": "🕑 Newest first", "value": "date_desc"},
+                                    {"label": "🕑 Oldest first", "value": "date_asc"},
+                                    {"label": "🔤 Name (A–Z)", "value": "name_asc"},
+                                    {"label": "🔤 Name (Z–A)", "value": "name_desc"},
+                                    {"label": "🔢 Qty (high → low)", "value": "qty_desc"},
+                                    {"label": "🔢 Qty (low → high)", "value": "qty_asc"},
+                                ],
+                                value="date_desc",
+                            ),
+                            xs=12, className="mt-2",
+                        ),
+                        className="g-2",
+                    ),
                     dbc.Button(
                         [html.I(className="bi bi-download me-1"), "Export CSV"],
                         id="export-button",
@@ -370,6 +389,7 @@ def inventory_table():
         {"name": "Photo", "id": "image", "presentation": "markdown"},
         {"name": "Name", "id": "name"},
         {"name": "Qty", "id": "qty", "type": "numeric"},
+        {"name": "Added", "id": "added", "hideable": True},
         {"name": "Category", "id": "category", "hideable": True},
         {"name": "Location", "id": "location", "hideable": True},
         {"name": "Bin", "id": "location_code", "hideable": True},
@@ -429,6 +449,7 @@ def inventory_table():
             {"if": {"column_id": "ocr_text"}, "minWidth": "150px", "maxWidth": "400px", "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
             {"if": {"column_id": "image"}, "width": "88px", "minWidth": "88px", "maxWidth": "96px", "textAlign": "center", "padding": "6px"},
             {"if": {"column_id": "qty"}, "textAlign": "center", "width": "64px", "minWidth": "64px", "maxWidth": "80px", "fontWeight": "600"},
+            {"if": {"column_id": "added"}, "width": "104px", "minWidth": "96px", "maxWidth": "120px", "textAlign": "center", "whiteSpace": "nowrap", "color": "var(--bs-secondary-color)"},
         ],
         style_data_conditional=[
             {"if": {"row_index": "odd"}, "backgroundColor": "var(--bs-table-striped-bg)"},
