@@ -388,16 +388,22 @@ def restore_inventory() -> str:
     bak = _undo_path()
     if not bak.exists():
         return "none"
+    # Require a checkpoint that still matches the current inventory. If it's
+    # missing (checkpoint write failed / crash) or differs (edited since), refuse
+    # rather than blindly overwriting — never trade a convenience for data loss.
     chk = _undo_chk_path()
-    if chk.exists():
-        try:
-            current = json.loads(Path(INVENTORY_JSON).read_text(encoding="utf-8"))
-            produced = json.loads(chk.read_text(encoding="utf-8"))
-            if current != produced:
-                _clear_undo()  # user has since changed things — don't clobber them
-                return "stale"
-        except Exception:
-            pass
+    if not chk.exists():
+        _clear_undo()
+        return "stale"
+    try:
+        current = json.loads(Path(INVENTORY_JSON).read_text(encoding="utf-8"))
+        produced = json.loads(chk.read_text(encoding="utf-8"))
+    except Exception:
+        _clear_undo()
+        return "stale"
+    if current != produced:
+        _clear_undo()  # user has since changed things — don't clobber them
+        return "stale"
     try:
         Path(INVENTORY_JSON).write_text(bak.read_text(encoding="utf-8"), encoding="utf-8")
         _clear_undo()  # one-shot: consume the snapshot so undo isn't repeatable
