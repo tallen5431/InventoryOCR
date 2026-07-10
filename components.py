@@ -147,11 +147,12 @@ def sidebar_form():
                                             [
                                                 html.Strong("Take a photo"),
                                                 " or ",
-                                                html.A("choose from library"),
+                                                html.A("choose a file"),
                                             ]
                                         ),
                                         html.Div(
-                                            "Snap items with your phone — multiple photos supported",
+                                            "On your phone this opens the camera — snap an item and it saves. "
+                                            "On a computer it opens the file picker.",
                                             className="text-muted small mt-1",
                                         ),
                                     ]

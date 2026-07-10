@@ -31,10 +31,12 @@ from components import (
 
 # Page layouts
 from components_ocr_lab import ocr_lab_layout
+from components_price_compare import price_compare_layout
 
 # Callback registrars
 from callbacks import register_callbacks
 from callbacks_ocr_lab import register_ocr_lab_callbacks
+from callbacks_price_compare import register_price_compare_callbacks
 
 BOOTSTRAP_ICONS = "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
 
@@ -197,6 +199,7 @@ navbar = dbc.Navbar(
                 [
                     dbc.NavItem(dbc.NavLink("Dashboard", href="/", external_link=False)),
                     dbc.NavItem(dbc.NavLink("🧪 OCR Lab", href="/ocr-lab", external_link=False)),
+                    dbc.NavItem(dbc.NavLink("💲 Price Compare", href="/price-compare", external_link=False)),
                 ],
                 className="ms-3",
                 navbar=True,
@@ -283,13 +286,15 @@ app.layout = html.Div(
         html.Div(id="diag", style={"display": "none"}),
         # sink for the clientside theme-attribute callback (below)
         html.Div(id="theme-attr-sink", style={"display": "none"}),
+        # sink for the clientside camera-capture callback (below)
+        html.Div(id="camera-attr-sink", style={"display": "none"}),
         # seed content so first paint isn't blank
         html.Div(id="page-content", children=dashboard_layout()),
     ]
 )
 
 # Important: let Dash see all components/IDs across pages
-app.validation_layout = html.Div([dashboard_layout(), ocr_lab_layout()])
+app.validation_layout = html.Div([dashboard_layout(), ocr_lab_layout(), price_compare_layout()])
 
 # ---------- Router ----------
 @app.callback(Output("page-content", "children"), Input("url", "pathname"), prevent_initial_call=False)
@@ -298,6 +303,8 @@ def display_page(pathname):
     try:
         if key == "/ocr-lab":
             return ocr_lab_layout()
+        if key == "/price-compare":
+            return price_compare_layout()
         return dashboard_layout()
     except Exception:
         return html.Pre("display_page error:\n" + traceback.format_exc())
@@ -348,6 +355,31 @@ app.clientside_callback(
     Input("theme-mode", "data"),
 )
 
+# Make the dashboard's photo button open the phone camera directly (rather than
+# the file picker). `capture` is honored on mobile browsers and ignored on the
+# desktop, where the normal file dialog still opens — so desktop uploads and
+# quick phone snaps both work. Re-applied on navigation + on a tick so it
+# survives the dashboard being re-rendered by the router.
+app.clientside_callback(
+    """
+    function(_n, _path) {
+        try {
+            var up = document.getElementById('image-upload');
+            if (up) {
+                var inp = up.querySelector('input[type=file]');
+                if (inp && !inp.getAttribute('capture')) {
+                    inp.setAttribute('capture', 'environment');
+                }
+            }
+        } catch (e) {}
+        return '';
+    }
+    """,
+    Output("camera-attr-sink", "children"),
+    Input("diag-interval", "n_intervals"),
+    Input("url", "pathname"),
+)
+
 # ---------- Diagnostics ----------
 @app.callback(Output("diag", "children"), Input("diag-interval", "n_intervals"), Input("url", "pathname"))
 def _diag(_, path):
@@ -359,6 +391,7 @@ def _diag(_, path):
 # ---------- Register feature callbacks ----------
 register_callbacks(app)
 register_ocr_lab_callbacks(app)
+register_price_compare_callbacks(app)
 
 if __name__ == "__main__":
     from waitress import serve
