@@ -338,17 +338,69 @@ def sidebar_form():
                 ],
                 className="shadow-sm",
             ),
-            filter_card(),
-            dbc.Toast(
-                id="action-toast",
-                is_open=False,
-                header="",
-                icon="info",
-                duration=TOAST_DURATION,
-                children="",
-                style={"position": "fixed", "top": 20, "right": 20, "zIndex": 2000},
+        ]
+    )
+
+
+def action_toast():
+    """The success/error toast. Mounted at the top level (never inside a
+    collapsible section) so it always shows, whatever's expanded."""
+    return dbc.Toast(
+        id="action-toast",
+        is_open=False,
+        header="",
+        icon="info",
+        duration=TOAST_DURATION,
+        children="",
+        style={"position": "fixed", "top": 20, "right": 20, "zIndex": 2000},
+    )
+
+
+def search_box():
+    """Always-visible search input for the toolbar."""
+    return dbc.InputGroup(
+        [
+            dbc.InputGroupText(html.I(className="bi bi-search")),
+            dbc.Input(
+                id="search-bar",
+                placeholder="Search name, type, category, bin, notes…",
+                debounce=True,
             ),
         ]
+    )
+
+
+def _toggle_button(label, icon, btn_id):
+    return dbc.Button(
+        [html.I(className=f"bi {icon} me-1"), label],
+        id=btn_id, color="light", size="sm", n_clicks=0, className="border",
+    )
+
+
+def dashboard_toolbar():
+    """Primary action + always-visible search + expand toggles for the cards."""
+    return dbc.Row(
+        [
+            dbc.Col(
+                dbc.Button(
+                    [html.I(className="bi bi-plus-lg me-1"), "Add item"],
+                    id="toggle-add", color="primary", n_clicks=0, className="w-100",
+                ),
+                xs=12, sm="auto",
+            ),
+            dbc.Col(search_box(), xs=12, sm=True),
+            dbc.Col(
+                dbc.ButtonGroup(
+                    [
+                        _toggle_button("Filter & sort", "bi-funnel", "toggle-filter"),
+                        _toggle_button("Overview", "bi-diagram-3", "toggle-overview"),
+                        _toggle_button("Storage", "bi-boxes", "toggle-storage"),
+                    ]
+                ),
+                xs=12, sm="auto",
+            ),
+        ],
+        className="g-2 align-items-center mb-2",
     )
 
 
@@ -360,11 +412,6 @@ def filter_card():
             ),
             dbc.CardBody(
                 [
-                    dbc.Input(
-                        id="search-bar",
-                        placeholder="Search name, category, location, notes, OCR…",
-                        debounce=True,
-                    ),
                     dbc.Row(
                         [
                             dbc.Col(

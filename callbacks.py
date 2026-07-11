@@ -979,6 +979,50 @@ def register_callbacks(app):
             toast_open, toast_header, toast_icon, toast_msg
         ]
 
+    # ---------- Collapsible dashboard sections (expand-for-detail cards) ----------
+    @app.callback(
+        Output("collapse-add", "is_open"),
+        Input("toggle-add", "n_clicks"),
+        Input("editing-id", "data"),
+        State("collapse-add", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_add_section(_n, editing_id, is_open):
+        # Picking a row for editing auto-opens the form; the Add-item button flips
+        # it. Clearing the selection (editing_id -> None) leaves it as-is.
+        if ctx.triggered_id == "editing-id":
+            if editing_id:
+                return True
+            raise PreventUpdate
+        return not is_open
+
+    @app.callback(
+        Output("collapse-filter", "is_open"),
+        Input("toggle-filter", "n_clicks"),
+        State("collapse-filter", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_filter_section(_n, is_open):
+        return not is_open
+
+    @app.callback(
+        Output("collapse-overview", "is_open"),
+        Input("toggle-overview", "n_clicks"),
+        State("collapse-overview", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_overview_section(_n, is_open):
+        return not is_open
+
+    @app.callback(
+        Output("collapse-storage", "is_open"),
+        Input("toggle-storage", "n_clicks"),
+        State("collapse-storage", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_storage_section(_n, is_open):
+        return not is_open
+
     # ---------- Populate filter dropdowns & type-ahead suggestions ----------
     @app.callback(
         Output("filter-type", "options"),

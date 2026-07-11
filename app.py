@@ -23,6 +23,10 @@ from components import (
     detail_panel,
     kpi_bar,
     breakdown_card,
+    filter_card,
+    search_box,
+    dashboard_toolbar,
+    action_toast,
     identify_modal,
     organize_card,
     organize_modal,
@@ -264,6 +268,11 @@ navbar = dbc.Navbar(
 
 # ---------- Dashboard layout ----------
 def dashboard_layout():
+    # Streamlined: summary (KPIs) + a toolbar + the table stay on top; the form,
+    # filters, overview and storage map live in tap-to-expand collapsibles so the
+    # page is short and scannable — especially on a phone. dbc.Collapse keeps its
+    # children mounted (just hidden), so every callback wired to the inner ids
+    # keeps working whether a section is open or closed.
     return dbc.Container(
         [
             dcc.Store(id="refresh-seq"),
@@ -274,20 +283,22 @@ def dashboard_layout():
             ),
             kpi_bar(),
             html.Div(id="undo-bar"),
-            dbc.Row(
-                [
-                    dbc.Col(sidebar_form(), xs=12, sm=12, md=12, lg=4, xl=4, className="mb-3 mb-lg-0"),
-                    dbc.Col([inventory_table()], xs=12, sm=12, md=12, lg=8, xl=8),
-                ],
-                className="g-3",
-            ),
-            dbc.Row([dbc.Col(breakdown_card(), width=12)]),
-            dbc.Row([dbc.Col(organize_card(), width=12)]),
+            action_toast(),                      # top-level so toasts always show
+            dashboard_toolbar(),                 # + Add item · search · Filter/Overview/Storage
+            # Add / edit item — collapsed by default, auto-opens when you pick a row.
+            dbc.Collapse(sidebar_form(), id="collapse-add", is_open=False),
+            # Find & filter — collapsed by default (search stays live in the toolbar).
+            dbc.Collapse(filter_card(), id="collapse-filter", is_open=False),
+            # The inventory table is the hero — always visible, full width.
+            inventory_table(),
+            # Overview + Storage map — collapsed by default.
+            dbc.Collapse(breakdown_card(), id="collapse-overview", is_open=False),
+            dbc.Collapse(organize_card(), id="collapse-storage", is_open=False),
             identify_modal(),
             organize_modal(),
             bins_modal(),
             duplicates_modal(),
-            dbc.Row([dbc.Col(detail_panel(), width=12)], className="mt-4"),
+            dbc.Row([dbc.Col(detail_panel(), width=12)], className="mt-3"),
         ],
         fluid=True,
     )
