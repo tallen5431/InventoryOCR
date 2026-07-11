@@ -13,7 +13,8 @@ from config import (
     ASSET_IMAGE_PATH,
     ASSET_THUMB_PATH,
 )
-from flask import send_from_directory
+from flask import send_from_directory, request, Response
+import authz
 
 # UI components
 from components import (
@@ -176,6 +177,37 @@ server.wsgi_app = ProxyFix(
     x_port=1,
     x_prefix=1,
 )
+
+# ---- Optional HTTP Basic Auth (makes internet exposure safe) -----------------
+# OFF unless credentials are configured (see authz.py). When ON, every request
+# must present them — which is what lets you safely put the app on the public
+# internet via Tailscale Funnel / a Cloudflare Tunnel. /healthz stays open so a
+# tunnel or uptime monitor can probe without credentials.
+AUTH_ENABLED = authz.auth_enabled()
+if AUTH_ENABLED:
+    _AUTH_REALM = os.environ.get("INVENTORY_AUTH_REALM", "Inventory Manager")
+
+    @server.before_request
+    def _enforce_basic_auth():
+        if request.path.rstrip("/").endswith("/healthz"):
+            return None
+        auth = request.authorization
+        if auth and (auth.type or "").lower() == "basic" and \
+                authz.credentials_match(auth.username, auth.password):
+            return None
+        return Response(
+            "Authentication required.", 401,
+            {"WWW-Authenticate": f'Basic realm="{_AUTH_REALM}"'},
+        )
+
+
+def _healthz():
+    return "ok", 200
+
+
+# Register /healthz (and the prefixed variant when served under /inventory).
+for _i, _rule in enumerate(["/healthz"] + ([f"{URL_PREFIX}/healthz"] if URL_PREFIX else [])):
+    server.add_url_rule(_rule, f"_healthz_{_i}", _healthz)
 
 # ---- Static asset routes for images & thumbnails -----------------
 # Browser URLs look like:
@@ -397,6 +429,11 @@ if __name__ == "__main__":
             print(f"  • {url}")
 
     print(f"\n🔧 Internal:    http://{host}:{port}{URL_PREFIX}")
+    if AUTH_ENABLED:
+        print("🔐 Auth:        ON — HTTP Basic Auth required on every request")
+    else:
+        print("🔐 Auth:        OFF — LAN only. Set INVENTORY_AUTH_USER/PASSWORD "
+              "before exposing to the internet")
     print("=" * 60)
 
     serve(server, host=host, port=port, expose_tracebacks=True)

@@ -252,6 +252,54 @@ for speed, or the Tailscale one to reach it from anywhere. (QR codes need the
 optional `qrcode` package from `requirements.txt`; without it you still get the
 links.)
 
+## Access it from the internet (optional)
+
+Tailscale already lets you reach the app from anywhere **on your tailnet**. If you
+want a *public* URL — reachable from any browser without the Tailscale client —
+do it in two parts: **turn on the login**, then **expose it over HTTPS**.
+
+### 1. Turn on the login (required before exposing)
+
+The app ships with **no authentication**, so never put it on the public internet
+without this. Set a username and password and the app requires them on every
+request:
+
+```bash
+export INVENTORY_AUTH_USER="tj"
+export INVENTORY_AUTH_PASSWORD="a-long-random-passphrase"
+# or the shorthand:  export INVENTORY_AUTH="tj:a-long-random-passphrase"
+```
+
+(In the HTTP Server Manager, add these to the program's **env** so they persist.)
+Leave them unset and auth stays **off** — unchanged for LAN use. `/healthz` stays
+open (no credentials) so a tunnel or uptime monitor can probe it. Basic Auth sends
+the password on each request, so only expose the app **over HTTPS** — both options
+below give you that.
+
+### 2. Expose it over HTTPS — pick one
+
+**Tailscale Funnel (easiest — you already run Tailscale).** Publishes the local
+port on a public `https://<machine>.<tailnet>.ts.net` URL with automatic TLS and
+**no router ports opened**. Enable Funnel for the node in your tailnet's ACLs
+once, then:
+
+```bash
+sudo tailscale funnel 8001        # serve the app publicly over HTTPS
+tailscale funnel status           # shows the public URL
+```
+
+**Cloudflare Tunnel (add your own domain + SSO).** `cloudflared` dials out to
+Cloudflare (again, no open ports) and serves the app at your domain; pair it with
+**Cloudflare Access** for real SSO/2FA in front:
+
+```bash
+cloudflared tunnel --url http://localhost:8001   # quick throwaway *.trycloudflare.com URL
+```
+
+> ⚠️ **Don't** expose the **HTTP Server Manager** (port 3000) — only the app
+> (8001). And avoid raw router port‑forwarding: it publishes your home IP, has no
+> TLS, and AT&T CGNAT often blocks it. The tunnels above are safer and simpler.
+
 ## Import from a product page (Amazon, eBay & co.)
 
 When visual search lands you on a real product page, pull its details straight
