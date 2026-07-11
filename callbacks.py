@@ -1638,6 +1638,27 @@ def register_callbacks(app):
         else:
             raise PreventUpdate
 
+        # Multi-pack listings quote the whole-pack price; record the per-unit value
+        # instead so an item's "value" reflects one piece. Reuses Price Compare's
+        # pack detection. The full-pack price is kept as a note in the specs.
+        if res.get("ok"):
+            try:
+                import price_compare
+                d = res.get("data") or {}
+                pu = price_compare.per_unit_value(
+                    d.get("estimated_value", ""), d.get("name", ""),
+                    d.get("specifications"), d.get("what_it_is", ""))
+                if pu["unit_price"] is not None and 1 < pu["qty"] <= 2000:
+                    d["estimated_value"] = f"{pu['currency']}{pu['unit_price']:.2f}"
+                    note = pu["formatted"]
+                    specs = list(d.get("specifications") or [])
+                    if note and note not in specs:
+                        specs.insert(0, note)
+                    d["specifications"] = specs
+                    res["data"] = d
+            except Exception:
+                pass
+
         body = _render_import(res)
         if res.get("ok"):
             return body, {"data": res.get("data")}

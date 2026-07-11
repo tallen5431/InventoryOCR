@@ -102,10 +102,12 @@ def detect_quantity(name: str, specs: Optional[List[str]] = None,
     for m in re.finditer(rf"\b({_UNIT_WORDS})\s+of\s+(\d[\d,]*)", text, re.I):
         _add(m.group(2).replace(",", ""), _norm_unit(m.group(1)))
     # "x100" / "100x" bundle notation — but NOT a dimension like "16x24" or
-    # "10 x 20 x 5 cm", where the 'x' has digits on both sides.
-    for m in re.finditer(r"(?<![\dx])x\s*(\d{2,})(?!\s*[x\d])", text, re.I):
+    # "10 x 20 x 5 cm" (x has digits on both sides), and NOT an 'x' buried in a
+    # model number like "MAX7219" or "TC358870XBG" (x preceded by a letter). The
+    # 'x' must sit at a token boundary, so require a non-alphanumeric char before.
+    for m in re.finditer(r"(?<![A-Za-z0-9])x\s*(\d{2,})(?!\s*[x\d])", text, re.I):
         _add(m.group(1), "each")
-    for m in re.finditer(r"(?<![\dx])(\d{2,})\s*x(?!\s*[\dx])", text, re.I):
+    for m in re.finditer(r"(?<![A-Za-z0-9])(\d{2,})\s*x(?!\s*[A-Za-z0-9])", text, re.I):
         _add(m.group(1), "each")
     # "Qty: 50" / "Quantity 50"
     for m in re.finditer(r"\b(?:qty|quantity)\.?\s*[:=]?\s*(\d[\d,]*)", text, re.I):
@@ -129,6 +131,32 @@ def _norm_unit(word: str) -> str:
         "bundle": "bundle", "tablet": "tablet", "capsule": "capsule",
     }
     return mapping.get(w, "each")
+
+
+def per_unit_value(price_text: str, name: str = "",
+                   specs: Optional[List[str]] = None, description: str = "") -> Dict[str, Any]:
+    """Per-unit pricing for a single listing.
+
+    Reuses the pack-size detection to turn a listing's *total* price into a price
+    *per unit*. Returns a dict:
+      list_price – parsed total price (float) or None
+      unit_price – list_price / detected quantity (float) or None
+      qty, unit  – detected pack size and unit label (defaults 1, "each")
+      currency   – best-guess currency symbol ("$" default)
+      formatted  – display string, e.g. "$1.40 each (pack of 10 @ $13.99)"
+    """
+    pv = _parse_price(price_text or "")
+    qty, unit = detect_quantity(name or "", specs, description or "")
+    cur = _currency(price_text or "")
+    unit_price = round(pv / qty, 4) if (pv is not None and qty) else None
+    if unit_price is None:
+        formatted = ""
+    elif qty > 1:
+        formatted = f"{cur}{unit_price:.2f} each (pack of {qty} @ {cur}{pv:.2f})"
+    else:
+        formatted = f"{cur}{unit_price:.2f}"
+    return {"list_price": pv, "unit_price": unit_price, "qty": qty,
+            "unit": unit, "currency": cur, "formatted": formatted}
 
 
 # --------------------------------------------------------------------
