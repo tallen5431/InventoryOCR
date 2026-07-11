@@ -124,6 +124,23 @@ def _apply_sort(rows, sort_by):
     if sb in ("qty_asc", "qty_desc"):
         return sorted(rows, key=lambda r: int(r.get("qty") or 0),
                       reverse=(sb == "qty_desc"))
+    # Cluster related items together. Type follows the canonical TYPE_GROUPS order
+    # (Tools, Components, …); Category/Location go alphabetically. In every case
+    # items with no value for that field sink to the bottom, and rows within a
+    # group are ordered by name so the cluster reads cleanly.
+    if sb == "group_type":
+        order = {g: i for i, g in enumerate(data.TYPE_GROUPS)}
+        def tkey(r):
+            v = (r.get("type") or "").strip()
+            rank = order.get(v, len(order) + (1 if v else 2))  # custom types, then empty, last
+            return (rank, v.lower(), (r.get("name") or "").lower())
+        return sorted(rows, key=tkey)
+    if sb in ("group_category", "group_location"):
+        field = "category" if sb == "group_category" else "location"
+        def gkey(r):
+            v = (r.get(field) or "").strip()
+            return (v == "", v.lower(), (r.get("name") or "").lower())
+        return sorted(rows, key=gkey)
     return rows
 
 def _breakdown_list(groups):
@@ -941,9 +958,14 @@ def register_callbacks(app):
         cats = data.categories(all_items)
         locs = data.locations(all_items)
         codes = data.location_codes(all_items)
-        type_opts = [{"label": t, "value": t} for t in present_types]
-        cat_opts = [{"label": c, "value": c} for c in cats]
-        loc_opts = [{"label": l, "value": l} for l in locs]
+        # Item counts per value so the filter dropdowns read "Tools (12)" — a quick
+        # sense of how big each group is without opening it.
+        type_n = {g["name"]: g["items"] for g in data.summary_by("type", all_items)}
+        cat_n = {g["name"]: g["items"] for g in data.summary_by("category", all_items)}
+        loc_n = {g["name"]: g["items"] for g in data.summary_by("location", all_items)}
+        type_opts = [{"label": f"{t} ({type_n.get(t, 0)})", "value": t} for t in present_types]
+        cat_opts = [{"label": f"{c} ({cat_n.get(c, 0)})", "value": c} for c in cats]
+        loc_opts = [{"label": f"{l} ({loc_n.get(l, 0)})", "value": l} for l in locs]
         # Datalist suggestions for Type: always offer the canonical groups, plus
         # any custom values already in use, so the form nudges toward consistency.
         type_choices = list(data.TYPE_GROUPS) + [t for t in present_types if t not in data.TYPE_GROUPS]
@@ -1148,8 +1170,9 @@ def register_callbacks(app):
         cats = len({(r.get("category") or "").strip() for r in rows if (r.get("category") or "").strip()})
         return total, total_qty, low, cats
 
-    # ---------- Overview breakdown (by location / category) ----------
+    # ---------- Overview breakdown (by type / location / category) ----------
     @app.callback(
+        Output("breakdown-type", "children"),
         Output("breakdown-location", "children"),
         Output("breakdown-category", "children"),
         Input("inventory-table", "data"),
@@ -1157,9 +1180,10 @@ def register_callbacks(app):
     )
     def update_breakdown(rows):
         rows = rows or []
+        by_type = data.summary_by("type", rows)
         by_loc = data.summary_by("location", rows)
         by_cat = data.summary_by("category", rows)
-        return _breakdown_list(by_loc), _breakdown_list(by_cat)
+        return _breakdown_list(by_type), _breakdown_list(by_loc), _breakdown_list(by_cat)
 
     # ---------- Export inventory to CSV ----------
     @app.callback(

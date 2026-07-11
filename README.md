@@ -42,13 +42,16 @@ to find something or restock.
   from a desktop.
 - 🔎 **Find fast** — full‑text search across name / type / category / location /
   bin / notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters
-  for type, category, and location.
+  for type, category, and location (each showing how many items it holds, e.g.
+  *Tools (12)*). Sort newest / name / quantity, or **Group by Type / Category /
+  Location** to cluster related items together in the list.
 - ✅ **Bulk edit & merge** — tick several rows to set their type / category /
   location / bin in one go, **merge them into a single entry** (keeps the richest
   one, adds up the quantities, and combines every photo/spec/tag), or delete them
   together. Merges and bulk deletes offer a one‑click **Undo**.
 - 📊 **At‑a‑glance** — KPI cards (total items, total quantity, low‑stock count,
-  categories) and an **Overview** grouped by location and by category.
+  categories) and an **Overview** with item/quantity totals grouped by **type**,
+  by location, and by category.
 - 📤 **Export** — one‑click CSV of your whole inventory (including bin, specs,
   value, dimensions, tags, and product link).
 - 🔎 **Identify from photo** — send an item's photo to a local vision AI

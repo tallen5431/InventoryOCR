@@ -752,7 +752,8 @@ def summary_by(field: str, rows: Optional[List[Dict[str, Any]]] = None) -> List[
     / "Unassigned". Returns a list sorted by total quantity (desc).
     """
     rows = rows if rows is not None else inventory()
-    fallback = "Uncategorized" if field == "category" else ("Unassigned" if field == "location" else "—")
+    fallback = {"category": "Uncategorized", "location": "Unassigned",
+                "type": "Unclassified"}.get(field, "—")
     buckets: Dict[str, Dict[str, int]] = {}
     for r in rows:
         key = (r.get(field) or "").strip() or fallback

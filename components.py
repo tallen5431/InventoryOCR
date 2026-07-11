@@ -394,6 +394,9 @@ def filter_card():
                                     {"label": "🔤 Name (Z–A)", "value": "name_desc"},
                                     {"label": "🔢 Qty (high → low)", "value": "qty_desc"},
                                     {"label": "🔢 Qty (low → high)", "value": "qty_asc"},
+                                    {"label": "🗂 Group by Type", "value": "group_type"},
+                                    {"label": "🗂 Group by Category", "value": "group_category"},
+                                    {"label": "🗂 Group by Location", "value": "group_location"},
                                 ],
                                 value="date_desc",
                             ),
@@ -589,7 +592,7 @@ def _bulk_bar():
 
 
 def breakdown_card():
-    """Compact 'where is everything' overview: totals grouped by location & category."""
+    """Compact 'where is everything' overview: totals grouped by type, location & category."""
     return dbc.Card(
         [
             dbc.CardHeader(
@@ -600,17 +603,24 @@ def breakdown_card():
                     [
                         dbc.Col(
                             [
+                                html.H6([html.I(className="bi bi-collection me-1"), "By Type"], className="text-muted"),
+                                html.Div(id="breakdown-type"),
+                            ],
+                            xs=12, md=4, className="mb-3 mb-md-0",
+                        ),
+                        dbc.Col(
+                            [
                                 html.H6([html.I(className="bi bi-geo-alt me-1"), "By Location"], className="text-muted"),
                                 html.Div(id="breakdown-location"),
                             ],
-                            xs=12, md=6, className="mb-3 mb-md-0",
+                            xs=12, md=4, className="mb-3 mb-md-0",
                         ),
                         dbc.Col(
                             [
                                 html.H6([html.I(className="bi bi-tags me-1"), "By Category"], className="text-muted"),
                                 html.Div(id="breakdown-category"),
                             ],
-                            xs=12, md=6,
+                            xs=12, md=4,
                         ),
                     ],
                     className="g-3",
