@@ -1177,30 +1177,80 @@ def make_bins(count: Any, prefix: str = "BIN", capacity: Any = 25,
     return out
 
 
+def _derive_code(name: str) -> str:
+    """Make a short, stable code from a container's name.
+
+    A container can be any kind of box, drawer, tote, bag or shelf, so people
+    shouldn't have to invent codes. If the text already looks like a code
+    (SHELF-01, A1) it's kept verbatim; a descriptive name becomes its initials
+    (e.g. 'Small parts drawer' → 'SPD').
+    """
+    s = (name or "").strip()
+    if not s:
+        return "BIN"
+    if " " not in s and len(s) <= 16 and _re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", s):
+        return s
+    words = _re.findall(r"[A-Za-z0-9]+", s)
+    if len(words) >= 2:
+        code = "".join(w[0] for w in words).upper()[:8]
+    else:
+        code = _re.sub(r"[^A-Za-z0-9]+", "", s).upper()[:8]
+    return code or "BIN"
+
+
 def parse_containers_text(text: str) -> List[Dict[str, Any]]:
-    """Parse an editor textarea, one bin per line:
+    """Parse the storage editor. One container per line. The friendly form is just
+    a name, with its bags after a dash or colon::
 
-        CODE | Name | capacity | bag1, bag2, bag3
+        Small parts drawer — resistors, capacitors, diodes
+        Garage tote: usb cables, ribbon
+        Workshop shelf
 
-    Name, capacity and bags are all optional (a bare ``CODE`` works).
+    The explicit form still works too (any field optional)::
+
+        CODE | Name | slots | bag1, bag2, bag3
+
+    Codes are derived from names when not given, and made unique.
     """
     out: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def _uniq(code: str) -> str:
+        base = code or "BIN"
+        c, i = base, 2
+        while c.lower() in seen:
+            c = f"{base}-{i}"
+            i += 1
+        seen.add(c.lower())
+        return c
+
     for line in (text or "").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        parts = [p.strip() for p in line.split("|")]
-        bags = _clean_bags(parts[3]) if len(parts) >= 4 else []
-        if len(parts) >= 3:
-            code, name, cap = parts[0], parts[1], parts[2]
-        elif len(parts) == 2:
-            code, name, cap = parts[0], parts[0], parts[1]
+        if "|" in line:
+            parts = [p.strip() for p in line.split("|")]
+            bags = _clean_bags(parts[3]) if len(parts) >= 4 else []
+            if len(parts) >= 3:
+                code, name, cap = parts[0], parts[1], parts[2]
+            elif len(parts) == 2:
+                code, name, cap = parts[0], parts[0], parts[1]
+            else:
+                code, name, cap = parts[0], parts[0], "25"
+            m = _re.search(r"\d+", cap or "")
+            capacity = int(m.group(0)) if m else 25
+            name = name or code
+            code = code or _derive_code(name)
         else:
-            code, name, cap = parts[0], parts[0], "25"
-        m = _re.search(r"\d+", cap or "")
-        capacity = int(m.group(0)) if m else 25
+            # Plain "Name — bags" / "Name: bags" line — no code needed.
+            name, bags = line, []
+            split = _re.split(r"\s+[—–]\s+|\s*:\s+|\s+-\s+", line, maxsplit=1)
+            if len(split) == 2:
+                name, bags = split[0].strip(), _clean_bags(split[1])
+            code, capacity = _derive_code(name), 25
         if code:
-            out.append({"code": code, "name": name or code, "capacity": capacity, "bags": bags})
+            out.append({"code": _uniq(code), "name": name or code,
+                        "capacity": capacity, "bags": bags})
     return out
 
 
@@ -1208,10 +1258,17 @@ def containers_to_text(conts: Optional[List[Dict[str, Any]]] = None) -> str:
     conts = conts if conts is not None else containers()
     lines = []
     for c in conts:
-        line = f"{c['code']} | {c['name']} | {c['capacity']}"
+        name = c.get("name") or c["code"]
         bags = c.get("bags") or []
-        if bags:
-            line += " | " + ", ".join(bags)
+        # Keep the friendly "Name — bags" form when the code is just derived from
+        # the name and the capacity is the default; otherwise show the explicit
+        # "CODE | Name | slots | bags" so custom codes/capacities survive.
+        if c["code"] == _derive_code(name) and int(c.get("capacity") or 0) == 25:
+            line = name + (" — " + ", ".join(bags) if bags else "")
+        else:
+            line = f"{c['code']} | {name} | {c['capacity']}"
+            if bags:
+                line += " | " + ", ".join(bags)
         lines.append(line)
     return "\n".join(lines)
 

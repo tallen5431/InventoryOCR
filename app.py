@@ -231,7 +231,7 @@ def serve_image(filename: str):
 navbar = dbc.Navbar(
     dbc.Container(
         [
-            dbc.NavbarBrand("📦 Inventory OCR", href="/"),
+            dbc.NavbarBrand("📦 Inventory Manager", href="/"),
             dbc.Nav(
                 [
                     dbc.NavItem(dbc.NavLink("Dashboard", href="/", external_link=False)),
@@ -430,7 +430,7 @@ if __name__ == "__main__":
     primary_url, alternative_urls = get_external_url(host, port, URL_PREFIX)
 
     print("=" * 60)
-    print("📦 Inventory OCR Server Started")
+    print("📦 Inventory Manager Server Started")
     print("=" * 60)
     print(f"✓ Primary URL:  {primary_url}")
 

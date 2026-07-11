@@ -917,79 +917,82 @@ def bins_modal():
             dbc.Modal(
                 [
                     dbc.ModalHeader(
-                        dbc.ModalTitle([html.I(className="bi bi-box-seam me-2"), "Storage bins & auto-fit"])
+                        dbc.ModalTitle([html.I(className="bi bi-box-seam me-2"), "Your storage"])
                     ),
                     dbc.ModalBody(
                         [
-                            # --- Step 1: how many bins do you have? ---
+                            # --- Primary: just list your containers, one per line ---
                             html.Div(
-                                [html.I(className="bi bi-1-circle me-2"),
-                                 html.Strong("How many bins do you have?")],
-                                className="mb-1",
-                            ),
-                            dbc.Row(
-                                [
-                                    dbc.Col(
-                                        dbc.InputGroup([
-                                            dbc.InputGroupText("Bins"),
-                                            dbc.Input(id="bin-count", type="number", min=1,
-                                                      max=200, step=1, placeholder="9"),
-                                        ]),
-                                        xs=6, sm=3,
-                                    ),
-                                    dbc.Col(
-                                        dbc.InputGroup([
-                                            dbc.InputGroupText("Prefix"),
-                                            dbc.Input(id="bin-prefix", value="BIN"),
-                                        ]),
-                                        xs=6, sm=3,
-                                    ),
-                                    dbc.Col(
-                                        dbc.InputGroup([
-                                            dbc.InputGroupText("Slots"),
-                                            dbc.Input(id="bin-capacity", type="number", min=1,
-                                                      step=1, value=25),
-                                        ]),
-                                        xs=6, sm=3,
-                                    ),
-                                    dbc.Col(
-                                        dbc.Button(
-                                            [html.I(className="bi bi-plus-square me-1"), "Generate"],
-                                            id="generate-bins", color="primary", outline=True,
-                                            n_clicks=0, className="w-100",
-                                        ),
-                                        xs=6, sm=3,
-                                    ),
-                                ],
-                                className="g-2",
-                            ),
-                            html.Div(
-                                "Creates rows like BIN-01 … BIN-09 below. Existing bins are kept — "
-                                "then add bag names to any bin.",
-                                className="text-muted small mt-1 mb-2",
-                            ),
-                            html.Hr(className="my-2"),
-                            # --- Step 2: fine-tune, incl. bags per bin ---
-                            html.Div(
-                                [html.I(className="bi bi-2-circle me-2"),
-                                 html.Strong("Name your bins & their bags")],
+                                [html.I(className="bi bi-card-list me-2"),
+                                 html.Strong("List your containers")],
                                 className="mb-1",
                             ),
                             html.Div(
                                 [
-                                    "One bin per line —  ",
-                                    html.Code("CODE | Name | slots | bag1, bag2, bag3"),
-                                    ".  Name, slots and bags are optional; bags are the "
-                                    "separate bags of stuff inside that bin.",
+                                    "Any box, drawer, tote, bag or shelf — one per line. A name is all "
+                                    "you need. List the bags inside it after a ",
+                                    html.Code("—"), " or ", html.Code(":"), ".",
                                 ],
                                 className="text-muted small mb-1",
                             ),
                             dbc.Textarea(
                                 id="containers-text",
                                 rows=6,
-                                placeholder=("BIN-01 | Small parts drawer | 20 | resistors, capacitors, diodes\n"
-                                             "BIN-02 | Cables tote | 40 | usb, ribbon, power\n"
-                                             "SHELF-01 | Workshop shelf | 30"),
+                                placeholder=("Small parts drawer — resistors, capacitors, diodes\n"
+                                             "Cables tote — usb, ribbon, power\n"
+                                             "Blue toolbox: sockets, wrenches\n"
+                                             "Workshop shelf"),
+                            ),
+                            html.Div(
+                                [
+                                    "Advanced: you can also write ",
+                                    html.Code("CODE | Name | slots | bags"),
+                                    " to set a code or a capacity.",
+                                ],
+                                className="text-muted mt-1", style={"fontSize": "0.72rem"},
+                            ),
+                            html.Hr(className="my-2"),
+                            # --- Optional: bulk-add a set of identical containers ---
+                            html.Div(
+                                [html.I(className="bi bi-stack me-2"),
+                                 html.Strong("Or add a set of identical ones")],
+                                className="mb-1",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        dbc.InputGroup([
+                                            dbc.InputGroupText("How many"),
+                                            dbc.Input(id="bin-count", type="number", min=1,
+                                                      max=200, step=1, placeholder="9"),
+                                        ]),
+                                        xs=12, sm=4,
+                                    ),
+                                    dbc.Col(
+                                        dbc.InputGroup([
+                                            dbc.InputGroupText("Label"),
+                                            dbc.Input(id="bin-prefix", value="Bin",
+                                                      placeholder="Bin, Box, Drawer, Tote…"),
+                                        ]),
+                                        xs=12, sm=5,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Button(
+                                            [html.I(className="bi bi-plus-square me-1"), "Add"],
+                                            id="generate-bins", color="primary", outline=True,
+                                            n_clicks=0, className="w-100",
+                                        ),
+                                        xs=12, sm=3,
+                                    ),
+                                    # Kept for the generator's slot count; not shown prominently.
+                                    dbc.Col(dbc.Input(id="bin-capacity", type="number", value=25,
+                                                      style={"display": "none"}), xs=0),
+                                ],
+                                className="g-2",
+                            ),
+                            html.Div(
+                                "Adds e.g. Bin 1 … Bin 9 to the list above. Existing ones are kept.",
+                                className="text-muted small mt-1 mb-2",
                             ),
                             dbc.Row(
                                 [
