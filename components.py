@@ -921,35 +921,23 @@ def bins_modal():
                     ),
                     dbc.ModalBody(
                         [
-                            # --- Primary: just list your containers, one per line ---
+                            dcc.Store(id="containers-store"),
+                            # --- Primary: a row per container (no typing of codes) ---
                             html.Div(
                                 [html.I(className="bi bi-card-list me-2"),
-                                 html.Strong("List your containers")],
+                                 html.Strong("Your containers")],
                                 className="mb-1",
                             ),
                             html.Div(
-                                [
-                                    "Any box, drawer, tote, bag or shelf — one per line. A name is all "
-                                    "you need. List the bags inside it after a ",
-                                    html.Code("—"), " or ", html.Code(":"), ".",
-                                ],
-                                className="text-muted small mb-1",
+                                "Any box, drawer, tote, bag or shelf. Give each a name and, "
+                                "optionally, the bags inside it (comma-separated).",
+                                className="text-muted small mb-2",
                             ),
-                            dbc.Textarea(
-                                id="containers-text",
-                                rows=6,
-                                placeholder=("Small parts drawer — resistors, capacitors, diodes\n"
-                                             "Cables tote — usb, ribbon, power\n"
-                                             "Blue toolbox: sockets, wrenches\n"
-                                             "Workshop shelf"),
-                            ),
-                            html.Div(
-                                [
-                                    "Advanced: you can also write ",
-                                    html.Code("CODE | Name | slots | bags"),
-                                    " to set a code or a capacity.",
-                                ],
-                                className="text-muted mt-1", style={"fontSize": "0.72rem"},
+                            html.Div(id="containers-list"),
+                            dbc.Button(
+                                [html.I(className="bi bi-plus-lg me-1"), "Add container"],
+                                id="add-container", color="link", size="sm",
+                                n_clicks=0, className="px-0",
                             ),
                             html.Hr(className="my-2"),
                             # --- Optional: bulk-add a set of identical containers ---
@@ -984,14 +972,11 @@ def bins_modal():
                                         ),
                                         xs=12, sm=3,
                                     ),
-                                    # Kept for the generator's slot count; not shown prominently.
-                                    dbc.Col(dbc.Input(id="bin-capacity", type="number", value=25,
-                                                      style={"display": "none"}), xs=0),
                                 ],
                                 className="g-2",
                             ),
                             html.Div(
-                                "Adds e.g. Bin 1 … Bin 9 to the list above. Existing ones are kept.",
+                                "Adds e.g. Bin 1 … Bin 9 as rows above. Existing ones are kept.",
                                 className="text-muted small mt-1 mb-2",
                             ),
                             dbc.Row(

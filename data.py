@@ -1177,6 +1177,37 @@ def make_bins(count: Any, prefix: str = "BIN", capacity: Any = 25,
     return out
 
 
+def containers_from_rows(names: Any, bags_texts: Any = None, slots: Any = None) -> List[Dict[str, Any]]:
+    """Build saved container dicts from the visual editor's parallel field lists.
+
+    Skips rows with a blank name, derives a unique code per container, and
+    defaults capacity to 25. The row-editor equivalent of parse_containers_text.
+    """
+    names = names or []
+    bags_texts = bags_texts or []
+    slots = slots or []
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for i, nm in enumerate(names):
+        name = (nm or "").strip()
+        if not name:
+            continue
+        bags = _clean_bags(bags_texts[i] if i < len(bags_texts) else "")
+        raw_cap = slots[i] if i < len(slots) else None
+        try:
+            cap = int(raw_cap) if raw_cap not in (None, "") else 25
+        except (TypeError, ValueError):
+            cap = 25
+        base = _derive_code(name)
+        code, k = base, 2
+        while code.lower() in seen:
+            code = f"{base}-{k}"
+            k += 1
+        seen.add(code.lower())
+        out.append({"code": code, "name": name, "capacity": max(1, cap), "bags": bags})
+    return out
+
+
 def _derive_code(name: str) -> str:
     """Make a short, stable code from a container's name.
 

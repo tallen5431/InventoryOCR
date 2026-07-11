@@ -73,13 +73,13 @@ to find something or restock.
   many), ranks the best deal, and can **track prices over time** across repeat
   runs. If a listing matches something you own, one click **writes the best unit
   price + link back** onto that item.
-- 🧺 **Storage system** — **just list your containers** — any box, drawer, tote,
-  bag or shelf, one per line, a name is all you need (`Small parts drawer —
-  resistors, capacitors`). Add the **bags** inside each one after a `—` or `:`.
-  Need a set of identical ones? Type a count and a label (Bin, Box, Drawer…) and
-  it adds them for you. The live **Storage map** shows every container — even
-  empty ones — with its bags and how full it is, so a keyword search tells you
-  exactly where to look. **Smart Organize** can also group like items into
+- 🧺 **Storage system** — set up your storage in a **simple row editor** (no
+  syntax): each container — any box, drawer, tote, bag or shelf — is a row with a
+  **Name** and, optionally, the **bags** inside it. Click **Add container** for
+  another, remove one with ✕, or generate a numbered set (type a count and a
+  label like Bin/Box/Drawer). The live **Storage map** shows every container —
+  even empty ones — with its bags and how full it is, so a keyword search tells
+  you exactly where to look. **Smart Organize** can also group like items into
   labelled containers automatically.
 - 🧬 **Merge duplicates** — scanned the same thing twice? **Merge duplicates**
   finds identical / very similar entries, previews the combined item (quantities
@@ -378,21 +378,12 @@ make that fast:
 
 3. **Set up your storage (with bags).** Smart Organize invents as many bins as it
    needs — but in real life you have a *fixed* set of drawers, totes, boxes and
-   shelves. Click **Set up bins** (next to Smart Organize) and just **list your
-   containers** — one per line, a name is all you need. Add the **bags** inside
-   each after a `—` or `:`:
-
-   ```
-   Small parts drawer — resistors, capacitors, diodes
-   Cables tote: usb, ribbon, power
-   Blue toolbox
-   Workshop shelf
-   ```
-
-   A short code is derived for each automatically. Need a set of identical ones?
-   Type a count and a label (Bin, Box, Drawer, Tote…) and it adds them. For full
-   control you can still write the explicit `CODE | Name | slots | bags` form —
-   e.g. `SHELF-01 | Workshop shelf | 30`.
+   shelves. Click **Set up bins** (next to Smart Organize) to open a simple row
+   editor — no syntax to learn. Each container is a row: type its **Name** and,
+   optionally, the **bags** inside it (comma-separated). **Add container** adds a
+   row; ✕ removes one. Have a set of identical ones? Enter a count and a label
+   (Bin, Box, Drawer, Tote…) and **Add** drops them straight in as rows. A short
+   code is derived from each name automatically — you never type codes.
 
    The **Storage map** then lists every bin — even empty ones — with its bags and
    how full it is; bags you've actually filled show a live item count. (Set an

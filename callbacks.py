@@ -769,6 +769,49 @@ def _render_identify(res, links=None):
         ]
     )
 
+def _container_row(i, c):
+    """One editable container row: Name + Bags + a remove button (capacity is
+    carried in a hidden field so it survives without cluttering the row)."""
+    c = c or {}
+    return dbc.Row(
+        [
+            dbc.Col(dbc.Input(id={"type": "cont-name", "index": i}, value=c.get("name", ""),
+                              placeholder="Name — drawer, tote, box, bag…", size="sm"),
+                    xs=12, sm=6),
+            dbc.Col(dbc.Input(id={"type": "cont-bags", "index": i},
+                              value=", ".join(c.get("bags") or []),
+                              placeholder="bags inside (comma-separated)", size="sm"),
+                    xs=10, sm=5),
+            dbc.Col(dbc.Button(html.I(className="bi bi-x-lg"),
+                               id={"type": "cont-remove", "index": i},
+                               color="link", size="sm", title="Remove this container",
+                               className="text-danger px-1"),
+                    xs=2, sm=1, className="text-end"),
+            dbc.Input(id={"type": "cont-slots", "index": i}, type="number",
+                      value=(c.get("capacity") or 25), style={"display": "none"}),
+        ],
+        className="g-1 mb-1 align-items-center",
+    )
+
+
+def _raw_rows(names, bags, slots):
+    """Rebuild the on-screen container rows (blank rows kept, aligned to what the
+    user sees) so add/remove/generate operate on the exact visible list. Codes
+    are derived later, at save time."""
+    n = max(len(names or []), len(bags or []), len(slots or []))
+    out = []
+    for i in range(n):
+        nm = (names[i] if names and i < len(names) else "") or ""
+        bg = (bags[i] if bags and i < len(bags) else "") or ""
+        raw_cap = slots[i] if slots and i < len(slots) else None
+        try:
+            cap = int(raw_cap) if raw_cap not in (None, "") else 25
+        except (TypeError, ValueError):
+            cap = 25
+        out.append({"name": nm, "bags": data._clean_bags(bg), "capacity": max(1, cap)})
+    return out
+
+
 def register_callbacks(app):
     # ---------- Table & form (single source of truth for table + toast) ----------
     @app.callback(
@@ -1825,44 +1868,68 @@ def register_callbacks(app):
     # ---------- Storage bins: open editor (load current containers) ----------
     @app.callback(
         Output("bins-modal", "is_open"),
-        Output("containers-text", "value"),
+        Output("containers-store", "data"),
         Input("open-bins", "n_clicks"),
         prevent_initial_call=True,
     )
     def open_bins(n):
         if not n:
             raise PreventUpdate
-        return True, data.containers_to_text()
+        return True, data.containers()
 
-    # ---------- Storage bins: quick-generate N numbered bins ----------
+    # ---------- Storage bins: render the editable container rows ----------
     @app.callback(
-        Output("containers-text", "value", allow_duplicate=True),
+        Output("containers-list", "children"),
+        Input("containers-store", "data"),
+        prevent_initial_call=False,
+    )
+    def render_container_rows(conts):
+        conts = conts or []
+        rows = [_container_row(i, c) for i, c in enumerate(conts)]
+        if not rows:
+            rows = [html.Div("No containers yet — click “Add container” or generate a set below.",
+                             className="text-muted small py-2")]
+        return rows
+
+    # ---------- Storage bins: add a row / remove a row / generate a set ----------
+    @app.callback(
+        Output("containers-store", "data", allow_duplicate=True),
         Output("bins-status", "children", allow_duplicate=True),
+        Input("add-container", "n_clicks"),
+        Input({"type": "cont-remove", "index": ALL}, "n_clicks"),
         Input("generate-bins", "n_clicks"),
+        State({"type": "cont-name", "index": ALL}, "value"),
+        State({"type": "cont-bags", "index": ALL}, "value"),
+        State({"type": "cont-slots", "index": ALL}, "value"),
         State("bin-count", "value"),
         State("bin-prefix", "value"),
-        State("bin-capacity", "value"),
-        State("containers-text", "value"),
         prevent_initial_call=True,
     )
-    def generate_bins(n, count, prefix, capacity, existing_text):
-        if not n:
+    def edit_container_rows(_add, remove_clicks, _gen, names, bags, slots, count, prefix):
+        rows = _raw_rows(names, bags, slots)   # exactly what's on screen right now
+        trig = ctx.triggered_id
+        status = no_update
+        if trig == "add-container":
+            rows.append({"name": "", "bags": [], "capacity": 25})
+        elif trig == "generate-bins":
+            if not count:
+                return no_update, html.Span("Enter how many first.", className="text-warning")
+            rows += [{"name": c["name"], "bags": c["bags"], "capacity": c["capacity"]}
+                     for c in data.make_bins(count, prefix or "Bin", 25)]
+            status = html.Span([html.I(className="bi bi-check-circle me-1"),
+                                f"Added {int(count)}."], className="text-success")
+        elif isinstance(trig, dict) and trig.get("type") == "cont-remove":
+            idx = trig.get("index")
+            # Guard the spurious fire when a freshly-mounted remove button reports
+            # n_clicks; only act on a real click (its n_clicks is truthy).
+            if (idx is not None and idx < len(remove_clicks)
+                    and remove_clicks[idx] and idx < len(rows)):
+                rows.pop(idx)
+            else:
+                raise PreventUpdate
+        else:
             raise PreventUpdate
-        if not count:
-            return no_update, html.Span("Enter how many bins first.", className="text-warning")
-        # Additive: keep whatever's already in the editor, append the new codes.
-        existing = data.parse_containers_text(existing_text)
-        have = {c["code"].lower() for c in existing}
-        fresh = [c for c in data.make_bins(count, prefix or "BIN", capacity or 25)
-                 if c["code"].lower() not in have]
-        merged = existing + fresh
-        msg = html.Span(
-            [html.I(className="bi bi-check-circle me-1"),
-             f"Added {len(fresh)} bin{'s' if len(fresh) != 1 else ''} "
-             f"({len(merged)} total). Add bag names, then Save."],
-            className="text-success",
-        )
-        return data.containers_to_text(merged), msg
+        return rows, status
 
     @app.callback(
         Output("bins-modal", "is_open", allow_duplicate=True),
@@ -1877,46 +1944,49 @@ def register_callbacks(app):
     # ---------- Storage bins: save the container definitions ----------
     @app.callback(
         Output("bins-status", "children"),
-        Output("containers-text", "value", allow_duplicate=True),
+        Output("containers-store", "data", allow_duplicate=True),
         Output("refresh-seq", "data", allow_duplicate=True),
         Input("save-containers", "n_clicks"),
-        State("containers-text", "value"),
+        State({"type": "cont-name", "index": ALL}, "value"),
+        State({"type": "cont-bags", "index": ALL}, "value"),
+        State({"type": "cont-slots", "index": ALL}, "value"),
         prevent_initial_call=True,
     )
-    def save_bins(n, text):
+    def save_bins(n, names, bags, slots):
         if not n:
             raise PreventUpdate
-        conts = data.save_containers(data.parse_containers_text(text))
+        conts = data.save_containers(data.containers_from_rows(names, bags, slots))
         total_bags = sum(len(c.get("bags") or []) for c in conts)
         bag_note = f" with {total_bags} bag{'s' if total_bags != 1 else ''}" if total_bags else ""
         msg = html.Span(
             [html.I(className="bi bi-check-circle me-1"),
-             f"Saved {len(conts)} bin{'s' if len(conts) != 1 else ''}{bag_note}."],
+             f"Saved {len(conts)} container{'s' if len(conts) != 1 else ''}{bag_note}."],
             className="text-success",
         )
-        # Bump refresh-seq so the storage map re-renders with the new bins/bags.
-        return msg, data.containers_to_text(conts), time.time()
+        # Return the saved (deduped, coded) list to the store, and bump refresh-seq
+        # so the storage map re-renders.
+        return msg, conts, time.time()
 
     # ---------- Storage bins: fit items into the containers ----------
     @app.callback(
         Output("fit-result", "children"),
         Output("fit-plan", "data"),
-        Output("containers-text", "value", allow_duplicate=True),
         Output("bins-status", "children", allow_duplicate=True),
         Input("fit-bins", "n_clicks"),
-        State("containers-text", "value"),
+        State({"type": "cont-name", "index": ALL}, "value"),
+        State({"type": "cont-bags", "index": ALL}, "value"),
+        State({"type": "cont-slots", "index": ALL}, "value"),
         prevent_initial_call=True,
     )
-    def do_fit(n, text):
+    def do_fit(n, names, bags, slots):
         if not n:
             raise PreventUpdate
-        conts = data.save_containers(data.parse_containers_text(text))
+        conts = data.save_containers(data.containers_from_rows(names, bags, slots))
         if not conts:
-            return (html.Div("Add at least one container above (CODE | Name | capacity), then Fit.",
-                             className="text-warning"),
-                    None, no_update, no_update)
+            return (html.Div("Add at least one container first.", className="text-warning"),
+                    None, no_update)
         plan = data.fit_to_containers(conts=conts)
-        return _render_fit(plan), plan, data.containers_to_text(conts), ""
+        return _render_fit(plan), plan, ""
 
     # ---------- Storage bins: apply the fit onto every item ----------
     @app.callback(
