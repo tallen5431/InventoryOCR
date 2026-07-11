@@ -451,6 +451,7 @@ def inventory_table():
         {"name": "OCR Text", "id": "ocr_text", "hideable": True},
         {"name": "id", "id": "id", "hideable": True},
         {"name": "all_images", "id": "all_images", "hideable": True},
+        {"name": "_low", "id": "_low"},  # server-computed low-stock flag (hidden)
     ]
     table = dash_table.DataTable(
         id="inventory-table",
@@ -467,7 +468,7 @@ def inventory_table():
         filter_action="none",
         # Description is long; it's shown in full in the row's hover tooltip, so
         # keep it out of the default view. Re-show any of these via Toggle Columns.
-        hidden_columns=["id", "all_images", "ocr_text", "description", "reorder_at"],
+        hidden_columns=["id", "all_images", "ocr_text", "description", "reorder_at", "_low"],
         style_table={
             "height": "70vh",
             "overflowY": "auto",
@@ -513,8 +514,8 @@ def inventory_table():
             {"if": {"row_index": "odd"}, "backgroundColor": "var(--bs-table-striped-bg)"},
             {
                 # Highlight the qty of items at/below their own reorder point.
-                "if": {"filter_query": "{reorder_at} is not blank && {qty} <= {reorder_at}",
-                       "column_id": "qty"},
+                # Uses a server-computed flag ({_low}) for a robust equality query.
+                "if": {"filter_query": '{_low} = "low"', "column_id": "qty"},
                 "color": "var(--bs-warning)",
                 "fontWeight": "700",
             },

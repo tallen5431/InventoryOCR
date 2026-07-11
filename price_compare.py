@@ -107,7 +107,7 @@ def detect_quantity(name: str, specs: Optional[List[str]] = None,
     # 'x' must sit at a token boundary, so require a non-alphanumeric char before.
     for m in re.finditer(r"(?<![A-Za-z0-9])x\s*(\d{2,})(?!\s*[x\d])", text, re.I):
         _add(m.group(1), "each")
-    for m in re.finditer(r"(?<![A-Za-z0-9])(\d{2,})\s*x(?!\s*[A-Za-z0-9])", text, re.I):
+    for m in re.finditer(r"(?<![A-Za-z0-9])(\d{2,})\s*x(?!\s*[x\d])", text, re.I):
         _add(m.group(1), "each")
     # "Qty: 50" / "Quantity 50"
     for m in re.finditer(r"\b(?:qty|quantity)\.?\s*[:=]?\s*(\d[\d,]*)", text, re.I):

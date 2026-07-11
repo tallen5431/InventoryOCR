@@ -71,6 +71,11 @@ def _build_rows(filtered):
         # correctly under the table's native column sort.
         row["added"] = (row.get("created_at") or "")[:10]
 
+        # Server-computed low-stock flag so the table highlight uses a simple,
+        # version-proof equality query ({_low} = "low") instead of relying on
+        # DataTable "is not blank"-style syntax that its grammar doesn't support.
+        row["_low"] = "low" if data.is_low_stock(r) else ""
+
         # Truncate the description so rows stay compact — the full text (and the
         # extracted specs) are shown in the row's hover tooltip.
         full_desc = (row.get("description") or "").strip()
