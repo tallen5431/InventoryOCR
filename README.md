@@ -49,9 +49,13 @@ to find something or restock.
   location / bin in one go, **merge them into a single entry** (keeps the richest
   one, adds up the quantities, and combines every photo/spec/tag), or delete them
   together. Merges and bulk deletes offer a one‑click **Undo**.
-- 📊 **At‑a‑glance** — KPI cards (total items, total quantity, low‑stock count,
-  categories) and an **Overview** with item/quantity totals grouped by **type**,
-  by location, and by category.
+- 📊 **At‑a‑glance** — KPI cards (total items, total quantity, **needs‑reorder**
+  count, categories) and an **Overview** with item/quantity totals grouped by
+  **type**, by location, and by category.
+- 🔔 **Per‑item reorder points** — set a **Reorder at** number on an item and it's
+  flagged (and counted in the KPI) only when its quantity drops to or below that
+  point. Items with no reorder point are never flagged — low stock is opt‑in, so
+  the count reflects only things you actually need to restock.
 - 📤 **Export** — one‑click CSV of your whole inventory (including bin, specs,
   value, dimensions, tags, and product link).
 - 🔎 **Identify from photo** — send an item's photo to a local vision AI

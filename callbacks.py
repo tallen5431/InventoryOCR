@@ -773,6 +773,7 @@ def register_callbacks(app):
             Output("item-name", "value"),
             Output("item-desc", "value"),
             Output("item-qty", "value"),
+            Output("item-reorder", "value"),
             Output("item-type", "value"),
             Output("item-category", "value"),
             Output("item-location", "value"),
@@ -808,6 +809,7 @@ def register_callbacks(app):
             State("item-name", "value"),
             State("item-desc", "value"),
             State("item-qty", "value"),
+            State("item-reorder", "value"),
             State("item-type", "value"),
             State("item-category", "value"),
             State("item-location", "value"),
@@ -826,7 +828,7 @@ def register_callbacks(app):
     )
     def manage_table(pathname, save_clicks, save_next_clicks, delete_clicks, sel_rows, cancel_clicks,
                      search, filter_type, filter_cat, filter_loc, sort_by, _refresh_seq,
-                     name, desc, qty, item_type, category, location, location_code,
+                     name, desc, qty, reorder, item_type, category, location, location_code,
                      specs, value, dims, tags, producturl, img_contents,
                      current_images, editing_id, current_rows):
         triggered = (ctx.triggered_id or "")
@@ -838,16 +840,17 @@ def register_callbacks(app):
         next_sel = sel_rows or []
         next_name = next_desc = next_qty = next_type = next_category = next_location = no_update
         next_code = next_specs = next_value = next_dims = next_tags = next_url = no_update
-        next_editing = next_images = next_upload = no_update
+        next_editing = next_images = next_upload = next_reorder = no_update
 
         def _clear_form(keep_location=False):
             """Reset the form. When keep_location, the type/category/location/bin stay
             so you can scan a run of similar items without re-typing where they live."""
             nonlocal next_name, next_desc, next_qty, next_type, next_category, next_location
             nonlocal next_code, next_specs, next_value, next_dims, next_tags, next_url
-            nonlocal next_editing, next_images, next_upload, next_sel
+            nonlocal next_editing, next_images, next_upload, next_sel, next_reorder
             next_sel = []
             next_name, next_desc, next_qty = "", "", 1
+            next_reorder = None
             next_specs, next_value, next_dims, next_tags, next_url = "", "", "", "", ""
             if not keep_location:
                 next_type, next_category, next_location, next_code = "", "", "", ""
@@ -892,13 +895,13 @@ def register_callbacks(app):
                                          category=cat, location=loc, location_code=code,
                                          specifications=specs, estimated_value=value,
                                          dimensions=dims, tags=tags, product_url=producturl,
-                                         item_type=typ)
+                                         item_type=typ, reorder_at=reorder)
                         toast_header, toast_icon, toast_msg = "Item Updated", "success", f'"{nm}" updated.'
                     else:
                         data.add_item(nm, ds, nqty, img_filenames, "", category=cat, location=loc,
                                       location_code=code, specifications=specs, estimated_value=value,
                                       dimensions=dims, tags=tags, product_url=producturl,
-                                      item_type=typ)
+                                      item_type=typ, reorder_at=reorder)
                         toast_header, toast_icon, toast_msg = "Item Added", "success", f'"{nm}" added.'
                 except ValueError as e:
                     toast_header, toast_icon, toast_msg = "Duplicate Name", "danger", str(e)
@@ -937,6 +940,7 @@ def register_callbacks(app):
                     next_name = actual_row.get("name", row.get("name", ""))
                     next_desc = actual_row.get("description", row.get("description", ""))
                     next_qty = actual_row.get("qty", row.get("qty", None))
+                    next_reorder = actual_row.get("reorder_at")
                     next_type = actual_row.get("type", "")
                     next_category = actual_row.get("category", "")
                     next_location = actual_row.get("location", "")
@@ -963,7 +967,8 @@ def register_callbacks(app):
         out_rows = _build_rows(filtered)
 
         return [
-            out_rows, next_sel, next_name, next_desc, next_qty, next_type, next_category, next_location,
+            out_rows, next_sel, next_name, next_desc, next_qty, next_reorder, next_type,
+            next_category, next_location,
             next_code, next_specs, next_value, next_dims, next_tags, next_url,
             next_editing, next_images, next_upload,
             toast_open, toast_header, toast_icon, toast_msg
@@ -1206,7 +1211,7 @@ def register_callbacks(app):
         rows = rows or []
         total = len(rows)
         total_qty = sum(int(r.get("qty") or 0) for r in rows)
-        low = sum(1 for r in rows if (int(r.get("qty") or 0)) < LOW_STOCK_THRESHOLD)
+        low = sum(1 for r in rows if data.is_low_stock(r))
         cats = len({(r.get("category") or "").strip() for r in rows if (r.get("category") or "").strip()})
         return total, total_qty, low, cats
 
@@ -1240,11 +1245,13 @@ def register_callbacks(app):
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow([
-            "id", "name", "type", "category", "location", "bin", "qty", "added", "description",
+            "id", "name", "type", "category", "location", "bin", "qty", "reorder_at",
+            "added", "description",
             "specifications", "estimated_value", "dimensions", "tags",
             "product_url", "ocr_text", "images",
         ])
         for r in rows:
+            ra = r.get("reorder_at")
             writer.writerow([
                 r.get("id"),
                 r.get("name", ""),
@@ -1253,6 +1260,7 @@ def register_callbacks(app):
                 r.get("location", ""),
                 r.get("location_code", ""),
                 r.get("qty", 0),
+                "" if ra is None else ra,
                 r.get("created_at", ""),
                 r.get("description", ""),
                 " | ".join(r.get("specifications", []) or []),

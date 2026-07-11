@@ -34,7 +34,7 @@ def kpi_bar():
         [
             _kpi_card("bi-box-seam", "text-primary", "Total Items", "kpi-total"),
             _kpi_card("bi-123", "text-success", "Total Quantity", "kpi-qty"),
-            _kpi_card("bi-exclamation-triangle-fill", "text-warning", f"Low Stock (< {LOW_STOCK_THRESHOLD})", "kpi-low"),
+            _kpi_card("bi-exclamation-triangle-fill", "text-warning", "Needs Reorder", "kpi-low"),
             _kpi_card("bi-tags-fill", "text-info", "Categories", "kpi-cat"),
         ],
         className="g-3 mb-2",
@@ -128,6 +128,21 @@ def sidebar_form():
                                         [
                                             dbc.Label("Quantity", className="mt-2"),
                                             dbc.Input(id="item-qty", type="number", min=0, step=1, value=1),
+                                        ],
+                                        xs=6,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label(
+                                                [html.I(className="bi bi-bell me-1"), "Reorder at"],
+                                                className="mt-2",
+                                            ),
+                                            dbc.Input(id="item-reorder", type="number", min=0, step=1,
+                                                      placeholder="—"),
+                                            html.Div(
+                                                "Flag as low stock when quantity reaches this. Blank = never.",
+                                                className="text-muted", style={"fontSize": "0.72rem"},
+                                            ),
                                         ],
                                         xs=6,
                                     ),
@@ -425,6 +440,7 @@ def inventory_table():
         {"name": "Photo", "id": "image", "presentation": "markdown"},
         {"name": "Name", "id": "name"},
         {"name": "Qty", "id": "qty", "type": "numeric"},
+        {"name": "Reorder at", "id": "reorder_at", "type": "numeric", "hideable": True},
         {"name": "Added", "id": "added", "hideable": True},
         {"name": "Type", "id": "type", "hideable": True},
         {"name": "Category", "id": "category", "hideable": True},
@@ -451,7 +467,7 @@ def inventory_table():
         filter_action="none",
         # Description is long; it's shown in full in the row's hover tooltip, so
         # keep it out of the default view. Re-show any of these via Toggle Columns.
-        hidden_columns=["id", "all_images", "ocr_text", "description"],
+        hidden_columns=["id", "all_images", "ocr_text", "description", "reorder_at"],
         style_table={
             "height": "70vh",
             "overflowY": "auto",
@@ -496,7 +512,9 @@ def inventory_table():
         style_data_conditional=[
             {"if": {"row_index": "odd"}, "backgroundColor": "var(--bs-table-striped-bg)"},
             {
-                "if": {"filter_query": "{qty} < " + str(LOW_STOCK_THRESHOLD), "column_id": "qty"},
+                # Highlight the qty of items at/below their own reorder point.
+                "if": {"filter_query": "{reorder_at} is not blank && {qty} <= {reorder_at}",
+                       "column_id": "qty"},
                 "color": "var(--bs-warning)",
                 "fontWeight": "700",
             },

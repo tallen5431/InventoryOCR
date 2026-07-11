@@ -164,6 +164,8 @@ def inventory() -> List[Dict[str, Any]]:
             "location": (r.get("location") or "").strip(),
             "location_code": (r.get("location_code") or "").strip(),
             "qty": int(r.get("qty") or 0),
+            # Optional per-item reorder point: low ⇔ set AND qty <= reorder_at.
+            "reorder_at": _coerce_reorder(r.get("reorder_at")),
             "images": images if isinstance(images, list) else [],
             "ocr_text": r.get("ocr_text", ""),
             "thumb_url": r.get("thumb_url", ""),
@@ -237,6 +239,21 @@ def _clean_images(images: Optional[List[str]]) -> List[str]:
         return [images] if images else []
     return [i for i in images if i]
 
+def _coerce_reorder(v: Any) -> Optional[int]:
+    """Parse a per-item reorder point into a non-negative int, or None if unset.
+
+    None means 'no reorder point set' — the item is never flagged low. 0 is a
+    valid point. Non-numeric/blank input becomes None.
+    """
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    try:
+        n = int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 0 else None
+
+
 def add_item(
     name: str,
     description: str,
@@ -252,6 +269,7 @@ def add_item(
     product_url: str = "",
     tags: Any = None,
     item_type: str = "",
+    reorder_at: Any = None,
 ) -> Dict[str, Any]:
     rows = inventory()
     # Unique by name
@@ -267,6 +285,7 @@ def add_item(
         "location": (location or "").strip(),
         "location_code": (location_code or "").strip(),
         "qty": int(qty or 0),
+        "reorder_at": _coerce_reorder(reorder_at),
         "images": _clean_images(images),
         "ocr_text": ocr_text or "",
         "created_at": _now_iso(),
@@ -304,6 +323,7 @@ def update_item(
     product_url: Any = _KEEP,
     tags: Any = _KEEP,
     item_type: Any = _KEEP,
+    reorder_at: Any = _KEEP,
 ) -> Dict[str, Any]:
     rows = inventory()
     found = None
@@ -334,6 +354,8 @@ def update_item(
                 r["product_url"] = (product_url or "").strip()
             if tags is not _KEEP:
                 r["tags"] = _norm_list(tags)
+            if reorder_at is not _KEEP:
+                r["reorder_at"] = _coerce_reorder(reorder_at)
             found = r
             break
     if found is None:
@@ -406,7 +428,7 @@ def prune_unreferenced_images() -> int:
 
 # Fields that may be patched in place without a full form round-trip.
 _PATCHABLE = {"name", "description", "category", "type", "location", "location_code",
-              "qty", "estimated_value", "dimensions", "product_url"}
+              "qty", "estimated_value", "dimensions", "product_url", "reorder_at"}
 
 
 def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
@@ -417,7 +439,12 @@ def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
         if int(r.get("id") or 0) == int(item_id):
             for k, v in fields.items():
                 if k in _PATCHABLE and v is not None:
-                    r[k] = int(v) if k == "qty" else (str(v).strip() if isinstance(v, str) else v)
+                    if k == "reorder_at":
+                        r[k] = _coerce_reorder(v)
+                    elif k == "qty":
+                        r[k] = int(v)
+                    else:
+                        r[k] = str(v).strip() if isinstance(v, str) else v
             found = r
             break
     if found is not None:
@@ -764,12 +791,21 @@ def summary_by(field: str, rows: Optional[List[Dict[str, Any]]] = None) -> List[
     out.sort(key=lambda d: (-d["qty"], -d["items"], d["name"].lower()))
     return out
 
+def is_low_stock(row: Dict[str, Any]) -> bool:
+    """An item needs reordering only when it has a reorder point set and its
+    quantity has fallen to or below it. Items with no reorder point are never
+    flagged — low stock is opt-in, per item."""
+    ra = _coerce_reorder(row.get("reorder_at"))
+    return ra is not None and int(row.get("qty") or 0) <= ra
+
+
 def stats(rows: Optional[List[Dict[str, Any]]] = None, low_stock_threshold: int = 5) -> Dict[str, int]:
-    """Headline numbers for the KPI bar."""
+    """Headline numbers for the KPI bar. ``low_stock_threshold`` is retained for
+    backward compatibility but ignored — low stock is now per-item (reorder_at)."""
     rows = rows if rows is not None else inventory()
     total_items = len(rows)
     total_qty = sum(int(r.get("qty") or 0) for r in rows)
-    low_stock = sum(1 for r in rows if int(r.get("qty") or 0) < low_stock_threshold)
+    low_stock = sum(1 for r in rows if is_low_stock(r))
     return {
         "items": total_items,
         "qty": total_qty,
@@ -1550,6 +1586,10 @@ def merge_preview(items: List[Dict[str, Any]],
             ocr_parts.append(t)
 
     total_qty = sum(max(0, int(r.get("qty") or 0)) for r in ordered)
+    # Keep the tightest reorder point among the merged items (else none).
+    _reorders = [_coerce_reorder(r.get("reorder_at")) for r in ordered]
+    _reorders = [x for x in _reorders if x is not None]
+    merged_reorder = min(_reorders) if _reorders else None
 
     # Note anything the merge has to choose between, so the user isn't surprised.
     conflicts: List[str] = []
@@ -1571,6 +1611,7 @@ def merge_preview(items: List[Dict[str, Any]],
         "location": _first_nonempty(ordered, "location"),
         "location_code": _first_nonempty(ordered, "location_code"),
         "qty": total_qty,
+        "reorder_at": merged_reorder,
         "images": _union_list(ordered, "images"),
         "ocr_text": "\n".join(ocr_parts),
         "specifications": _union_list(ordered, "specifications"),
@@ -1705,8 +1746,8 @@ def merge_group(primary_id: int, merge_ids: List[int],
 
     # Write the merged fields onto the primary row (keep its id), drop the rest.
     for k in ("name", "description", "category", "type", "location", "location_code", "qty",
-              "images", "ocr_text", "specifications", "estimated_value", "dimensions",
-              "product_url", "tags", "created_at"):
+              "reorder_at", "images", "ocr_text", "specifications", "estimated_value",
+              "dimensions", "product_url", "tags", "created_at"):
         primary[k] = merged.get(k, primary.get(k))
 
     kept = [r for r in rows if int(r.get("id")) not in ids]
