@@ -804,12 +804,12 @@ def organize_card():
                                     title="Group like items into auto-created bins",
                                 ),
                                 dbc.Button(
-                                    [html.I(className="bi bi-box-seam me-1"), "Fit to my bins"],
+                                    [html.I(className="bi bi-box-seam me-1"), "Set up bins"],
                                     id="open-bins",
                                     color="secondary",
                                     size="sm",
                                     n_clicks=0,
-                                    title="Define the containers you own and pack items into them",
+                                    title="Say how many bins you have, name their bags, and pack items into them",
                                 ),
                                 dbc.Button(
                                     [html.I(className="bi bi-layers me-1"), "Merge duplicates",
@@ -830,9 +830,9 @@ def organize_card():
             dbc.CardBody(
                 [
                     html.Div(
-                        "Smart Organize analyses every item's name & category and groups related "
-                        "things into labelled bins (e.g. all your switches together). Then a keyword "
-                        "search tells you which bin something lives in.",
+                        "Set up how many bins you have and the bags inside each one, then see "
+                        "what's stored where. Smart Organize can also auto-group related items "
+                        "into labelled bins for you.",
                         className="text-muted small mb-2",
                     ),
                     html.Div(id="storage-map"),
@@ -855,22 +855,75 @@ def bins_modal():
                     ),
                     dbc.ModalBody(
                         [
+                            # --- Step 1: how many bins do you have? ---
                             html.Div(
-                                [html.I(className="bi bi-pencil-square me-2"),
-                                 html.Strong("The containers you actually have")],
+                                [html.I(className="bi bi-1-circle me-2"),
+                                 html.Strong("How many bins do you have?")],
+                                className="mb-1",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        dbc.InputGroup([
+                                            dbc.InputGroupText("Bins"),
+                                            dbc.Input(id="bin-count", type="number", min=1,
+                                                      max=200, step=1, placeholder="9"),
+                                        ]),
+                                        xs=6, sm=3,
+                                    ),
+                                    dbc.Col(
+                                        dbc.InputGroup([
+                                            dbc.InputGroupText("Prefix"),
+                                            dbc.Input(id="bin-prefix", value="BIN"),
+                                        ]),
+                                        xs=6, sm=3,
+                                    ),
+                                    dbc.Col(
+                                        dbc.InputGroup([
+                                            dbc.InputGroupText("Slots"),
+                                            dbc.Input(id="bin-capacity", type="number", min=1,
+                                                      step=1, value=25),
+                                        ]),
+                                        xs=6, sm=3,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Button(
+                                            [html.I(className="bi bi-plus-square me-1"), "Generate"],
+                                            id="generate-bins", color="primary", outline=True,
+                                            n_clicks=0, className="w-100",
+                                        ),
+                                        xs=6, sm=3,
+                                    ),
+                                ],
+                                className="g-2",
+                            ),
+                            html.Div(
+                                "Creates rows like BIN-01 … BIN-09 below. Existing bins are kept — "
+                                "then add bag names to any bin.",
+                                className="text-muted small mt-1 mb-2",
+                            ),
+                            html.Hr(className="my-2"),
+                            # --- Step 2: fine-tune, incl. bags per bin ---
+                            html.Div(
+                                [html.I(className="bi bi-2-circle me-2"),
+                                 html.Strong("Name your bins & their bags")],
                                 className="mb-1",
                             ),
                             html.Div(
-                                "One per line —  CODE | Name | capacity  "
-                                "(capacity = how many different items fit).",
+                                [
+                                    "One bin per line —  ",
+                                    html.Code("CODE | Name | slots | bag1, bag2, bag3"),
+                                    ".  Name, slots and bags are optional; bags are the "
+                                    "separate bags of stuff inside that bin.",
+                                ],
                                 className="text-muted small mb-1",
                             ),
                             dbc.Textarea(
                                 id="containers-text",
-                                rows=5,
-                                placeholder=("A1 | Small parts drawer | 20\n"
-                                             "B1 | Garage tote | 50\n"
-                                             "SHELF | Workshop shelf | 30"),
+                                rows=6,
+                                placeholder=("BIN-01 | Small parts drawer | 20 | resistors, capacitors, diodes\n"
+                                             "BIN-02 | Cables tote | 40 | usb, ribbon, power\n"
+                                             "SHELF-01 | Workshop shelf | 30"),
                             ),
                             dbc.Row(
                                 [

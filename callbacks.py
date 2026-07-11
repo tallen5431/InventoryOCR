@@ -224,34 +224,65 @@ def _render_plan(plan):
     )
 
 def _render_storage_map(bins):
-    """Render data.storage_map() as a compact per-bin list."""
+    """Render data.storage_overview() — every bin with its bags and live counts."""
     if not bins:
-        return html.Div("No bins yet. Add items and run Smart Organize.", className="text-muted small")
+        return html.Div(
+            "No bins yet — click “Set up bins” to say how many you have, or run Smart Organize.",
+            className="text-muted small",
+        )
     cards = []
     for b in bins:
-        code = b.get("location_code", "")
+        code = b.get("code", "")
         label = code or "Unfiled"
         badge_class = "badge bg-primary" if code else "badge bg-secondary"
-        names = b.get("names", [])
-        preview = ", ".join(names[:6]) + ("…" if len(names) > 6 else "")
+        items = b.get("items", 0)
+        cap = b.get("capacity", 0)
+        over = bool(cap) and items > cap
+        usage = f"{items}/{cap}" if cap else f"{items}"
+        usage_class = "badge rounded-pill me-1 " + ("bg-danger" if over else "bg-primary")
+
+        # Bags: the ones actually in use (with counts) first, then any planned
+        # bags not yet used (as muted outlines).
+        used = b.get("used_bags", []) or []            # [(name, count), …]
+        used_names = {n.lower() for n, _ in used}
+        chips = [
+            html.Span(f"{name} · {cnt}",
+                      className="badge bg-info-subtle text-dark border border-info-subtle me-1 mb-1")
+            for name, cnt in used
+        ]
+        chips += [
+            html.Span(p, className="badge bg-light text-muted border me-1 mb-1")
+            for p in (b.get("bags") or []) if p.lower() not in used_names
+        ]
+
+        body = []
+        if chips:
+            body.append(html.Div(chips, className="mt-1"))
+        names = b.get("names", []) or []
+        if names:
+            preview = ", ".join(names[:6]) + ("…" if len(names) > 6 else "")
+            body.append(html.Div(preview, className="text-muted small mt-1"))
+        elif not chips:
+            body.append(html.Div("Empty", className="text-muted small fst-italic mt-1"))
+
         cards.append(
             html.Div(
                 [
                     html.Div(
                         [
                             html.Span(label, className=badge_class + " me-2"),
-                            html.Span(b.get("location_name", "") or "", className="text-muted small"),
+                            html.Span(b.get("name", "") or "", className="fw-semibold small"),
                             html.Span(
                                 [
-                                    html.Span(f"{b.get('qty', 0)}", className="badge bg-primary rounded-pill me-1"),
-                                    html.Span(f"{b.get('items', 0)} item{'s' if b.get('items') != 1 else ''}", className="text-muted small"),
+                                    html.Span(usage, className=usage_class),
+                                    html.Span(f"item{'s' if items != 1 else ''}", className="text-muted small"),
                                 ],
                                 className="ms-auto text-nowrap",
                             ),
                         ],
                         className="d-flex align-items-center",
                     ),
-                    html.Div(preview, className="text-muted small mt-1"),
+                    *body,
                 ],
                 className="py-2 border-bottom",
             )
@@ -971,8 +1002,17 @@ def register_callbacks(app):
         type_choices = list(data.TYPE_GROUPS) + [t for t in present_types if t not in data.TYPE_GROUPS]
         type_dl = [html.Option(value=t) for t in type_choices]
         cat_dl = [html.Option(value=c) for c in cats]
-        loc_dl = [html.Option(value=l) for l in locs]
-        code_dl = [html.Option(value=c) for c in codes]
+        # Location type-ahead also offers the bag names defined on your bins, so a
+        # bag can be used as an item's sub-location without retyping it.
+        conts = data.containers()
+        bag_names = []
+        for c in conts:
+            bag_names += (c.get("bags") or [])
+        loc_choices = list(dict.fromkeys(list(locs) + bag_names))
+        # Bin/code type-ahead offers every defined bin code too.
+        code_choices = list(dict.fromkeys(list(codes) + [c["code"] for c in conts]))
+        loc_dl = [html.Option(value=l) for l in loc_choices]
+        code_dl = [html.Option(value=c) for c in code_choices]
         return type_opts, cat_opts, loc_opts, type_dl, cat_dl, loc_dl, code_dl
 
     # ---------- Rich hover tooltips (full extracted details per row) ----------
@@ -1700,7 +1740,9 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def render_storage_map(_table_data):
-        return _render_storage_map(data.storage_map())
+        # storage_overview() merges the defined bins (with their bags) and the
+        # live counts, so empty bins you've set up still show on the map.
+        return _render_storage_map(data.storage_overview())
 
     # ---------- Storage bins: open editor (load current containers) ----------
     @app.callback(
@@ -1713,6 +1755,36 @@ def register_callbacks(app):
         if not n:
             raise PreventUpdate
         return True, data.containers_to_text()
+
+    # ---------- Storage bins: quick-generate N numbered bins ----------
+    @app.callback(
+        Output("containers-text", "value", allow_duplicate=True),
+        Output("bins-status", "children", allow_duplicate=True),
+        Input("generate-bins", "n_clicks"),
+        State("bin-count", "value"),
+        State("bin-prefix", "value"),
+        State("bin-capacity", "value"),
+        State("containers-text", "value"),
+        prevent_initial_call=True,
+    )
+    def generate_bins(n, count, prefix, capacity, existing_text):
+        if not n:
+            raise PreventUpdate
+        if not count:
+            return no_update, html.Span("Enter how many bins first.", className="text-warning")
+        # Additive: keep whatever's already in the editor, append the new codes.
+        existing = data.parse_containers_text(existing_text)
+        have = {c["code"].lower() for c in existing}
+        fresh = [c for c in data.make_bins(count, prefix or "BIN", capacity or 25)
+                 if c["code"].lower() not in have]
+        merged = existing + fresh
+        msg = html.Span(
+            [html.I(className="bi bi-check-circle me-1"),
+             f"Added {len(fresh)} bin{'s' if len(fresh) != 1 else ''} "
+             f"({len(merged)} total). Add bag names, then Save."],
+            className="text-success",
+        )
+        return data.containers_to_text(merged), msg
 
     @app.callback(
         Output("bins-modal", "is_open", allow_duplicate=True),
@@ -1728,6 +1800,7 @@ def register_callbacks(app):
     @app.callback(
         Output("bins-status", "children"),
         Output("containers-text", "value", allow_duplicate=True),
+        Output("refresh-seq", "data", allow_duplicate=True),
         Input("save-containers", "n_clicks"),
         State("containers-text", "value"),
         prevent_initial_call=True,
@@ -1736,11 +1809,15 @@ def register_callbacks(app):
         if not n:
             raise PreventUpdate
         conts = data.save_containers(data.parse_containers_text(text))
+        total_bags = sum(len(c.get("bags") or []) for c in conts)
+        bag_note = f" with {total_bags} bag{'s' if total_bags != 1 else ''}" if total_bags else ""
         msg = html.Span(
-            [html.I(className="bi bi-check-circle me-1"), f"Saved {len(conts)} bin{'s' if len(conts) != 1 else ''}."],
+            [html.I(className="bi bi-check-circle me-1"),
+             f"Saved {len(conts)} bin{'s' if len(conts) != 1 else ''}{bag_note}."],
             className="text-success",
         )
-        return msg, data.containers_to_text(conts)
+        # Bump refresh-seq so the storage map re-renders with the new bins/bags.
+        return msg, data.containers_to_text(conts), time.time()
 
     # ---------- Storage bins: fit items into the containers ----------
     @app.callback(

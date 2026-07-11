@@ -1046,8 +1046,32 @@ from pathlib import Path as _Path
 CONTAINERS_FILE = _Path(INVENTORY_JSON).parent / "containers.json"
 
 
+def _clean_bags(v: Any) -> List[str]:
+    """Normalise a bin's sub-compartment ('bag') labels into a clean, de-duped list.
+
+    Accepts a list or a comma/newline-separated string. Order is preserved and
+    case-insensitive duplicates are dropped.
+    """
+    if isinstance(v, str):
+        v = v.replace("\n", ",").split(",")
+    if not isinstance(v, (list, tuple)):
+        return []
+    out: List[str] = []
+    seen = set()
+    for b in v:
+        s = str(b).strip()
+        if s and s.lower() not in seen:
+            seen.add(s.lower())
+            out.append(s)
+    return out
+
+
 def containers() -> List[Dict[str, Any]]:
-    """Load the user-defined containers: [{code, name, capacity}]."""
+    """Load the user-defined containers: [{code, name, capacity, bags}].
+
+    ``bags`` are optional sub-compartment labels within a bin (e.g. different
+    bags of parts on one shelf). Legacy files without ``bags`` load as [].
+    """
     p = CONTAINERS_FILE
     if not p.exists():
         return []
@@ -1066,7 +1090,8 @@ def containers() -> List[Dict[str, Any]]:
             cap = max(0, int(c.get("capacity") or 0))
         except (TypeError, ValueError):
             cap = 0
-        out.append({"code": code, "name": (c.get("name") or code).strip(), "capacity": cap})
+        out.append({"code": code, "name": (c.get("name") or code).strip(),
+                    "capacity": cap, "bags": _clean_bags(c.get("bags"))})
     return out
 
 
@@ -1082,19 +1107,54 @@ def save_containers(conts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             cap = max(0, int(c.get("capacity") or 0))
         except (TypeError, ValueError):
             cap = 0
-        clean.append({"code": code, "name": (c.get("name") or code).strip(), "capacity": cap})
+        clean.append({"code": code, "name": (c.get("name") or code).strip(),
+                      "capacity": cap, "bags": _clean_bags(c.get("bags"))})
     CONTAINERS_FILE.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
     return clean
 
 
+def make_bins(count: Any, prefix: str = "BIN", capacity: Any = 25,
+              start: int = 1, bags: Any = None) -> List[Dict[str, Any]]:
+    """Generate ``count`` sequentially-numbered bins, e.g. BIN-01 … BIN-09.
+
+    The number is zero-padded to a consistent width so codes sort naturally.
+    Any ``bags`` given are applied to every generated bin as starting labels.
+    """
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        count = 0
+    count = max(0, min(count, 200))  # sane upper bound
+    try:
+        capacity = max(0, int(capacity))
+    except (TypeError, ValueError):
+        capacity = 25
+    prefix = (str(prefix or "").strip() or "BIN").rstrip("-")
+    bag_list = _clean_bags(bags)
+    last = start + count - 1
+    width = max(2, len(str(last)))
+    out: List[Dict[str, Any]] = []
+    for i in range(start, start + count):
+        code = f"{prefix}-{str(i).zfill(width)}"
+        out.append({"code": code, "name": f"{prefix.title()} {i}",
+                    "capacity": capacity, "bags": list(bag_list)})
+    return out
+
+
 def parse_containers_text(text: str) -> List[Dict[str, Any]]:
-    """Parse an editor textarea (one container per line: ``CODE | Name | capacity``)."""
+    """Parse an editor textarea, one bin per line:
+
+        CODE | Name | capacity | bag1, bag2, bag3
+
+    Name, capacity and bags are all optional (a bare ``CODE`` works).
+    """
     out: List[Dict[str, Any]] = []
     for line in (text or "").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         parts = [p.strip() for p in line.split("|")]
+        bags = _clean_bags(parts[3]) if len(parts) >= 4 else []
         if len(parts) >= 3:
             code, name, cap = parts[0], parts[1], parts[2]
         elif len(parts) == 2:
@@ -1104,13 +1164,80 @@ def parse_containers_text(text: str) -> List[Dict[str, Any]]:
         m = _re.search(r"\d+", cap or "")
         capacity = int(m.group(0)) if m else 25
         if code:
-            out.append({"code": code, "name": name or code, "capacity": capacity})
+            out.append({"code": code, "name": name or code, "capacity": capacity, "bags": bags})
     return out
 
 
 def containers_to_text(conts: Optional[List[Dict[str, Any]]] = None) -> str:
     conts = conts if conts is not None else containers()
-    return "\n".join(f"{c['code']} | {c['name']} | {c['capacity']}" for c in conts)
+    lines = []
+    for c in conts:
+        line = f"{c['code']} | {c['name']} | {c['capacity']}"
+        bags = c.get("bags") or []
+        if bags:
+            line += " | " + ", ".join(bags)
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def storage_overview(rows: Optional[List[Dict[str, Any]]] = None,
+                     conts: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Every defined bin (even empty) merged with what's actually in it now.
+
+    Combines your bin definitions (code / name / capacity / planned bags) with
+    the live per-bin counts, plus any bin codes that hold items but were never
+    defined, plus an 'Unfiled' bucket. Each bin also reports ``used_bags`` — the
+    distinct item ``location`` values seen inside it — so the bags actually in
+    use show up next to the ones you planned.
+    """
+    rows = rows if rows is not None else inventory()
+    conts = conts if conts is not None else containers()
+
+    smap: Dict[str, Dict[str, Any]] = {}
+    unfiled: Optional[Dict[str, Any]] = None
+    for b in storage_map(rows):
+        if b["location_code"]:
+            smap[b["location_code"]] = b
+        elif b["items"]:
+            unfiled = b
+
+    # Distinct in-use sub-groups (item.location) per bin code, with counts.
+    used_bags: Dict[str, Dict[str, int]] = {}
+    for r in rows:
+        code = (r.get("location_code") or "").strip()
+        loc = (r.get("location") or "").strip()
+        if not code or not loc:
+            continue
+        used_bags.setdefault(code, {})
+        used_bags[code][loc] = used_bags[code].get(loc, 0) + 1
+
+    def _entry(code, name, capacity, bags, b, defined):
+        return {
+            "code": code,
+            "name": name,
+            "capacity": capacity,
+            "bags": bags,
+            "used_bags": sorted(used_bags.get(code, {}).items(), key=lambda kv: kv[0].lower()),
+            "items": (b or {}).get("items", 0),
+            "qty": (b or {}).get("qty", 0),
+            "names": (b or {}).get("names", []),
+            "defined": defined,
+        }
+
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for c in conts:
+        code = c["code"]
+        seen.add(code.lower())
+        out.append(_entry(code, c.get("name") or code, c.get("capacity", 0),
+                          list(c.get("bags") or []), smap.get(code), True))
+    for code, b in smap.items():
+        if code.lower() in seen:
+            continue
+        out.append(_entry(code, b.get("location_name") or code, 0, [], b, False))
+    if unfiled:
+        out.append(_entry("", "Unfiled", 0, [], unfiled, False))
+    return out
 
 
 def fit_to_containers(

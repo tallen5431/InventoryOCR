@@ -69,10 +69,12 @@ to find something or restock.
   many), ranks the best deal, and can **track prices over time** across repeat
   runs. If a listing matches something you own, one click **writes the best unit
   price + link back** onto that item.
-- 🧺 **Storage system** — give items a short **bin / location code**, or run
-  **Smart Organize** to group like items into labelled bins automatically. A live
-  **Storage map** shows what lives in each bin so a keyword search tells you
-  exactly where to look.
+- 🧺 **Storage system** — say **how many bins you have** in one step (type a
+  number → it generates `BIN-01 … BIN-09`), and give each bin its own **bags**
+  (sub-compartments, e.g. *resistors, capacitors, diodes*). The live **Storage
+  map** shows every bin — even empty ones — with its bags and how full it is, so
+  a keyword search tells you exactly where to look. **Smart Organize** can also
+  group like items into labelled bins automatically.
 - 🧬 **Merge duplicates** — scanned the same thing twice? **Merge duplicates**
   finds identical / very similar entries, previews the combined item (quantities
   added, photos/specs/tags kept), and merges the ones you pick — while keeping
@@ -320,19 +322,29 @@ make that fast:
    bin labels onto every item at once. Existing codes are preserved, so re‑running
    after you scan more items is safe and stable.
 
-3. **Fit to my bins.** Smart Organize invents as many bins as it needs — but in
-   real life you have a *fixed* set of drawers, totes and shelves. Click
-   **Fit to my bins** (next to Smart Organize) to describe the containers you
-   actually own and let the app pack everything into them. In the editor, list
-   one container per line as `CODE | Name | capacity`, for example:
+3. **Set up bins (with bags).** Smart Organize invents as many bins as it needs —
+   but in real life you have a *fixed* set of drawers, totes and shelves. Click
+   **Set up bins** (next to Smart Organize):
+
+   - **How many bins do you have?** Type a number, an optional code **prefix**
+     (default `BIN`) and **slots** each, then **Generate** — it creates
+     `BIN-01 … BIN-09` for you. Existing bins are kept, so it's additive.
+   - **Name your bins & their bags.** Fine-tune in the editor, one bin per line as
+     `CODE | Name | slots | bag1, bag2, bag3`. The **bags** are the separate bags
+     of material inside a bin, for example:
 
    ```
-   A1 | Small parts drawer | 20
-   B1 | Garage tote        | 50
-   SHELF | Workshop shelf   | 30
+   BIN-01 | Small parts drawer | 20 | resistors, capacitors, diodes
+   BIN-02 | Cables tote        | 40 | usb, ribbon, power
+   SHELF-01 | Workshop shelf   | 30
    ```
 
-   *Capacity* is how many **different items** a container should hold. **Save
+   The **Storage map** then lists every bin — even empty ones — with its bags and
+   how full it is; bags you've actually filled show a live item count. (Set an
+   item's **Location** to a bag name and its **Bin** to the bin code — both offer
+   type-ahead suggestions from what you've defined.)
+
+   *Slots* is how many **different items** a container should hold. **Save
    bins** remembers them (in `containers.json`); **Fit items into bins** runs a
    bin‑packing pass that keeps related items together (the same Switches /
    Resistors groups as Smart Organize), drops each group into the tightest
