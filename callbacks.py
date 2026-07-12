@@ -5,7 +5,7 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 import data
 from utils import save_image, get_thumbnail_url, get_image_url
-from config import LOW_STOCK_THRESHOLD, ASSET_IMAGE_PATH, OCR_TEXT_MAX_CHARS
+from config import ASSET_IMAGE_PATH, OCR_TEXT_MAX_CHARS
 
 URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
 if URL_PREFIX and not URL_PREFIX.startswith("/"):

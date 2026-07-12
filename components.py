@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dash import html, dcc, dash_table
 import dash_bootstrap_components as dbc
-from config import DATATABLE_PAGE_SIZE, TOAST_DURATION, LOW_STOCK_THRESHOLD
+from config import DATATABLE_PAGE_SIZE, TOAST_DURATION
 
 
 def _kpi_card(icon, color, label, value_id):
