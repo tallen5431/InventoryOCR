@@ -101,13 +101,15 @@ def detect_quantity(name: str, specs: Optional[List[str]] = None,
     # "Pack of 6", "Set of 3", "Box of 24"
     for m in re.finditer(rf"\b({_UNIT_WORDS})\s+of\s+(\d[\d,]*)", text, re.I):
         _add(m.group(2).replace(",", ""), _norm_unit(m.group(1)))
-    # "x100" / "100x" bundle notation — but NOT a dimension like "16x24" or
-    # "10 x 20 x 5 cm" (x has digits on both sides), and NOT an 'x' buried in a
-    # model number like "MAX7219" or "TC358870XBG" (x preceded by a letter). The
-    # 'x' must sit at a token boundary, so require a non-alphanumeric char before.
+    # "x100" bundle notation ("x" THEN the count) — but NOT a dimension like
+    # "16x24" (digits on both sides) nor an 'x' buried in a model number like
+    # "MAX7219" (x preceded by a letter), so the 'x' must sit at a token boundary.
+    # NOTE: the reverse "100x" form is deliberately NOT matched — it can't be told
+    # apart from a magnification ("40X-1000X microscope", "10X loupe"), which would
+    # otherwise be misread as a huge pack and wreck the per-unit value. Real packs
+    # written that way almost always carry a unit word ("100 pcs", "6-pack") caught
+    # above, so nothing useful is lost.
     for m in re.finditer(r"(?<![A-Za-z0-9])x\s*(\d{2,})(?!\s*[x\d])", text, re.I):
-        _add(m.group(1), "each")
-    for m in re.finditer(r"(?<![A-Za-z0-9])(\d{2,})\s*x(?!\s*[x\d])", text, re.I):
         _add(m.group(1), "each")
     # "Qty: 50" / "Quantity 50"
     for m in re.finditer(r"\b(?:qty|quantity)\.?\s*[:=]?\s*(\d[\d,]*)", text, re.I):

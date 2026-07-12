@@ -249,7 +249,10 @@ def _coerce_reorder(v: Any) -> Optional[int]:
         return None
     try:
         n = int(float(str(v).strip()))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError guards against inf/Infinity — json.loads accepts a bare
+        # Infinity, and this runs on every row of every read, so an uncaught throw
+        # here would take down the whole inventory.
         return None
     return n if n >= 0 else None
 
