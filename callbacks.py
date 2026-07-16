@@ -920,6 +920,40 @@ def _qa_photo_gallery(photos):
     return html.Div(items, className="image-gallery-grid")
 
 
+def _batch_preview(photos):
+    """Thumbnail strip + count for the batch-add modal, each removable."""
+    photos = photos or []
+    if not photos:
+        return html.Div("No photos yet — add some above.", className="text-muted small")
+    items = []
+    for i, fn in enumerate(photos):
+        thumb = get_thumbnail_url(fn)
+        if not thumb:
+            continue
+        items.append(
+            html.Div(
+                [
+                    html.Img(src=thumb, className="gallery-thumb"),
+                    html.Button(
+                        "×",
+                        id={"type": "batch-photo-remove", "index": i},
+                        className="btn btn-sm btn-danger delete-img-btn",
+                        title="Remove photo",
+                        n_clicks=0,
+                    ),
+                ],
+                className="gallery-item",
+            )
+        )
+    n = len(photos)
+    header = html.Div(
+        [html.Strong(f"{n} photo{'s' if n != 1 else ''}"),
+         html.Span(f" → {n} item{'s' if n != 1 else ''} will be created", className="text-muted")],
+        className="small mb-1",
+    )
+    return html.Div([header, html.Div(items, className="image-gallery-grid")])
+
+
 def _qa_apply_parsed(d, cur_name, cur_cat, cur_value, cur_extra, cur_src):
     """Fold a vision/import result into the wizard's review fields.
 
@@ -2325,6 +2359,114 @@ def register_callbacks(app):
             return (no_update, no_update, True, "Duplicate Name", "danger", str(e))
         return (False, time.time(), True, "Item Added", "success",
                 f'"{nm}" added from Quick Add.')
+
+    # ======================================================================
+    # Batch add — one item per photo, generic names, fast list populate
+    # ======================================================================
+
+    # ---------- Batch: open + reset ----------
+    @app.callback(
+        Output("batch-modal", "is_open"),
+        Output("batch-photos", "data"),
+        Input("open-batch-add", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def open_batch_add(n):
+        if not n:
+            raise PreventUpdate
+        return True, []
+
+    # ---------- Batch: close (reclaim staged photos) ----------
+    @app.callback(
+        Output("batch-modal", "is_open", allow_duplicate=True),
+        Input("batch-close", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def close_batch_add(n):
+        if not n:
+            raise PreventUpdate
+        data.prune_unreferenced_images()
+        return False
+
+    # ---------- Batch: upload photos → stage them ----------
+    @app.callback(
+        Output("batch-photos", "data", allow_duplicate=True),
+        Output("batch-upload", "contents"),
+        Input("batch-upload", "contents"),
+        State("batch-upload", "filename"),
+        State("batch-photos", "data"),
+        prevent_initial_call=True,
+    )
+    def batch_upload(contents, filenames, photos):
+        if not contents:
+            raise PreventUpdate
+        uploads = contents if isinstance(contents, list) else [contents]
+        out = list(photos or [])
+        for c in uploads:
+            if not c:
+                continue
+            try:
+                out.append(save_image(c, ASSET_IMAGE_PATH, base_name="item")["filename"])
+            except Exception:
+                continue
+        return out, None
+
+    # ---------- Batch: render the preview ----------
+    @app.callback(
+        Output("batch-preview", "children"),
+        Input("batch-photos", "data"),
+        prevent_initial_call=False,
+    )
+    def batch_render_preview(photos):
+        return _batch_preview(photos)
+
+    # ---------- Batch: remove a staged photo ----------
+    @app.callback(
+        Output("batch-photos", "data", allow_duplicate=True),
+        Input({"type": "batch-photo-remove", "index": ALL}, "n_clicks"),
+        State("batch-photos", "data"),
+        prevent_initial_call=True,
+    )
+    def batch_remove_photo(clicks, photos):
+        if not photos or not clicks or all(not c for c in clicks):
+            raise PreventUpdate
+        trig = ctx.triggered_id
+        if isinstance(trig, dict):
+            i = trig.get("index")
+            if isinstance(i, int) and 0 <= i < len(photos):
+                out = list(photos)
+                del out[i]
+                return out
+        raise PreventUpdate
+
+    # ---------- Batch: create one item per photo ----------
+    @app.callback(
+        Output("batch-modal", "is_open", allow_duplicate=True),
+        Output("batch-photos", "data", allow_duplicate=True),
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("batch-create", "n_clicks"),
+        State("batch-photos", "data"),
+        prevent_initial_call=True,
+    )
+    def batch_create(n, photos):
+        if not n:
+            raise PreventUpdate
+        photos = [p for p in (photos or []) if p]
+        if not photos:
+            return (no_update, no_update, no_update, True, "No photos", "warning",
+                    "Add some photos first — each becomes its own item.")
+        created = data.add_photo_items(photos)
+        c = len(created)
+        first = created[0]["name"] if created else ""
+        last = created[-1]["name"] if created else ""
+        rng = first if c == 1 else f"{first}–{last}"
+        return (False, [], time.time(), True, "Items created", "success",
+                f"Created {c} item{'s' if c != 1 else ''} ({rng}). "
+                f"Rename them anytime; Merge combines any that are the same thing.")
 
     # ---------- Form: "Search the web" link tracks the typed name ----------
     @app.callback(

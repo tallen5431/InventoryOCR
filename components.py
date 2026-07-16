@@ -481,6 +481,14 @@ def dashboard_toolbar():
                 ),
                 xs=12, sm="auto",
             ),
+            dbc.Col(
+                dbc.Button(
+                    [html.I(className="bi bi-images me-1"), "Batch"],
+                    id="open-batch-add", color="info", outline=True, n_clicks=0, className="w-100",
+                    title="Drop a set of photos — each becomes its own item with a generic name",
+                ),
+                xs=12, sm="auto",
+            ),
             dbc.Col(search_box(), xs=12, sm=True),
             dbc.Col(
                 dbc.ButtonGroup(
@@ -1103,6 +1111,75 @@ def quick_add_modal():
                     ),
                 ],
                 id="qa-modal",
+                is_open=False,
+                size="lg",
+                centered=True,
+                scrollable=True,
+            ),
+        ]
+    )
+
+
+def batch_add_modal():
+    """Drop a set of photos; each becomes its own item with a generic name.
+
+    The fastest way to get everything into the list. Names auto-number
+    (Item 0001…) so you can rename and fill in details later — and if two photos
+    turn out to be the same item, ticking both rows and hitting Merge combines
+    them (photos stack, quantities add).
+    """
+    return html.Div(
+        [
+            dcc.Store(id="batch-photos", data=[]),
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(
+                        dbc.ModalTitle([html.I(className="bi bi-images me-2"),
+                                        "Batch add — one item per photo"])
+                    ),
+                    dbc.ModalBody(
+                        [
+                            html.P(
+                                "Drop or snap a set of photos. Each photo becomes its own item with "
+                                "an auto-numbered name (Item 0001, 0002…), so the list fills instantly "
+                                "— rename and add details later.",
+                                className="text-muted small",
+                            ),
+                            dcc.Upload(
+                                id="batch-upload",
+                                children=html.Div(
+                                    [
+                                        html.Div("📷", className="upload-icon"),
+                                        html.Div(html.Strong("Take or choose several photos")),
+                                        html.Div("Pick multiple at once — each is a separate item.",
+                                                 className="text-muted small mt-1"),
+                                    ]
+                                ),
+                                multiple=True,
+                                accept="image/*",
+                                className="upload-dropzone",
+                            ),
+                            html.Div(id="batch-preview", className="mt-2"),
+                            html.Div(
+                                [
+                                    html.I(className="bi bi-info-circle me-1"),
+                                    "Two photos of the same item? Create them, then tick both rows in "
+                                    "the table and hit ", html.Strong("Merge"), " to combine.",
+                                ],
+                                className="text-muted small mt-2",
+                            ),
+                        ]
+                    ),
+                    dbc.ModalFooter(
+                        [
+                            dbc.Button([html.I(className="bi bi-plus-lg me-1"), "Create items"],
+                                       id="batch-create", color="primary", n_clicks=0),
+                            dbc.Button("Close", id="batch-close", color="secondary", n_clicks=0),
+                        ],
+                        className="justify-content-between",
+                    ),
+                ],
+                id="batch-modal",
                 is_open=False,
                 size="lg",
                 centered=True,

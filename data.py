@@ -473,6 +473,71 @@ def add_item(
     _save(rows)
     return row
 
+
+def add_photo_items(filenames: List[str], prefix: str = "Item") -> List[Dict[str, Any]]:
+    """Create one item per photo with an auto-numbered name — quick bulk capture.
+
+    Each photo becomes its own item (``Item 0007`` …) carrying that single image,
+    so a set of shots populates the list instantly for naming/refining later. If
+    several photos are actually the same thing, tick those rows and use Merge to
+    combine them (images stack, quantities add). Writes once and returns the
+    created rows.
+    """
+    rows = inventory()
+    pat = _re_auto.compile(rf"^{_re_auto.escape(prefix)}\s*0*(\d+)$", _re_auto.IGNORECASE)
+    n = 0
+    for r in rows:
+        m = pat.match((r.get("name") or "").strip())
+        if m:
+            try:
+                n = max(n, int(m.group(1)))
+            except ValueError:
+                pass
+    taken = {(r.get("name", "").strip().lower()) for r in rows}
+    next_id = _next_id(rows)
+    created: List[Dict[str, Any]] = []
+    for fn in filenames or []:
+        fn = (fn or "").strip()
+        if not fn:
+            continue
+        n += 1
+        name = f"{prefix} {n:04d}"
+        while name.strip().lower() in taken:
+            n += 1
+            name = f"{prefix} {n:04d}"
+        taken.add(name.strip().lower())
+        row = {
+            "id": next_id,
+            "name": name,
+            "description": "",
+            "category": "",
+            "location": "",
+            "location_code": "",
+            "qty": 1,
+            "reorder_at": None,
+            "images": [fn],
+            "ocr_text": "",
+            "created_at": _now_iso(),
+            "specifications": [],
+            "estimated_value": "",
+            "dimensions": "",
+            "product_url": "",
+            "tags": [],
+            "source_title": "",
+            "attachments": [],
+            "order_number": "",
+            "purchase_date": "",
+            "price_paid": "",
+            "seller": "",
+        }
+        row["type"] = _classify_type(row)
+        rows.append(row)
+        created.append(row)
+        next_id += 1
+    if created:
+        _save(rows)
+    return created
+
 # Sentinel: distinguishes "caller omitted this field" (preserve existing value)
 # from "caller passed empty" (clear the field). Only used for the optional
 # catalogue fields so partial updates (OCR save-back, quantity tweaks) never wipe
