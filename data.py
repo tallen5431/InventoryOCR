@@ -1,5 +1,7 @@
 from __future__ import annotations
 import json
+import os
+import tempfile
 import re as _re_date
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +11,31 @@ from config import INVENTORY_JSON, ASSET_IMAGE_PATH, ASSET_THUMB_PATH, ASSET_DOC
 # --------------------------------------------------------------------
 # Persistence helpers
 # --------------------------------------------------------------------
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically (temp file + os.replace + fsync).
+
+    A plain ``write_text`` truncates the file first, so a crash or full disk
+    mid-write leaves a partial/empty file — catastrophic for the one file that
+    holds the whole inventory. Writing a sibling temp file and renaming it into
+    place means readers only ever see the old file or the fully-written new one.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=path.suffix or ".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)  # atomic on POSIX and Windows
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
 
 def _safe_read(path: Path) -> List[Dict[str, Any]]:
     try:
@@ -24,12 +51,12 @@ def _load() -> List[Dict[str, Any]]:
     path = Path(INVENTORY_JSON)
     if not path.exists():
         # Create empty file – don’t seed unless you prefer
-        path.write_text("[]", encoding="utf-8")
+        atomic_write_text(path, "[]")
         return []
     return _safe_read(path)
 
 def _save(rows: List[Dict[str, Any]]) -> None:
-    Path(INVENTORY_JSON).write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(Path(INVENTORY_JSON), json.dumps(rows, ensure_ascii=False, indent=2))
 
 # --------------------------------------------------------------------
 # "Date added" tracking
@@ -809,7 +836,7 @@ def snapshot_inventory() -> None:
     """Copy the current inventory aside so the next change can be undone."""
     src = Path(INVENTORY_JSON)
     try:
-        _undo_path().write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        atomic_write_text(_undo_path(), src.read_text(encoding="utf-8"))
         # A fresh snapshot invalidates any earlier op's validity checkpoint.
         _undo_chk_path().unlink(missing_ok=True)
     except Exception:
@@ -820,8 +847,8 @@ def commit_undo() -> None:
     """Record the state the op produced, so a later undo can confirm nothing
     else has changed the inventory since (guards against clobbering new edits)."""
     try:
-        _undo_chk_path().write_text(
-            Path(INVENTORY_JSON).read_text(encoding="utf-8"), encoding="utf-8")
+        atomic_write_text(_undo_chk_path(),
+                          Path(INVENTORY_JSON).read_text(encoding="utf-8"))
     except Exception:
         pass
 
@@ -857,7 +884,7 @@ def restore_inventory() -> str:
         _clear_undo()  # user has since changed things — don't clobber them
         return "stale"
     try:
-        Path(INVENTORY_JSON).write_text(bak.read_text(encoding="utf-8"), encoding="utf-8")
+        atomic_write_text(Path(INVENTORY_JSON), bak.read_text(encoding="utf-8"))
         _clear_undo()  # one-shot: consume the snapshot so undo isn't repeatable
         return "restored"
     except Exception:
@@ -1435,7 +1462,7 @@ def save_containers(conts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             cap = 0
         clean.append({"code": code, "name": (c.get("name") or code).strip(),
                       "capacity": cap, "bags": _clean_bags(c.get("bags"))})
-    CONTAINERS_FILE.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(CONTAINERS_FILE, json.dumps(clean, ensure_ascii=False, indent=2))
     return clean
 
 

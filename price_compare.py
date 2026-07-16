@@ -302,7 +302,7 @@ def searches() -> List[Dict[str, Any]]:
 
 
 def _save_all(items: List[Dict[str, Any]]) -> None:
-    PRICE_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    _data.atomic_write_text(PRICE_FILE, json.dumps(items, ensure_ascii=False, indent=2))
 
 
 def _trim_product(p: Dict[str, Any]) -> Dict[str, Any]:
