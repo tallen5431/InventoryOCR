@@ -294,6 +294,90 @@ def sidebar_form():
                                 is_open=False,
                             ),
 
+                            # ----- Purchase record + attached documents -----
+                            dbc.Button(
+                                [html.I(className="bi bi-receipt me-1"), "Purchase & documents ",
+                                 html.I(className="bi bi-chevron-down")],
+                                id="purchase-docs-toggle",
+                                color="link",
+                                size="sm",
+                                className="px-0 mt-2 text-decoration-none",
+                                n_clicks=0,
+                            ),
+                            dbc.Collapse(
+                                html.Div(
+                                    [
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(
+                                                    [
+                                                        dbc.Label("Order #", className="mt-1"),
+                                                        dbc.Input(id="item-order-number",
+                                                                  placeholder="e.g., 112-4472839-1234567"),
+                                                    ],
+                                                    xs=12, sm=6,
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        dbc.Label("Purchase date", className="mt-1"),
+                                                        dbc.Input(id="item-purchase-date", type="text",
+                                                                  placeholder="YYYY-MM-DD"),
+                                                    ],
+                                                    xs=12, sm=6,
+                                                ),
+                                            ],
+                                            className="g-2",
+                                        ),
+                                        dbc.Row(
+                                            [
+                                                dbc.Col(
+                                                    [
+                                                        dbc.Label("Price paid", className="mt-2"),
+                                                        dbc.Input(id="item-price-paid",
+                                                                  placeholder="e.g., $23.98"),
+                                                    ],
+                                                    xs=12, sm=6,
+                                                ),
+                                                dbc.Col(
+                                                    [
+                                                        dbc.Label("Seller", className="mt-2"),
+                                                        dbc.Input(id="item-seller",
+                                                                  placeholder="e.g., Amazon, Mouser"),
+                                                    ],
+                                                    xs=12, sm=6,
+                                                ),
+                                            ],
+                                            className="g-2",
+                                        ),
+                                        dbc.Label(
+                                            [html.I(className="bi bi-paperclip me-1"), "Attached documents"],
+                                            className="mt-3",
+                                        ),
+                                        dcc.Upload(
+                                            id="attach-upload",
+                                            children=html.Div(
+                                                [
+                                                    html.Div("📎", className="upload-icon"),
+                                                    html.Div(html.Strong("Attach an invoice, saved page, or any file")),
+                                                    html.Div(
+                                                        "Invoices & receipts (image or saved HTML) are read for "
+                                                        "order #, date and total — review before you Save. Any file "
+                                                        "type is kept as a record.",
+                                                        className="text-muted small mt-1",
+                                                    ),
+                                                ]
+                                            ),
+                                            multiple=True,
+                                            className="upload-dropzone",
+                                        ),
+                                        html.Div(id="attach-list", className="mt-2"),
+                                        dcc.Store(id="current-attachments", data=[]),
+                                    ]
+                                ),
+                                id="purchase-docs-collapse",
+                                is_open=False,
+                            ),
+
                             # ----- Primary actions -----
                             dbc.Row(
                                 [

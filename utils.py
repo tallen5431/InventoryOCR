@@ -3,7 +3,7 @@ import os, base64, io, re, time
 from pathlib import Path
 from typing import Dict, Any, Optional
 from PIL import Image, ImageOps
-from config import ASSET_IMAGE_PATH, ASSET_THUMB_PATH
+from config import ASSET_IMAGE_PATH, ASSET_THUMB_PATH, ASSET_DOCS_PATH
 
 # --------------------------------------------------------------------
 # URL base for assets when served behind Caddy
@@ -108,6 +108,76 @@ def save_image(
         "url": _asset_url("images", filename),
         "thumb_url": _asset_url("thumbnails", filename),
     }
+
+
+def attachment_kind(name: str) -> str:
+    """Classify an attachment by extension: image / html / pdf / other.
+
+    Drives the icon shown for it and whether we try to parse it (images and
+    HTML are parsed; everything else is kept as a record only).
+    """
+    ext = Path(name or "").suffix.lower().lstrip(".")
+    if ext in {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic"}:
+        return "image"
+    if ext in {"html", "htm"}:
+        return "html"
+    if ext == "pdf":
+        return "pdf"
+    return "other"
+
+
+def save_attachment(contents: str, original_name: str,
+                    out_dir: Path = ASSET_DOCS_PATH) -> Dict[str, Any]:
+    """Save a dcc.Upload payload of ANY type to assets/documents.
+
+    Unlike ``save_image`` this never re-encodes — the bytes are written verbatim,
+    so invoices, saved product pages, manuals, spreadsheets, etc. are preserved
+    exactly. Returns metadata stored on the item's ``attachments`` list.
+    """
+    if "," in (contents or ""):
+        raw = base64.b64decode(contents.split(",", 1)[1])
+    else:
+        raw = base64.b64decode(contents or "")
+
+    src = Path(original_name or "attachment")
+    stem = _slugify(src.stem) or "attachment"
+    ext = src.suffix.lower().lstrip(".")
+    ext = re.sub(r"[^a-z0-9]+", "", ext)[:8]  # keep the extension, sanitised
+    stamp = int(time.time() * 1000)
+    filename = f"{stem}-{stamp}.{ext}" if ext else f"{stem}-{stamp}"
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / filename).write_bytes(raw)
+
+    return {
+        "filename": filename,
+        "original_name": (original_name or filename).strip(),
+        "kind": attachment_kind(original_name or filename),
+        "size": len(raw),
+        "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "url": _asset_url("documents", filename),
+    }
+
+
+def read_attachment_text(filename: str) -> str:
+    """Best-effort text for a stored attachment, for (re)parsing.
+
+    HTML is decoded as text; images are OCR'd. Other types return "" (kept as a
+    record but not parsed). Never raises — returns "" on any failure.
+    """
+    path = ASSET_DOCS_PATH / filename
+    if not path.exists():
+        return ""
+    kind = attachment_kind(filename)
+    try:
+        if kind == "html":
+            return path.read_text(encoding="utf-8", errors="replace")
+        if kind == "image":
+            from ocr_engine import run_ocr_with_cache
+            return (run_ocr_with_cache(str(path)) or {}).get("text", "") or ""
+    except Exception:
+        return ""
+    return ""
 
 
 def get_thumbnail_url(filename: str | None) -> str:

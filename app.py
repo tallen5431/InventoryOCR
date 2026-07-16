@@ -12,6 +12,7 @@ from config import (
     THEME_DEFAULT_MODE,
     ASSET_IMAGE_PATH,
     ASSET_THUMB_PATH,
+    ASSET_DOCS_PATH,
 )
 from flask import send_from_directory, request, Response
 import authz
@@ -226,6 +227,14 @@ def serve_thumbnail(filename: str):
 @server.route(f"{URL_PREFIX}/assets/images/<path:filename>")
 def serve_image(filename: str):
     return send_from_directory(str(ASSET_IMAGE_PATH), filename, as_attachment=False)
+
+
+# Attached documents (invoices, saved pages, receipts, …). Served inline so a
+# browser can preview a PDF/HTML/image; the UI also offers an explicit download.
+@server.route(f"{URL_PREFIX}/assets/documents/<path:filename>")
+def serve_document(filename: str):
+    dl = request.args.get("download") in ("1", "true", "yes")
+    return send_from_directory(str(ASSET_DOCS_PATH), filename, as_attachment=dl)
 
 # ---------- Navbar ----------
 navbar = dbc.Navbar(

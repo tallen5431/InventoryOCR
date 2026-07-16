@@ -4,7 +4,7 @@ import re as _re_date
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from config import INVENTORY_JSON, ASSET_IMAGE_PATH, ASSET_THUMB_PATH
+from config import INVENTORY_JSON, ASSET_IMAGE_PATH, ASSET_THUMB_PATH, ASSET_DOCS_PATH
 
 # --------------------------------------------------------------------
 # Persistence helpers
@@ -178,6 +178,13 @@ def inventory() -> List[Dict[str, Any]]:
             # Raw marketplace title kept when the display name was condensed, so
             # the original stays searchable without cluttering the name/tags.
             "source_title": (r.get("source_title") or "").strip(),
+            # Attached documents (invoices, saved product pages, receipts, …) and
+            # the purchase details read off them. All optional / free-text.
+            "attachments": _norm_attachments(r.get("attachments")),
+            "order_number": (r.get("order_number") or "").strip(),
+            "purchase_date": (r.get("purchase_date") or "").strip(),
+            "price_paid": (r.get("price_paid") or "").strip(),
+            "seller": (r.get("seller") or "").strip(),
         }
         # Coarse Type: keep a stored/hand-edited value, else auto-classify from
         # the category/name/tags so grouping works without a manual pass.
@@ -191,6 +198,44 @@ def inventory() -> List[Dict[str, Any]]:
         rec["created_at"] = (r.get("created_at") or "").strip() or _derive_created_at(rec)
         norm.append(rec)
     return norm
+
+
+def _norm_attachments(v: Any) -> List[Dict[str, Any]]:
+    """Coerce stored attachments into a clean list of metadata dicts.
+
+    Each entry keeps ``filename`` (on disk under assets/documents), plus the
+    original name, kind, size and upload time for display. A bare string is
+    accepted as a filename for hand-edited data. Entries without a filename are
+    dropped so a broken record can never point the download route at nothing.
+    """
+    if not v:
+        return []
+    if isinstance(v, dict):
+        v = [v]
+    if not isinstance(v, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for a in v:
+        if isinstance(a, str):
+            fn = a.strip()
+            if fn:
+                out.append({"filename": fn, "original_name": fn, "kind": "other",
+                            "size": 0, "uploaded_at": "", "url": ""})
+            continue
+        if not isinstance(a, dict):
+            continue
+        fn = str(a.get("filename") or "").strip()
+        if not fn:
+            continue
+        out.append({
+            "filename": fn,
+            "original_name": str(a.get("original_name") or fn).strip(),
+            "kind": str(a.get("kind") or "other").strip(),
+            "size": int(a.get("size") or 0),
+            "uploaded_at": str(a.get("uploaded_at") or "").strip(),
+            "url": str(a.get("url") or "").strip(),
+        })
+    return out
 
 
 def _norm_list(v: Any) -> List[str]:
@@ -384,6 +429,11 @@ def add_item(
     item_type: str = "",
     reorder_at: Any = None,
     source_title: str = "",
+    attachments: Any = None,
+    order_number: str = "",
+    purchase_date: str = "",
+    price_paid: str = "",
+    seller: str = "",
 ) -> Dict[str, Any]:
     rows = inventory()
     # Unique by name
@@ -409,6 +459,11 @@ def add_item(
         "product_url": (product_url or "").strip(),
         "tags": _norm_tags(tags),
         "source_title": (source_title or "").strip(),
+        "attachments": _norm_attachments(attachments),
+        "order_number": (order_number or "").strip(),
+        "purchase_date": (purchase_date or "").strip(),
+        "price_paid": (price_paid or "").strip(),
+        "seller": (seller or "").strip(),
     }
     # Use the given Type, else auto-classify so new items are grouped on entry.
     row["type"] = (item_type or "").strip() or _classify_type(row)
@@ -442,6 +497,11 @@ def update_item(
     item_type: Any = _KEEP,
     reorder_at: Any = _KEEP,
     source_title: Any = _KEEP,
+    attachments: Any = _KEEP,
+    order_number: Any = _KEEP,
+    purchase_date: Any = _KEEP,
+    price_paid: Any = _KEEP,
+    seller: Any = _KEEP,
 ) -> Dict[str, Any]:
     rows = inventory()
     found = None
@@ -476,6 +536,16 @@ def update_item(
                 r["reorder_at"] = _coerce_reorder(reorder_at)
             if source_title is not _KEEP:
                 r["source_title"] = (source_title or "").strip()
+            if attachments is not _KEEP:
+                r["attachments"] = _norm_attachments(attachments)
+            if order_number is not _KEEP:
+                r["order_number"] = (order_number or "").strip()
+            if purchase_date is not _KEEP:
+                r["purchase_date"] = (purchase_date or "").strip()
+            if price_paid is not _KEEP:
+                r["price_paid"] = (price_paid or "").strip()
+            if seller is not _KEEP:
+                r["seller"] = (seller or "").strip()
             found = r
             break
     if found is None:
@@ -546,10 +616,37 @@ def prune_unreferenced_images() -> int:
     return removed
 
 
+def prune_unreferenced_documents() -> int:
+    """Delete attachment files no longer referenced by any item.
+
+    Attachments are written to disk the moment they're chosen (so several can be
+    staged before an item is saved). If the entry is cancelled, an attachment is
+    removed, or an item is deleted, its files become orphans — this reclaims them.
+    """
+    referenced: set = set()
+    for r in _load():
+        for a in _norm_attachments(r.get("attachments")):
+            fn = str(a.get("filename") or "").strip()
+            if fn:
+                referenced.add(fn)
+
+    removed = 0
+    directory = Path(ASSET_DOCS_PATH)
+    if directory.exists():
+        for f in directory.iterdir():
+            if f.is_file() and f.name not in referenced:
+                try:
+                    f.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+    return removed
+
+
 # Fields that may be patched in place without a full form round-trip.
 _PATCHABLE = {"name", "description", "category", "type", "location", "location_code",
               "qty", "estimated_value", "dimensions", "product_url", "reorder_at",
-              "source_title"}
+              "source_title", "order_number", "purchase_date", "price_paid", "seller"}
 
 
 def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
@@ -751,6 +848,11 @@ def _haystack(r: Dict[str, Any]) -> str:
         " ".join(r.get("tags", []) or []),
         str(r.get("dimensions", "")),
         str(r.get("source_title", "")),
+        # Purchase details are worth searching ("what did I buy from Mouser?",
+        # or looking up an order number).
+        str(r.get("order_number", "")),
+        str(r.get("seller", "")),
+        str(r.get("purchase_date", "")),
     ]).lower()
 
 def search(q: str) -> List[Dict[str, Any]]:
@@ -1773,6 +1875,19 @@ def _first_nonempty(items: List[Dict[str, Any]], field: str) -> str:
     return ""
 
 
+def _union_attachments(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Combine the attachment lists across merged items, deduped by filename."""
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for r in items:
+        for a in _norm_attachments(r.get("attachments")):
+            fn = a.get("filename")
+            if fn and fn not in seen:
+                seen.add(fn)
+                out.append(a)
+    return out
+
+
 def merge_preview(items: List[Dict[str, Any]],
                   primary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Compute the combined item without saving.
@@ -1830,6 +1945,14 @@ def merge_preview(items: List[Dict[str, Any]],
         "dimensions": _first_nonempty(ordered, "dimensions"),
         "product_url": _first_nonempty(ordered, "product_url"),
         "tags": _union_list(ordered, "tags"),
+        # Keep every attached document across the merged items (dedup by filename),
+        # and the first non-empty purchase field — so combining two photos of the
+        # same item never loses its invoice or order details.
+        "attachments": _union_attachments(ordered),
+        "order_number": _first_nonempty(ordered, "order_number"),
+        "purchase_date": _first_nonempty(ordered, "purchase_date"),
+        "price_paid": _first_nonempty(ordered, "price_paid"),
+        "seller": _first_nonempty(ordered, "seller"),
         # Keep the earliest scan date so the merged item reflects when it first
         # entered the inventory.
         "created_at": _earliest_created(ordered),
@@ -1958,7 +2081,8 @@ def merge_group(primary_id: int, merge_ids: List[int],
     # Write the merged fields onto the primary row (keep its id), drop the rest.
     for k in ("name", "description", "category", "type", "location", "location_code", "qty",
               "reorder_at", "images", "ocr_text", "specifications", "estimated_value",
-              "dimensions", "product_url", "tags", "created_at"):
+              "dimensions", "product_url", "tags", "created_at",
+              "attachments", "order_number", "purchase_date", "price_paid", "seller"):
         primary[k] = merged.get(k, primary.get(k))
 
     kept = [r for r in rows if int(r.get("id")) not in ids]

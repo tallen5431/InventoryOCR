@@ -7,10 +7,13 @@ BASE_DIR: Path = Path(__file__).resolve().parent
 ASSETS_DIR: Path = BASE_DIR / "assets"
 IMAGE_DIR: Path = ASSETS_DIR / "images"
 THUMB_DIR: Path = ASSETS_DIR / "thumbnails"
+# Attached documents (invoices, saved product pages, receipts, manuals…). Any
+# file type is kept here as a record; images/HTML are also parsed to fill fields.
+DOCS_DIR: Path = ASSETS_DIR / "documents"
 DATA_FILE: Path = BASE_DIR / "inventory.json"
 
 # Ensure folders exist
-for p in (ASSETS_DIR, IMAGE_DIR, THUMB_DIR):
+for p in (ASSETS_DIR, IMAGE_DIR, THUMB_DIR, DOCS_DIR):
     p.mkdir(parents=True, exist_ok=True)
 if not DATA_FILE.exists():
     DATA_FILE.write_text("[]", encoding="utf-8")
@@ -52,4 +55,5 @@ OCR_TEXT_MAX_CHARS = 400
 # Public helpers (used by other modules)
 ASSET_IMAGE_PATH = IMAGE_DIR
 ASSET_THUMB_PATH = THUMB_DIR
+ASSET_DOCS_PATH = DOCS_DIR
 INVENTORY_JSON = DATA_FILE

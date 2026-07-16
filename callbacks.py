@@ -4,7 +4,10 @@ from dash import Input, Output, State, ctx, no_update, ALL, MATCH, html, dcc
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 import data
-from utils import save_image, get_thumbnail_url, get_image_url
+from utils import (
+    save_image, get_thumbnail_url, get_image_url,
+    save_attachment, read_attachment_text, attachment_kind,
+)
 from config import ASSET_IMAGE_PATH, OCR_TEXT_MAX_CHARS
 
 URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
@@ -815,6 +818,75 @@ def _raw_rows(names, bags, slots):
     return out
 
 
+_ATTACH_ICON = {"image": "bi-file-image", "html": "bi-filetype-html",
+                "pdf": "bi-file-pdf", "other": "bi-file-earmark"}
+
+
+def _human_size(n) -> str:
+    try:
+        size = float(n or 0)
+    except (TypeError, ValueError):
+        return ""
+    if size <= 0:
+        return ""
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024.0
+    return ""
+
+
+def _doc_url(filename: str, *, download: bool = False) -> str:
+    url = f"{ASSET_URL_BASE}/documents/{filename}"
+    return url + "?download=1" if download else url
+
+
+def _render_attachments(atts):
+    """A compact list of attached documents: icon, name, size, view + remove."""
+    atts = atts or []
+    if not atts:
+        return html.Div("No documents attached yet.", className="text-muted small")
+    rows = []
+    for i, a in enumerate(atts):
+        fn = a.get("filename", "")
+        icon = _ATTACH_ICON.get(a.get("kind", "other"), "bi-file-earmark")
+        size = _human_size(a.get("size"))
+        meta = " · ".join([x for x in [a.get("kind", ""), size] if x])
+        rows.append(
+            html.Div(
+                [
+                    html.I(className=f"bi {icon} me-2 text-secondary"),
+                    html.A(
+                        a.get("original_name") or fn,
+                        href=_doc_url(fn),
+                        target="_blank",
+                        rel="noopener noreferrer",
+                        className="text-truncate me-2",
+                        style={"maxWidth": "60%"},
+                    ),
+                    html.Span(meta, className="text-muted small me-2"),
+                    html.A(
+                        html.I(className="bi bi-download"),
+                        href=_doc_url(fn, download=True),
+                        className="btn btn-sm btn-outline-secondary py-0 px-1 me-1",
+                        title="Download",
+                    ),
+                    dbc.Button(
+                        html.I(className="bi bi-x-lg"),
+                        id={"type": "attach-remove", "index": i},
+                        color="outline-danger",
+                        size="sm",
+                        className="py-0 px-1",
+                        title="Remove this attachment",
+                        n_clicks=0,
+                    ),
+                ],
+                className="d-flex align-items-center border rounded px-2 py-1 mb-1",
+            )
+        )
+    return html.Div(rows)
+
+
 def register_callbacks(app):
     # ---------- Table & form (single source of truth for table + toast) ----------
     @app.callback(
@@ -875,6 +947,11 @@ def register_callbacks(app):
             State("current-images", "data"),
             State("editing-id", "data"),
             State("inventory-table", "data"),
+            State("item-order-number", "value"),
+            State("item-purchase-date", "value"),
+            State("item-price-paid", "value"),
+            State("item-seller", "value"),
+            State("current-attachments", "data"),
         ],
         prevent_initial_call=False,
     )
@@ -882,7 +959,8 @@ def register_callbacks(app):
                      search, filter_type, filter_cat, filter_loc, filter_bin, sort_by, _refresh_seq,
                      name, desc, qty, reorder, item_type, category, location, location_code,
                      specs, value, dims, tags, producturl, img_contents,
-                     current_images, editing_id, current_rows):
+                     current_images, editing_id, current_rows,
+                     order_number, purchase_date, price_paid, seller, current_attachments):
         triggered = (ctx.triggered_id or "")
         # Default toast outputs to no_update: 'inventory-table.selected_rows' is both
         # an Output and an Input here, so resetting the selection after a Save/Delete
@@ -937,6 +1015,12 @@ def register_callbacks(app):
                 # taken/chosen (so multiple snaps and file picks accumulate), so we
                 # just persist that set here — no re-saving of a pending upload.
                 img_filenames = list(current_images or [])
+                # Purchase record + attached documents from the form's collapsible.
+                p_order = (order_number or "").strip()
+                p_date = (purchase_date or "").strip()
+                p_price = (price_paid or "").strip()
+                p_seller = (seller or "").strip()
+                atts = list(current_attachments or [])
 
                 try:
                     if editing_id:
@@ -947,13 +1031,17 @@ def register_callbacks(app):
                                          category=cat, location=loc, location_code=code,
                                          specifications=specs, estimated_value=value,
                                          dimensions=dims, tags=tags, product_url=producturl,
-                                         item_type=typ, reorder_at=reorder)
+                                         item_type=typ, reorder_at=reorder,
+                                         attachments=atts, order_number=p_order,
+                                         purchase_date=p_date, price_paid=p_price, seller=p_seller)
                         toast_header, toast_icon, toast_msg = "Item Updated", "success", f'"{nm}" updated.'
                     else:
                         data.add_item(nm, ds, nqty, img_filenames, "", category=cat, location=loc,
                                       location_code=code, specifications=specs, estimated_value=value,
                                       dimensions=dims, tags=tags, product_url=producturl,
-                                      item_type=typ, reorder_at=reorder)
+                                      item_type=typ, reorder_at=reorder,
+                                      attachments=atts, order_number=p_order,
+                                      purchase_date=p_date, price_paid=p_price, seller=p_seller)
                         toast_header, toast_icon, toast_msg = "Item Added", "success", f'"{nm}" added.'
                 except ValueError as e:
                     toast_header, toast_icon, toast_msg = "Duplicate Name", "danger", str(e)
@@ -972,12 +1060,14 @@ def register_callbacks(app):
                     toast_open, toast_header, toast_icon, toast_msg = True, "Item Deleted", "danger", f'"{removed.get("name","")}" deleted.'
                 _clear_form()
                 data.prune_unreferenced_images()  # reclaim the deleted item's photos
+                data.prune_unreferenced_documents()  # …and its attachments
                 items = data.inventory()
 
         # Cancel clears form (and reclaims any just-taken photos that weren't saved)
         elif triggered == "cancel-button":
             _clear_form()
             data.prune_unreferenced_images()
+            data.prune_unreferenced_documents()
 
         # Selecting a single row populates the form for editing. When 2+ rows are
         # ticked the user is bulk-editing, so leave the form alone (the bulk bar
@@ -1805,6 +1895,155 @@ def register_callbacks(app):
         if not n:
             raise PreventUpdate
         return not is_open
+
+    # ---------- Form: collapse toggle for "Purchase & documents" ----------
+    @app.callback(
+        Output("purchase-docs-collapse", "is_open"),
+        Input("purchase-docs-toggle", "n_clicks"),
+        State("purchase-docs-collapse", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_purchase_docs(n, is_open):
+        if not n:
+            raise PreventUpdate
+        return not is_open
+
+    # ---------- Form: load purchase fields + attachments for the selected item ----------
+    # Keyed on editing-id so it fires whenever the form switches items (row select),
+    # clears (Save/Cancel set editing-id to None), or a lookup saves a new item.
+    @app.callback(
+        Output("item-order-number", "value"),
+        Output("item-purchase-date", "value"),
+        Output("item-price-paid", "value"),
+        Output("item-seller", "value"),
+        Output("current-attachments", "data"),
+        Input("editing-id", "data"),
+        prevent_initial_call=False,
+    )
+    def load_purchase_fields(editing_id):
+        if not editing_id:
+            return "", "", "", "", []
+        row = next((r for r in data.inventory() if r.get("id") == editing_id), None)
+        if not row:
+            return "", "", "", "", []
+        return (
+            row.get("order_number", ""),
+            row.get("purchase_date", ""),
+            row.get("price_paid", ""),
+            row.get("seller", ""),
+            row.get("attachments", []) or [],
+        )
+
+    # ---------- Form: render the attachment list ----------
+    @app.callback(
+        Output("attach-list", "children"),
+        Input("current-attachments", "data"),
+        prevent_initial_call=False,
+    )
+    def render_attach_list(atts):
+        return _render_attachments(atts)
+
+    # ---------- Form: attach a document (any type) + auto-extract purchase info ----------
+    @app.callback(
+        Output("current-attachments", "data", allow_duplicate=True),
+        Output("attach-upload", "contents"),
+        Output("item-order-number", "value", allow_duplicate=True),
+        Output("item-purchase-date", "value", allow_duplicate=True),
+        Output("item-price-paid", "value", allow_duplicate=True),
+        Output("item-seller", "value", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("attach-upload", "contents"),
+        State("attach-upload", "filename"),
+        State("current-attachments", "data"),
+        State("item-order-number", "value"),
+        State("item-purchase-date", "value"),
+        State("item-price-paid", "value"),
+        State("item-seller", "value"),
+        prevent_initial_call=True,
+    )
+    def add_attachment(contents, filenames, current, cur_order, cur_date, cur_price, cur_seller):
+        if not contents:
+            raise PreventUpdate
+        import invoice_parse
+
+        uploads = contents if isinstance(contents, list) else [contents]
+        names = filenames if isinstance(filenames, list) else [filenames]
+        atts = list(current or [])
+
+        saved_meta = []
+        for content, fname in zip(uploads, names):
+            if not content:
+                continue
+            try:
+                meta = save_attachment(content, fname or "attachment")
+                atts.append(meta)
+                saved_meta.append(meta)
+            except Exception:
+                continue
+
+        if not saved_meta:
+            return (no_update, None, no_update, no_update, no_update, no_update,
+                    True, "Couldn't attach", "warning", "That file couldn't be read.")
+
+        # Auto-extract purchase details from the most recent parseable document
+        # (image → OCR, HTML → text). Only fills fields the user left blank, so a
+        # value you already typed is never overwritten.
+        order = (cur_order or "").strip()
+        pdate = (cur_date or "").strip()
+        price = (cur_price or "").strip()
+        seller = (cur_seller or "").strip()
+        read_n = 0
+        for meta in reversed(saved_meta):
+            if meta.get("kind") not in ("image", "html"):
+                continue
+            text = read_attachment_text(meta["filename"])
+            if not text.strip():
+                continue
+            found = invoice_parse.extract_purchase(text)
+            if not order and found.get("order_number"):
+                order = found["order_number"]
+            if not pdate and found.get("purchase_date"):
+                pdate = found["purchase_date"]
+            if not price and found.get("price_paid"):
+                price = found["price_paid"]
+            if not seller and found.get("seller"):
+                seller = found["seller"]
+            read_n = len(found.get("found", []))
+            break  # only parse the single most-recent parseable doc
+
+        n = len(saved_meta)
+        if read_n:
+            header = "Attached + read invoice"
+            msg = (f"Added {n} document{'s' if n != 1 else ''}; read {read_n} purchase "
+                   f"field{'s' if read_n != 1 else ''} — review, then Save.")
+        else:
+            header = "Attached"
+            msg = f"Added {n} document{'s' if n != 1 else ''}."
+        return (atts, None, order, pdate, price, seller, True, header, "success", msg)
+
+    # ---------- Form: remove one attachment from the pending set ----------
+    @app.callback(
+        Output("current-attachments", "data", allow_duplicate=True),
+        Input({"type": "attach-remove", "index": ALL}, "n_clicks"),
+        State("current-attachments", "data"),
+        prevent_initial_call=True,
+    )
+    def remove_attachment(n_clicks_list, current):
+        if not current or not n_clicks_list:
+            raise PreventUpdate
+        if all(not c for c in n_clicks_list):
+            raise PreventUpdate
+        trig = ctx.triggered_id
+        if isinstance(trig, dict):
+            idx = trig.get("index")
+            if isinstance(idx, int) and 0 <= idx < len(current):
+                out = list(current)
+                del out[idx]
+                return out
+        raise PreventUpdate
 
     # ---------- Form: Add vs Edit badge ----------
     @app.callback(
