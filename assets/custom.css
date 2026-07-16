@@ -730,3 +730,15 @@ input[type="radio"] {
     border-color: #0d6efd !important;
     background-color: rgba(13, 110, 253, 0.1);
 }
+
+/* Quick Add — numbered step badges keep a consistent circular size */
+.qa-step-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    flex: 0 0 auto;
+}

@@ -473,6 +473,14 @@ def dashboard_toolbar():
                 ),
                 xs=12, sm="auto",
             ),
+            dbc.Col(
+                dbc.Button(
+                    [html.I(className="bi bi-magic me-1"), "Quick Add"],
+                    id="open-quick-add", color="info", n_clicks=0, className="w-100",
+                    title="Guided capture: snap a photo, attach the invoice / product page, review and save",
+                ),
+                xs=12, sm="auto",
+            ),
             dbc.Col(search_box(), xs=12, sm=True),
             dbc.Col(
                 dbc.ButtonGroup(
@@ -905,6 +913,196 @@ def identify_modal():
                     ),
                 ],
                 id="identify-modal",
+                is_open=False,
+                size="lg",
+                centered=True,
+                scrollable=True,
+            ),
+        ]
+    )
+
+
+def _qa_section(number, icon, title, subtitle, children):
+    """One numbered stage of the Quick Add flow."""
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.Span(str(number), className="qa-step-badge badge bg-info rounded-circle me-2"),
+                    html.Span([html.I(className=f"bi {icon} me-2"), html.Strong(title)]),
+                ],
+                className="d-flex align-items-center",
+            ),
+            html.Div(subtitle, className="text-muted small ms-4 mb-2"),
+            html.Div(children, className="ms-4"),
+        ],
+        className="mb-3",
+    )
+
+
+def quick_add_modal():
+    """Guided capture: ① snap a photo, ② attach the invoice / product page, ③
+    review and save. A streamlined path that fills an entry with useful info —
+    the full Add/Edit form and Identify button remain for everything else.
+    """
+    return html.Div(
+        [
+            dcc.Store(id="qa-photos", data=[]),          # saved image filenames
+            dcc.Store(id="qa-attachments", data=[]),     # attachment metadata
+            dcc.Store(id="qa-source-title", data=""),    # full marketplace title
+            dcc.Store(id="qa-extra", data={}),           # specs/dims/tags/url/desc carried silently
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(
+                        dbc.ModalTitle([html.I(className="bi bi-magic me-2"), "Quick Add"])
+                    ),
+                    dbc.ModalBody(
+                        [
+                            # ---- ① Photo ----
+                            _qa_section(
+                                1, "bi-camera", "Take or choose a photo",
+                                "A photo gives the item a name and a first guess at its details.",
+                                [
+                                    dcc.Upload(
+                                        id="qa-photo-upload",
+                                        children=html.Div(
+                                            [
+                                                html.Div("📷", className="upload-icon"),
+                                                html.Div(html.Strong("Take photos or choose files")),
+                                                html.Div("Add one or more — they attach to this item.",
+                                                         className="text-muted small mt-1"),
+                                            ]
+                                        ),
+                                        multiple=True,
+                                        accept="image/*",
+                                        className="upload-dropzone",
+                                    ),
+                                    html.Div(id="qa-photo-gallery", className="mt-2"),
+                                    dbc.Button(
+                                        [html.I(className="bi bi-stars me-1"), "Identify from photo"],
+                                        id="qa-identify", color="info", outline=True,
+                                        className="mt-2", n_clicks=0,
+                                    ),
+                                    dcc.Loading(html.Div(id="qa-identify-status", className="small mt-2"),
+                                                type="default"),
+                                ],
+                            ),
+                            html.Hr(),
+                            # ---- ② Documents ----
+                            _qa_section(
+                                2, "bi-paperclip", "Attach documents (optional)",
+                                "The product page fills in name, price & specs; an invoice adds order #, "
+                                "date and what you paid. Every file is kept with the item.",
+                                [
+                                    dcc.Upload(
+                                        id="qa-import-html-upload",
+                                        children=html.Div(
+                                            [
+                                                html.Div("⬆️", className="upload-icon"),
+                                                html.Div(html.Strong("Upload a saved product page (.html)")),
+                                                html.Div("Save the listing (Ctrl+S) and drop it here.",
+                                                         className="text-muted small mt-1"),
+                                            ]
+                                        ),
+                                        accept=".html,.htm,text/html",
+                                        className="upload-dropzone",
+                                    ),
+                                    dbc.InputGroup(
+                                        [
+                                            dbc.Input(id="qa-import-url",
+                                                      placeholder="…or paste a product URL", type="url"),
+                                            dbc.Button([html.I(className="bi bi-download me-1"), "Fetch"],
+                                                       id="qa-import-fetch", color="secondary", n_clicks=0),
+                                        ],
+                                        className="mt-2",
+                                    ),
+                                    html.Div(id="qa-import-status", className="small mt-1"),
+                                    dcc.Upload(
+                                        id="qa-attach-upload",
+                                        children=html.Div(
+                                            [
+                                                html.Div("📎", className="upload-icon"),
+                                                html.Div(html.Strong("Attach an invoice, receipt, or any file")),
+                                                html.Div("Invoices (image or HTML) are read for order #, date "
+                                                         "& total.", className="text-muted small mt-1"),
+                                            ]
+                                        ),
+                                        multiple=True,
+                                        className="upload-dropzone mt-2",
+                                    ),
+                                    dcc.Loading(html.Div(id="qa-attach-status", className="small mt-1"),
+                                                type="default"),
+                                    html.Div(id="qa-attach-list", className="mt-2"),
+                                ],
+                            ),
+                            html.Hr(),
+                            # ---- ③ Review & Save ----
+                            _qa_section(
+                                3, "bi-check2-square", "Review & save",
+                                "Tweak anything, then save. A blank name auto-numbers (Item 0001).",
+                                [
+                                    dbc.Row(
+                                        [
+                                            dbc.Col([dbc.Label("Name"),
+                                                     dbc.Input(id="qa-name", placeholder="auto-number if blank")],
+                                                    xs=12, sm=8),
+                                            dbc.Col([dbc.Label("Qty"),
+                                                     dbc.Input(id="qa-qty", type="number", min=0, step=1, value=1)],
+                                                    xs=12, sm=4),
+                                        ],
+                                        className="g-2",
+                                    ),
+                                    dbc.Row(
+                                        [
+                                            dbc.Col([dbc.Label("Category", className="mt-2"),
+                                                     dbc.Input(id="qa-category", placeholder="e.g., USB Cables")],
+                                                    xs=12, sm=4),
+                                            dbc.Col([dbc.Label("Location", className="mt-2"),
+                                                     dbc.Input(id="qa-location", placeholder="e.g., Garage shelf B")],
+                                                    xs=12, sm=4),
+                                            dbc.Col([dbc.Label("Bin / code", className="mt-2"),
+                                                     dbc.Input(id="qa-code", placeholder="e.g., BIN-01")],
+                                                    xs=12, sm=4),
+                                        ],
+                                        className="g-2",
+                                    ),
+                                    dbc.Row(
+                                        [
+                                            dbc.Col([dbc.Label("Est. value", className="mt-2"),
+                                                     dbc.Input(id="qa-value", placeholder="e.g., $20")],
+                                                    xs=6, sm=3),
+                                            dbc.Col([dbc.Label("Price paid", className="mt-2"),
+                                                     dbc.Input(id="qa-price", placeholder="e.g., $17.49")],
+                                                    xs=6, sm=3),
+                                            dbc.Col([dbc.Label("Order #", className="mt-2"),
+                                                     dbc.Input(id="qa-order", placeholder="from invoice")],
+                                                    xs=6, sm=3),
+                                            dbc.Col([dbc.Label("Seller", className="mt-2"),
+                                                     dbc.Input(id="qa-seller", placeholder="e.g., Amazon")],
+                                                    xs=6, sm=3),
+                                        ],
+                                        className="g-2",
+                                    ),
+                                    dbc.Row(
+                                        dbc.Col([dbc.Label("Purchase date", className="mt-2"),
+                                                 dbc.Input(id="qa-date", placeholder="YYYY-MM-DD")],
+                                                xs=12, sm=4),
+                                        className="g-2",
+                                    ),
+                                ],
+                            ),
+                        ]
+                    ),
+                    dbc.ModalFooter(
+                        [
+                            dbc.Button([html.I(className="bi bi-save me-1"), "Save item"],
+                                       id="qa-save", color="primary", n_clicks=0),
+                            dbc.Button("Close", id="qa-close", color="secondary", n_clicks=0),
+                        ],
+                        className="justify-content-between",
+                    ),
+                ],
+                id="qa-modal",
                 is_open=False,
                 size="lg",
                 centered=True,

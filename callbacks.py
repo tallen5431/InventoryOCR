@@ -841,8 +841,13 @@ def _doc_url(filename: str, *, download: bool = False) -> str:
     return url + "?download=1" if download else url
 
 
-def _render_attachments(atts):
-    """A compact list of attached documents: icon, name, size, view + remove."""
+def _render_attachments(atts, remove_type="attach-remove"):
+    """A compact list of attached documents: icon, name, size, view + remove.
+
+    ``remove_type`` names the pattern-matching id of the × button so the main
+    form and the Quick Add wizard get independent remove wiring. Pass ``None`` to
+    render a read-only list with no remove button.
+    """
     atts = atts or []
     if not atts:
         return html.Div("No documents attached yet.", className="text-muted small")
@@ -852,39 +857,107 @@ def _render_attachments(atts):
         icon = _ATTACH_ICON.get(a.get("kind", "other"), "bi-file-earmark")
         size = _human_size(a.get("size"))
         meta = " · ".join([x for x in [a.get("kind", ""), size] if x])
-        rows.append(
+        line = [
+            html.I(className=f"bi {icon} me-2 text-secondary"),
+            html.A(
+                a.get("original_name") or fn,
+                href=_doc_url(fn),
+                target="_blank",
+                rel="noopener noreferrer",
+                className="text-truncate me-2",
+                style={"maxWidth": "60%"},
+            ),
+            html.Span(meta, className="text-muted small me-2"),
+            html.A(
+                html.I(className="bi bi-download"),
+                href=_doc_url(fn, download=True),
+                className="btn btn-sm btn-outline-secondary py-0 px-1 me-1",
+                title="Download",
+            ),
+        ]
+        if remove_type:
+            line.append(
+                dbc.Button(
+                    html.I(className="bi bi-x-lg"),
+                    id={"type": remove_type, "index": i},
+                    color="outline-danger",
+                    size="sm",
+                    className="py-0 px-1",
+                    title="Remove this attachment",
+                    n_clicks=0,
+                )
+            )
+        rows.append(html.Div(line, className="d-flex align-items-center border rounded px-2 py-1 mb-1"))
+    return html.Div(rows)
+
+
+def _qa_photo_gallery(photos):
+    """Read-with-remove thumbnail strip for the Quick Add photo step."""
+    photos = photos or []
+    items = []
+    for i, fn in enumerate(photos):
+        thumb = get_thumbnail_url(fn)
+        if not thumb:
+            continue
+        items.append(
             html.Div(
                 [
-                    html.I(className=f"bi {icon} me-2 text-secondary"),
-                    html.A(
-                        a.get("original_name") or fn,
-                        href=_doc_url(fn),
-                        target="_blank",
-                        rel="noopener noreferrer",
-                        className="text-truncate me-2",
-                        style={"maxWidth": "60%"},
-                    ),
-                    html.Span(meta, className="text-muted small me-2"),
-                    html.A(
-                        html.I(className="bi bi-download"),
-                        href=_doc_url(fn, download=True),
-                        className="btn btn-sm btn-outline-secondary py-0 px-1 me-1",
-                        title="Download",
-                    ),
-                    dbc.Button(
-                        html.I(className="bi bi-x-lg"),
-                        id={"type": "attach-remove", "index": i},
-                        color="outline-danger",
-                        size="sm",
-                        className="py-0 px-1",
-                        title="Remove this attachment",
+                    html.Img(src=thumb, className="gallery-thumb"),
+                    html.Button(
+                        "×",
+                        id={"type": "qa-photo-remove", "index": i},
+                        className="btn btn-sm btn-danger delete-img-btn",
+                        title="Remove photo",
                         n_clicks=0,
                     ),
+                    html.Div(f"Photo {i + 1}", className="text-muted small text-center"),
                 ],
-                className="d-flex align-items-center border rounded px-2 py-1 mb-1",
+                className="gallery-item",
             )
         )
-    return html.Div(rows)
+    if not items:
+        return html.Div("No photos yet.", className="text-muted small")
+    return html.Div(items, className="image-gallery-grid")
+
+
+def _qa_apply_parsed(d, cur_name, cur_cat, cur_value, cur_extra, cur_src):
+    """Fold a vision/import result into the wizard's review fields.
+
+    Only fills blanks, so running Identify and then importing a page (or the
+    reverse) never clobbers something already found or typed. Specs / dims / tags
+    / url / description ride along in the ``extra`` store.
+    """
+    d = d or {}
+
+    def _s(v):
+        t = "" if v is None else str(v).strip()
+        return "" if t.lower() == "unknown" else t
+
+    name = (cur_name or "").strip() or _s(d.get("name"))
+    category = (cur_cat or "").strip() or _s(d.get("category"))
+    value = (cur_value or "").strip() or _s(d.get("estimated_value"))
+    extra = dict(cur_extra or {})
+
+    specs = d.get("specifications")
+    specs_text = _specs_to_text(specs) if isinstance(specs, list) else _s(specs)
+    if specs_text and not (extra.get("specifications") or "").strip():
+        extra["specifications"] = specs_text
+    dims = _s(d.get("dimensions"))
+    if dims and not (extra.get("dimensions") or "").strip():
+        extra["dimensions"] = dims
+    tags = d.get("tags")
+    tags_text = _tags_to_text(tags) if isinstance(tags, list) else _s(tags)
+    if tags_text and not (extra.get("tags") or "").strip():
+        extra["tags"] = tags_text
+    url = _s(d.get("product_url"))
+    if url and not (extra.get("product_url") or "").strip():
+        extra["product_url"] = url
+    what = _s(d.get("what_it_is"))
+    if what and what.lower() not in (extra.get("description") or "").lower():
+        extra["description"] = ((extra.get("description") or "") + "\n" + what).strip()
+
+    src = (cur_src or "").strip() or _s(d.get("source_title"))
+    return name, category, value, extra, src
 
 
 def register_callbacks(app):
@@ -1870,6 +1943,388 @@ def register_callbacks(app):
             return body, {"data": res.get("data")}
         # Keep any prior good result on failure so Apply still has something.
         return body, no_update
+
+    # ======================================================================
+    # Quick Add — guided capture: ① photo → ② documents → ③ review & save
+    # ======================================================================
+
+    # ---------- Quick Add: open + reset to a clean slate ----------
+    @app.callback(
+        Output("qa-modal", "is_open"),
+        Output("qa-photos", "data"),
+        Output("qa-attachments", "data"),
+        Output("qa-source-title", "data"),
+        Output("qa-extra", "data"),
+        Output("qa-identify-status", "children"),
+        Output("qa-import-status", "children"),
+        Output("qa-attach-status", "children"),
+        Output("qa-import-url", "value"),
+        Output("qa-name", "value"),
+        Output("qa-qty", "value"),
+        Output("qa-category", "value"),
+        Output("qa-location", "value"),
+        Output("qa-code", "value"),
+        Output("qa-value", "value"),
+        Output("qa-price", "value"),
+        Output("qa-order", "value"),
+        Output("qa-seller", "value"),
+        Output("qa-date", "value"),
+        Input("open-quick-add", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def open_quick_add(n):
+        if not n:
+            raise PreventUpdate
+        return (True, [], [], "", {}, "", "", "", "",
+                "", 1, "", "", "", "", "", "", "", "")
+
+    # ---------- Quick Add: close (reclaim any staged, unsaved files) ----------
+    @app.callback(
+        Output("qa-modal", "is_open", allow_duplicate=True),
+        Input("qa-close", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def close_quick_add(n):
+        if not n:
+            raise PreventUpdate
+        data.prune_unreferenced_images()
+        data.prune_unreferenced_documents()
+        return False
+
+    # ---------- Quick Add: photo upload → save & accumulate ----------
+    @app.callback(
+        Output("qa-photos", "data", allow_duplicate=True),
+        Output("qa-photo-upload", "contents"),
+        Input("qa-photo-upload", "contents"),
+        State("qa-photo-upload", "filename"),
+        State("qa-photos", "data"),
+        State("qa-name", "value"),
+        prevent_initial_call=True,
+    )
+    def qa_add_photos(contents, filenames, photos, name):
+        if not contents:
+            raise PreventUpdate
+        uploads = contents if isinstance(contents, list) else [contents]
+        base = (name or "").strip() or "photo"
+        out = list(photos or [])
+        for c in uploads:
+            if not c:
+                continue
+            try:
+                out.append(save_image(c, ASSET_IMAGE_PATH, base_name=base)["filename"])
+            except Exception:
+                continue
+        return out, None
+
+    # ---------- Quick Add: render the photo strip ----------
+    @app.callback(
+        Output("qa-photo-gallery", "children"),
+        Input("qa-photos", "data"),
+        prevent_initial_call=False,
+    )
+    def qa_render_gallery(photos):
+        return _qa_photo_gallery(photos)
+
+    # ---------- Quick Add: remove a staged photo ----------
+    @app.callback(
+        Output("qa-photos", "data", allow_duplicate=True),
+        Input({"type": "qa-photo-remove", "index": ALL}, "n_clicks"),
+        State("qa-photos", "data"),
+        prevent_initial_call=True,
+    )
+    def qa_remove_photo(clicks, photos):
+        if not photos or not clicks or all(not c for c in clicks):
+            raise PreventUpdate
+        trig = ctx.triggered_id
+        if isinstance(trig, dict):
+            i = trig.get("index")
+            if isinstance(i, int) and 0 <= i < len(photos):
+                out = list(photos)
+                del out[i]
+                return out
+        raise PreventUpdate
+
+    # ---------- Quick Add: Identify from the first photo ----------
+    @app.callback(
+        Output("qa-name", "value", allow_duplicate=True),
+        Output("qa-category", "value", allow_duplicate=True),
+        Output("qa-value", "value", allow_duplicate=True),
+        Output("qa-extra", "data", allow_duplicate=True),
+        Output("qa-source-title", "data", allow_duplicate=True),
+        Output("qa-identify-status", "children", allow_duplicate=True),
+        Input("qa-identify", "n_clicks"),
+        State("qa-photos", "data"),
+        State("qa-name", "value"),
+        State("qa-category", "value"),
+        State("qa-value", "value"),
+        State("qa-extra", "data"),
+        State("qa-source-title", "data"),
+        prevent_initial_call=True,
+    )
+    def qa_do_identify(n, photos, cur_name, cur_cat, cur_value, cur_extra, cur_src):
+        if not n:
+            raise PreventUpdate
+        if not photos:
+            return (no_update,) * 5 + (
+                html.Span("Add a photo first, then Identify.", className="text-warning"),)
+        primary = photos[0]
+        path = ASSET_IMAGE_PATH / primary
+        if not path.exists():
+            return (no_update,) * 5 + (
+                html.Span("Couldn't read that photo.", className="text-danger"),)
+        import vision_lookup, web_detect, web_search
+        image = path.read_bytes()
+        res = vision_lookup.identify_item(image)
+        parsed = res.get("data") if isinstance(res.get("data"), dict) else None
+        local_query = ""
+        if parsed:
+            local_query = str(parsed.get("search_query") or parsed.get("name") or "").strip()
+        web = (web_detect.detect_web(image, query=local_query,
+                                     image_url=web_search.public_image_url(primary))
+               if web_detect.is_configured() else None)
+        merged = web_detect.merge_into(parsed, web) or parsed
+        if not isinstance(merged, dict):
+            return (no_update,) * 5 + (
+                html.Span("No details recognised — you can type a name below.",
+                          className="text-muted"),)
+        name, category, value, extra, src = _qa_apply_parsed(
+            merged, cur_name, cur_cat, cur_value, cur_extra, cur_src)
+        status = html.Span([html.I(className="bi bi-check-circle text-success me-1"),
+                            f'Suggested: "{name or "—"}". Review in step 3.'])
+        return name, category, value, extra, src, status
+
+    # ---------- Quick Add: import a product page (URL fetch or .html upload) ----------
+    @app.callback(
+        Output("qa-name", "value", allow_duplicate=True),
+        Output("qa-category", "value", allow_duplicate=True),
+        Output("qa-value", "value", allow_duplicate=True),
+        Output("qa-extra", "data", allow_duplicate=True),
+        Output("qa-source-title", "data", allow_duplicate=True),
+        Output("qa-attachments", "data", allow_duplicate=True),
+        Output("qa-import-status", "children", allow_duplicate=True),
+        Input("qa-import-fetch", "n_clicks"),
+        Input("qa-import-html-upload", "contents"),
+        State("qa-import-html-upload", "filename"),
+        State("qa-import-url", "value"),
+        State("qa-attachments", "data"),
+        State("qa-name", "value"),
+        State("qa-category", "value"),
+        State("qa-value", "value"),
+        State("qa-extra", "data"),
+        State("qa-source-title", "data"),
+        prevent_initial_call=True,
+    )
+    def qa_import(fetch_n, up_contents, up_name, url, atts,
+                  cur_name, cur_cat, cur_value, cur_extra, cur_src):
+        import product_import, base64
+        trig = ctx.triggered_id
+        atts = list(atts or [])
+
+        if trig == "qa-import-fetch":
+            if not (url or "").strip():
+                raise PreventUpdate
+            res = product_import.import_product(url=url or "")
+        elif trig == "qa-import-html-upload":
+            if not up_contents:
+                raise PreventUpdate
+            text = ""
+            try:
+                if "," in up_contents:
+                    text = base64.b64decode(up_contents.split(",", 1)[1]).decode("utf-8", "replace")
+            except Exception:
+                text = ""
+            if not text.strip():
+                return (no_update,) * 6 + (
+                    html.Span("Couldn't read that .html file.", className="text-danger"),)
+            res = product_import.import_product(url=url or "", html_text=text)
+            # Keep the saved page as an attachment on the item too.
+            try:
+                atts.append(save_attachment(up_contents, up_name or "product-page.html"))
+            except Exception:
+                pass
+        else:
+            raise PreventUpdate
+
+        if not res.get("ok"):
+            return (no_update,) * 5 + (
+                no_update, html.Span(res.get("error", "Import failed."), className="text-warning"))
+
+        # Per-unit value for multi-packs (same rule the form's importer uses).
+        d = res.get("data") or {}
+        try:
+            import price_compare
+            pu = price_compare.per_unit_value(d.get("estimated_value", ""), d.get("name", ""),
+                                              d.get("specifications"), d.get("what_it_is", ""))
+            if pu["unit_price"] is not None and 1 < pu["qty"] <= 2000:
+                d["estimated_value"] = f"{pu['currency']}{pu['unit_price']:.2f}"
+                note = pu["formatted"]
+                specs = list(d.get("specifications") or [])
+                if note and note not in specs:
+                    specs.insert(0, note)
+                d["specifications"] = specs
+        except Exception:
+            pass
+
+        name, category, value, extra, src = _qa_apply_parsed(
+            d, cur_name, cur_cat, cur_value, cur_extra, cur_src)
+        status = html.Span([html.I(className="bi bi-check-circle text-success me-1"),
+                            f'Imported: "{name or "—"}" ({res.get("via", "page")}).'])
+        return name, category, value, extra, src, atts, status
+
+    # ---------- Quick Add: attach invoice / any file + auto-extract purchase ----------
+    @app.callback(
+        Output("qa-attachments", "data", allow_duplicate=True),
+        Output("qa-attach-upload", "contents"),
+        Output("qa-order", "value", allow_duplicate=True),
+        Output("qa-date", "value", allow_duplicate=True),
+        Output("qa-price", "value", allow_duplicate=True),
+        Output("qa-seller", "value", allow_duplicate=True),
+        Output("qa-attach-status", "children", allow_duplicate=True),
+        Input("qa-attach-upload", "contents"),
+        State("qa-attach-upload", "filename"),
+        State("qa-attachments", "data"),
+        State("qa-order", "value"),
+        State("qa-date", "value"),
+        State("qa-price", "value"),
+        State("qa-seller", "value"),
+        prevent_initial_call=True,
+    )
+    def qa_attach(contents, filenames, current, cur_order, cur_date, cur_price, cur_seller):
+        if not contents:
+            raise PreventUpdate
+        import invoice_parse
+        uploads = contents if isinstance(contents, list) else [contents]
+        names = filenames if isinstance(filenames, list) else [filenames]
+        atts = list(current or [])
+        saved = []
+        for c, fn in zip(uploads, names):
+            if not c:
+                continue
+            try:
+                meta = save_attachment(c, fn or "attachment")
+                atts.append(meta)
+                saved.append(meta)
+            except Exception:
+                continue
+        if not saved:
+            return (no_update, None, no_update, no_update, no_update, no_update,
+                    html.Span("That file couldn't be read.", className="text-warning"))
+
+        order = (cur_order or "").strip()
+        pdate = (cur_date or "").strip()
+        price = (cur_price or "").strip()
+        seller = (cur_seller or "").strip()
+        read_n = 0
+        for meta in reversed(saved):
+            if meta.get("kind") not in ("image", "html"):
+                continue
+            text = read_attachment_text(meta["filename"])
+            if not text.strip():
+                continue
+            found = invoice_parse.extract_purchase(text)
+            order = order or found.get("order_number", "")
+            pdate = pdate or found.get("purchase_date", "")
+            price = price or found.get("price_paid", "")
+            seller = seller or found.get("seller", "")
+            read_n = len(found.get("found", []))
+            break
+        nm = len(saved)
+        if read_n:
+            status = html.Span([html.I(className="bi bi-magic text-success me-1"),
+                                f"Attached {nm}; read {read_n} purchase field"
+                                f"{'s' if read_n != 1 else ''} — check step 3."])
+        else:
+            status = html.Span(f"Attached {nm} document{'s' if nm != 1 else ''}.",
+                               className="text-muted")
+        return atts, None, order, pdate, price, seller, status
+
+    # ---------- Quick Add: render the attachment list ----------
+    @app.callback(
+        Output("qa-attach-list", "children"),
+        Input("qa-attachments", "data"),
+        prevent_initial_call=False,
+    )
+    def qa_render_attach(atts):
+        return _render_attachments(atts, remove_type="qa-attach-remove")
+
+    # ---------- Quick Add: remove a staged attachment ----------
+    @app.callback(
+        Output("qa-attachments", "data", allow_duplicate=True),
+        Input({"type": "qa-attach-remove", "index": ALL}, "n_clicks"),
+        State("qa-attachments", "data"),
+        prevent_initial_call=True,
+    )
+    def qa_remove_attach(clicks, atts):
+        if not atts or not clicks or all(not c for c in clicks):
+            raise PreventUpdate
+        trig = ctx.triggered_id
+        if isinstance(trig, dict):
+            i = trig.get("index")
+            if isinstance(i, int) and 0 <= i < len(atts):
+                out = list(atts)
+                del out[i]
+                return out
+        raise PreventUpdate
+
+    # ---------- Quick Add: save the assembled item ----------
+    @app.callback(
+        Output("qa-modal", "is_open", allow_duplicate=True),
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("qa-save", "n_clicks"),
+        State("qa-name", "value"),
+        State("qa-qty", "value"),
+        State("qa-category", "value"),
+        State("qa-location", "value"),
+        State("qa-code", "value"),
+        State("qa-value", "value"),
+        State("qa-price", "value"),
+        State("qa-order", "value"),
+        State("qa-seller", "value"),
+        State("qa-date", "value"),
+        State("qa-extra", "data"),
+        State("qa-source-title", "data"),
+        State("qa-photos", "data"),
+        State("qa-attachments", "data"),
+        prevent_initial_call=True,
+    )
+    def qa_save(n, name, qty, category, location, code, value, price, order, seller, pdate,
+                extra, src, photos, atts):
+        if not n:
+            raise PreventUpdate
+        photos = list(photos or [])
+        nm = (name or "").strip()
+        # Same quick-capture rule as the form: a blank name with a photo auto-numbers.
+        if not nm and photos:
+            nm = data.next_auto_name()
+        if not nm:
+            return (no_update, no_update, True, "Add a photo or name", "warning",
+                    "Take a photo (it'll auto-number) or type a name first.")
+        extra = extra or {}
+        try:
+            data.add_item(
+                nm, extra.get("description", ""), _parse_qty(qty), photos, "",
+                category=(category or "").strip(), location=(location or "").strip(),
+                location_code=(code or "").strip(),
+                specifications=extra.get("specifications", ""),
+                estimated_value=(value or "").strip(),
+                dimensions=extra.get("dimensions", ""),
+                tags=extra.get("tags", ""),
+                product_url=extra.get("product_url", ""),
+                source_title=(src or "").strip(),
+                attachments=list(atts or []),
+                order_number=(order or "").strip(),
+                purchase_date=(pdate or "").strip(),
+                price_paid=(price or "").strip(),
+                seller=(seller or "").strip(),
+            )
+        except ValueError as e:
+            return (no_update, no_update, True, "Duplicate Name", "danger", str(e))
+        return (False, time.time(), True, "Item Added", "success",
+                f'"{nm}" added from Quick Add.')
 
     # ---------- Form: "Search the web" link tracks the typed name ----------
     @app.callback(
