@@ -97,7 +97,7 @@ def _build_rows(filtered):
         out_rows.append(row)
     return out_rows
 
-def _apply_filters(items, search, filter_cat, filter_loc, filter_type=None):
+def _apply_filters(items, search, filter_cat, filter_loc, filter_type=None, filter_bin=None):
     filtered = data.search(search) if search else items
     if filter_type:
         filtered = [r for r in filtered if (r.get("type") or "").strip() == filter_type]
@@ -105,6 +105,8 @@ def _apply_filters(items, search, filter_cat, filter_loc, filter_type=None):
         filtered = [r for r in filtered if (r.get("category") or "").strip() == filter_cat]
     if filter_loc:
         filtered = [r for r in filtered if (r.get("location") or "").strip() == filter_loc]
+    if filter_bin:
+        filtered = [r for r in filtered if (r.get("location_code") or "").strip() == filter_bin]
     return filtered
 
 
@@ -140,8 +142,9 @@ def _apply_sort(rows, sort_by):
             rank = order.get(v, len(order) + (1 if v else 2))  # custom types, then empty, last
             return (rank, v.lower(), (r.get("name") or "").lower())
         return sorted(rows, key=tkey)
-    if sb in ("group_category", "group_location"):
-        field = "category" if sb == "group_category" else "location"
+    if sb in ("group_category", "group_location", "group_bin"):
+        field = {"group_category": "category", "group_location": "location",
+                 "group_bin": "location_code"}[sb]
         def gkey(r):
             v = (r.get(field) or "").strip()
             return (v == "", v.lower(), (r.get("name") or "").lower())
@@ -850,6 +853,7 @@ def register_callbacks(app):
             Input("filter-type", "value"),
             Input("filter-category", "value"),
             Input("filter-location", "value"),
+            Input("filter-bin", "value"),
             Input("sort-by", "value"),
             Input("refresh-seq", "data"),
         ],
@@ -875,7 +879,7 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def manage_table(pathname, save_clicks, save_next_clicks, delete_clicks, sel_rows, cancel_clicks,
-                     search, filter_type, filter_cat, filter_loc, sort_by, _refresh_seq,
+                     search, filter_type, filter_cat, filter_loc, filter_bin, sort_by, _refresh_seq,
                      name, desc, qty, reorder, item_type, category, location, location_code,
                      specs, value, dims, tags, producturl, img_contents,
                      current_images, editing_id, current_rows):
@@ -1006,11 +1010,12 @@ def register_callbacks(app):
 
         # Search / filter / sort change: drop the stale selection highlight (the
         # edit form and editing-id are intentionally left as-is).
-        elif triggered in ("search-bar", "filter-type", "filter-category", "filter-location", "sort-by"):
+        elif triggered in ("search-bar", "filter-type", "filter-category", "filter-location",
+                           "filter-bin", "sort-by"):
             next_sel = []
 
         # Filter/search, then order for display.
-        filtered = _apply_filters(items, search, filter_cat, filter_loc, filter_type)
+        filtered = _apply_filters(items, search, filter_cat, filter_loc, filter_type, filter_bin)
         filtered = _apply_sort(filtered, sort_by)
         out_rows = _build_rows(filtered)
 
@@ -1071,6 +1076,7 @@ def register_callbacks(app):
         Output("filter-type", "options"),
         Output("filter-category", "options"),
         Output("filter-location", "options"),
+        Output("filter-bin", "options"),
         Output("type-datalist", "children"),
         Output("category-datalist", "children"),
         Output("location-datalist", "children"),
@@ -1091,9 +1097,11 @@ def register_callbacks(app):
         type_n = {g["name"]: g["items"] for g in data.summary_by("type", all_items)}
         cat_n = {g["name"]: g["items"] for g in data.summary_by("category", all_items)}
         loc_n = {g["name"]: g["items"] for g in data.summary_by("location", all_items)}
+        code_n = {g["name"]: g["items"] for g in data.summary_by("location_code", all_items)}
         type_opts = [{"label": f"{t} ({type_n.get(t, 0)})", "value": t} for t in present_types]
         cat_opts = [{"label": f"{c} ({cat_n.get(c, 0)})", "value": c} for c in cats]
         loc_opts = [{"label": f"{l} ({loc_n.get(l, 0)})", "value": l} for l in locs]
+        bin_opts = [{"label": f"{c} ({code_n.get(c, 0)})", "value": c} for c in codes]
         # Datalist suggestions for Type: always offer the canonical groups, plus
         # any custom values already in use, so the form nudges toward consistency.
         type_choices = list(data.TYPE_GROUPS) + [t for t in present_types if t not in data.TYPE_GROUPS]
@@ -1110,7 +1118,8 @@ def register_callbacks(app):
         code_choices = list(dict.fromkeys(list(codes) + [c["code"] for c in conts]))
         loc_dl = [html.Option(value=l) for l in loc_choices]
         code_dl = [html.Option(value=c) for c in code_choices]
-        return type_opts, cat_opts, loc_opts, type_dl, cat_dl, loc_dl, code_dl
+        return (type_opts, cat_opts, loc_opts, bin_opts,
+                type_dl, cat_dl, loc_dl, code_dl)
 
     # ---------- Rich hover tooltips (full extracted details per row) ----------
     @app.callback(
@@ -1296,6 +1305,7 @@ def register_callbacks(app):
         Output("kpi-qty", "children"),
         Output("kpi-low", "children"),
         Output("kpi-cat", "children"),
+        Output("kpi-value", "children"),
         Input("inventory-table", "data"),
         prevent_initial_call=False,
     )
@@ -1305,7 +1315,9 @@ def register_callbacks(app):
         total_qty = sum(int(r.get("qty") or 0) for r in rows)
         low = sum(1 for r in rows if data.is_low_stock(r))
         cats = len({(r.get("category") or "").strip() for r in rows if (r.get("category") or "").strip()})
-        return total, total_qty, low, cats
+        total_value = data._sum_group_value(rows)
+        value_str = f"${total_value:,.0f}" if total_value else "—"
+        return total, total_qty, low, cats, value_str
 
     # ---------- Overview breakdown (by type / location / category) ----------
     @app.callback(
@@ -1615,6 +1627,7 @@ def register_callbacks(app):
         tags = d.get("tags")
         tags_text = _tags_to_text(tags) if isinstance(tags, list) else _s(tags)
         url = _s(d.get("product_url"))
+        src_title = _s(d.get("source_title"))
         qty = _parse_qty(cur_qty)
         images = list(cur_imgs or [])
         loc = (cur_loc or "").strip()
@@ -1628,6 +1641,9 @@ def register_callbacks(app):
                     category=category, location=loc, location_code=code,
                     specifications=specs_text, estimated_value=value, dimensions=dims,
                     tags=tags_text, product_url=url,
+                    # Only set when the lookup carried one, so we never wipe an
+                    # existing source title with a blank.
+                    **({"source_title": src_title} if src_title else {}),
                 )
                 saved_id = editing_id
                 header, msg = "Item Updated", f'"{name}" updated from the lookup.'
@@ -1635,7 +1651,7 @@ def register_callbacks(app):
                 row = data.add_item(
                     name, desc, qty, images, "", category=category, location=loc,
                     location_code=code, specifications=specs_text, estimated_value=value,
-                    dimensions=dims, tags=tags_text, product_url=url,
+                    dimensions=dims, tags=tags_text, product_url=url, source_title=src_title,
                 )
                 saved_id = row.get("id")
                 header, msg = "Item Added", f'"{name}" added from the lookup.'

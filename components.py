@@ -36,6 +36,7 @@ def kpi_bar():
             _kpi_card("bi-123", "text-success", "Total Quantity", "kpi-qty"),
             _kpi_card("bi-exclamation-triangle-fill", "text-warning", "Needs Reorder", "kpi-low"),
             _kpi_card("bi-tags-fill", "text-info", "Categories", "kpi-cat"),
+            _kpi_card("bi-cash-stack", "text-success", "Est. Value", "kpi-value"),
         ],
         className="g-3 mb-2",
     )
@@ -421,7 +422,7 @@ def filter_card():
                                     clearable=True,
                                     options=[],
                                 ),
-                                xs=12, sm=4, className="mt-2",
+                                xs=6, sm=3, className="mt-2",
                             ),
                             dbc.Col(
                                 dcc.Dropdown(
@@ -430,7 +431,7 @@ def filter_card():
                                     clearable=True,
                                     options=[],
                                 ),
-                                xs=12, sm=4, className="mt-2",
+                                xs=6, sm=3, className="mt-2",
                             ),
                             dbc.Col(
                                 dcc.Dropdown(
@@ -439,7 +440,16 @@ def filter_card():
                                     clearable=True,
                                     options=[],
                                 ),
-                                xs=12, sm=4, className="mt-2",
+                                xs=6, sm=3, className="mt-2",
+                            ),
+                            dbc.Col(
+                                dcc.Dropdown(
+                                    id="filter-bin",
+                                    placeholder="All bins",
+                                    clearable=True,
+                                    options=[],
+                                ),
+                                xs=6, sm=3, className="mt-2",
                             ),
                         ],
                         className="g-2",
@@ -459,6 +469,7 @@ def filter_card():
                                     {"label": "🗂 Group by Type", "value": "group_type"},
                                     {"label": "🗂 Group by Category", "value": "group_category"},
                                     {"label": "🗂 Group by Location", "value": "group_location"},
+                                    {"label": "🗂 Group by Bin", "value": "group_bin"},
                                 ],
                                 value="date_desc",
                             ),
