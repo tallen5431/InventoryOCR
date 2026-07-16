@@ -40,6 +40,14 @@ to find something or restock.
   Next**: a blank name **auto‑numbers** (Item 0001, Item 0002 …), so you can bang
   through a pile of items with photos only, then fill in real names/details later
   from a desktop.
+- ✨ **Quick Add** — a guided capture flow in one focused window: **① take a
+  photo** (Identify suggests the name and details) → **② attach the invoice /
+  product page** (the page fills name·price·specs; an invoice is auto‑read for
+  order #·date·total) → **③ review and save**. The full Add/Edit form and the
+  Identify button stay for everything else.
+- 🖼️ **Batch add** — drop a **set of photos** and each becomes its **own item**
+  with an auto‑numbered name, populating the list in one go. If two shots turn
+  out to be the same thing, tick both rows and **Merge**.
 - 🔎 **Find fast** — full‑text search across name / type / category / location /
   bin / notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters
   for type, category, and location (each showing how many items it holds, e.g.
@@ -68,6 +76,12 @@ to find something or restock.
 - 🔗 **Import from a product page** — found it online? Paste the product URL (or,
   when a store blocks bots, paste/upload the page's HTML) and the app reads the
   embedded product data (name, price, brand, specs) and fills the item for you.
+- 🧾 **Purchase records & attached documents** — keep the paperwork **with** the
+  item: attach the invoice, saved product page, receipt, manual — **any file** —
+  and view or download it later. Invoices (image or saved HTML) are **auto‑read**
+  for **order # · purchase date · price paid · seller** into fields you confirm
+  before saving. Purchase details are searchable ("what did I buy from Mouser?")
+  and are kept when items are merged.
 - 💲 **Price Compare** — drop several saved listing `.html` files for the same
   product and the app works out each one's **price per unit** (handling packs of
   many), ranks the best deal, and can **track prices over time** across repeat
@@ -451,6 +465,8 @@ badge with the number of likely duplicate groups whenever some are detected.
 - **Price Compare** history is stored in `price_compare.json`.
 - Photos and thumbnails are saved under `assets/images/` and
   `assets/thumbnails/`.
+- Attached documents (invoices, saved product pages, receipts, manuals) are
+  saved under `assets/documents/` and linked from the item that owns them.
 - These are git‑ignored so your data stays local and survives app updates.
 
 Old data files are migrated automatically: a legacy single `image_filename`
@@ -476,6 +492,7 @@ This app ships as a bundled card in
 | `web_detect.py` | Automatic web lookup (SerpApi / Google Vision), pluggable |
 | `web_search.py` | Google Lens / Google / Shopping search URL builders |
 | `product_import.py` | Extract product details from a page URL or pasted/saved HTML (JSON‑LD / OG) |
+| `invoice_parse.py` | Read order # · date · total · seller from receipt/order text (OCR'd image or HTML) |
 | `price_compare.py` | Price‑per‑unit comparison across saved listings + price‑over‑time history |
 | `net_info.py` | Enumerates reachable URLs (LAN / Tailscale) + QR codes for the Connect panel |
 | `utils.py` | Image saving, thumbnails, asset URLs |
