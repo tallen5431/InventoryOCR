@@ -13,7 +13,8 @@ from config import (
     ASSET_IMAGE_PATH,
     ASSET_THUMB_PATH,
 )
-from flask import send_from_directory
+from flask import send_from_directory, request, Response
+import authz
 
 # UI components
 from components import (
@@ -22,6 +23,10 @@ from components import (
     detail_panel,
     kpi_bar,
     breakdown_card,
+    filter_card,
+    search_box,
+    dashboard_toolbar,
+    action_toast,
     identify_modal,
     organize_card,
     organize_modal,
@@ -177,6 +182,37 @@ server.wsgi_app = ProxyFix(
     x_prefix=1,
 )
 
+# ---- Optional HTTP Basic Auth (makes internet exposure safe) -----------------
+# OFF unless credentials are configured (see authz.py). When ON, every request
+# must present them — which is what lets you safely put the app on the public
+# internet via Tailscale Funnel / a Cloudflare Tunnel. /healthz stays open so a
+# tunnel or uptime monitor can probe without credentials.
+AUTH_ENABLED = authz.auth_enabled()
+if AUTH_ENABLED:
+    _AUTH_REALM = os.environ.get("INVENTORY_AUTH_REALM", "Inventory Manager")
+
+    @server.before_request
+    def _enforce_basic_auth():
+        if request.path.rstrip("/").endswith("/healthz"):
+            return None
+        auth = request.authorization
+        if auth and (auth.type or "").lower() == "basic" and \
+                authz.credentials_match(auth.username, auth.password):
+            return None
+        return Response(
+            "Authentication required.", 401,
+            {"WWW-Authenticate": f'Basic realm="{_AUTH_REALM}"'},
+        )
+
+
+def _healthz():
+    return "ok", 200
+
+
+# Register /healthz (and the prefixed variant when served under /inventory).
+for _i, _rule in enumerate(["/healthz"] + ([f"{URL_PREFIX}/healthz"] if URL_PREFIX else [])):
+    server.add_url_rule(_rule, f"_healthz_{_i}", _healthz)
+
 # ---- Static asset routes for images & thumbnails -----------------
 # Browser URLs look like:
 #   https://<host>:8443/inventory/assets/images/<file>
@@ -195,7 +231,7 @@ def serve_image(filename: str):
 navbar = dbc.Navbar(
     dbc.Container(
         [
-            dbc.NavbarBrand("📦 Inventory OCR", href="/"),
+            dbc.NavbarBrand("📦 Inventory Manager", href="/"),
             dbc.Nav(
                 [
                     dbc.NavItem(dbc.NavLink("Dashboard", href="/", external_link=False)),
@@ -232,6 +268,11 @@ navbar = dbc.Navbar(
 
 # ---------- Dashboard layout ----------
 def dashboard_layout():
+    # Streamlined: summary (KPIs) + a toolbar + the table stay on top; the form,
+    # filters, overview and storage map live in tap-to-expand collapsibles so the
+    # page is short and scannable — especially on a phone. dbc.Collapse keeps its
+    # children mounted (just hidden), so every callback wired to the inner ids
+    # keeps working whether a section is open or closed.
     return dbc.Container(
         [
             dcc.Store(id="refresh-seq"),
@@ -242,20 +283,22 @@ def dashboard_layout():
             ),
             kpi_bar(),
             html.Div(id="undo-bar"),
-            dbc.Row(
-                [
-                    dbc.Col(sidebar_form(), xs=12, sm=12, md=12, lg=4, xl=4, className="mb-3 mb-lg-0"),
-                    dbc.Col([inventory_table()], xs=12, sm=12, md=12, lg=8, xl=8),
-                ],
-                className="g-3",
-            ),
-            dbc.Row([dbc.Col(breakdown_card(), width=12)]),
-            dbc.Row([dbc.Col(organize_card(), width=12)]),
+            action_toast(),                      # top-level so toasts always show
+            dashboard_toolbar(),                 # + Add item · search · Filter/Overview/Storage
+            # Add / edit item — collapsed by default, auto-opens when you pick a row.
+            dbc.Collapse(sidebar_form(), id="collapse-add", is_open=False),
+            # Find & filter — collapsed by default (search stays live in the toolbar).
+            dbc.Collapse(filter_card(), id="collapse-filter", is_open=False),
+            # The inventory table is the hero — always visible, full width.
+            inventory_table(),
+            # Overview + Storage map — collapsed by default.
+            dbc.Collapse(breakdown_card(), id="collapse-overview", is_open=False),
+            dbc.Collapse(organize_card(), id="collapse-storage", is_open=False),
             identify_modal(),
             organize_modal(),
             bins_modal(),
             duplicates_modal(),
-            dbc.Row([dbc.Col(detail_panel(), width=12)], className="mt-4"),
+            dbc.Row([dbc.Col(detail_panel(), width=12)], className="mt-3"),
         ],
         fluid=True,
     )
@@ -289,8 +332,6 @@ app.layout = html.Div(
         html.Div(id="diag", style={"display": "none"}),
         # sink for the clientside theme-attribute callback (below)
         html.Div(id="theme-attr-sink", style={"display": "none"}),
-        # sink for the clientside camera-capture callback (below)
-        html.Div(id="camera-attr-sink", style={"display": "none"}),
         # seed content so first paint isn't blank
         html.Div(id="page-content", children=dashboard_layout()),
     ]
@@ -358,30 +399,12 @@ app.clientside_callback(
     Input("theme-mode", "data"),
 )
 
-# Make the dashboard's photo button open the phone camera directly (rather than
-# the file picker). `capture` is honored on mobile browsers and ignored on the
-# desktop, where the normal file dialog still opens — so desktop uploads and
-# quick phone snaps both work. Re-applied on navigation + on a tick so it
-# survives the dashboard being re-rendered by the router.
-app.clientside_callback(
-    """
-    function(_n, _path) {
-        try {
-            var up = document.getElementById('image-upload');
-            if (up) {
-                var inp = up.querySelector('input[type=file]');
-                if (inp && !inp.getAttribute('capture')) {
-                    inp.setAttribute('capture', 'environment');
-                }
-            }
-        } catch (e) {}
-        return '';
-    }
-    """,
-    Output("camera-attr-sink", "children"),
-    Input("diag-interval", "n_intervals"),
-    Input("url", "pathname"),
-)
+# NOTE: we deliberately do NOT set the `capture` attribute on the photo input.
+# With a plain `<input type="file" accept="image/*">`, mobile browsers (iOS
+# Safari, Android Chrome) show a chooser offering BOTH "Take Photo" and "Photo
+# Library / Choose File", so the same button lets you snap a new picture or pick
+# an existing one. Forcing `capture="environment"` would open the camera
+# directly and hide the library option.
 
 # ---------- Diagnostics ----------
 @app.callback(Output("diag", "children"), Input("diag-interval", "n_intervals"), Input("url", "pathname"))
@@ -407,7 +430,7 @@ if __name__ == "__main__":
     primary_url, alternative_urls = get_external_url(host, port, URL_PREFIX)
 
     print("=" * 60)
-    print("📦 Inventory OCR Server Started")
+    print("📦 Inventory Manager Server Started")
     print("=" * 60)
     print(f"✓ Primary URL:  {primary_url}")
 
@@ -417,6 +440,11 @@ if __name__ == "__main__":
             print(f"  • {url}")
 
     print(f"\n🔧 Internal:    http://{host}:{port}{URL_PREFIX}")
+    if AUTH_ENABLED:
+        print("🔐 Auth:        ON — HTTP Basic Auth required on every request")
+    else:
+        print("🔐 Auth:        OFF — LAN only. Set INVENTORY_AUTH_USER/PASSWORD "
+              "before exposing to the internet")
     print("=" * 60)
 
     serve(server, host=host, port=port, expose_tracebacks=True)

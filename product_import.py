@@ -420,6 +420,39 @@ def _enrich_with_bs4(html_text: str) -> Dict[str, Any]:
     return out
 
 
+_SITE_PREFIX_RE = re.compile(
+    r"^\s*(amazon(?:\.com)?|ebay|aliexpress|walmart|etsy|target|newegg)\s*[:\-–—|]\s*", re.I)
+_SITE_SUFFIX_RE = re.compile(
+    r"\s*[:\-–—|]\s*(amazon(?:\.com)?|ebay|aliexpress|walmart|etsy)\b.*$", re.I)
+
+
+def _short_name(full: str, limit: int = 64) -> str:
+    """Condense a long retailer title into a concise product name.
+
+    Amazon/eBay titles cram the brand, every feature and the category onto one
+    line. Strip the marketplace noise, cut at the first strong separator (the
+    lead segment is almost always the product), then cap the length on a word
+    boundary. The caller keeps the FULL title as a search tag so nothing is lost.
+    """
+    s = re.sub(r"\s+", " ", (full or "")).strip()
+    if not s:
+        return s
+    s = _SITE_SUFFIX_RE.sub("", s)
+    s = _SITE_PREFIX_RE.sub("", s).strip()
+    # Cut at the earliest strong delimiter that leaves a meaningful lead.
+    cuts = []
+    for sep in (",", " - ", " – ", " — ", " : ", " | ", " (", ": ", "|"):
+        i = s.find(sep)
+        if i >= 12:
+            cuts.append(i)
+    if cuts:
+        s = s[:min(cuts)]
+    s = s.strip(" -–—|:,·").strip()
+    if len(s) > limit:
+        s = (s[:limit].rsplit(" ", 1)[0] or s[:limit]).rstrip(" -–—|:,")
+    return s or re.sub(r"\s+", " ", (full or "")).strip()
+
+
 def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
     """Parse product details out of a page's HTML. Returns {ok, data|error}."""
     if not html_text or not html_text.strip():
@@ -449,6 +482,10 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
                          "your browser, save it (Ctrl+S) or copy its source, and use “paste / "
                          "upload the page HTML”.",
                 "suggest_html": True}
+    # Long Amazon-style titles make an unwieldy item name; keep a concise one for
+    # display and retain the full title as a search tag (added below).
+    full_title = name
+    name = _short_name(name)
 
     price = ((prod or {}).get("price") or meta.get("price") or enr.get("price") or "").strip()
     image_url = base("image_url")
@@ -497,6 +534,9 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
             if len(v) <= 40 and v.lower() not in {t.lower() for t in tags}:
                 tags.append(v)
     tags = tags[:10]
+    # Keep the full original title searchable via its own field (not as a tag,
+    # where the tag sanitiser would strip an over-long marketplace title).
+    source_title = full_title if (full_title and full_title != name) else ""
 
     data = {
         "name": name,
@@ -506,6 +546,7 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
         "estimated_value": price,
         "dimensions": dimensions or "unknown",
         "tags": tags,
+        "source_title": source_title,
         "product_url": source_url,
         "confidence": "high" if (prod or dimensions or len(specs) >= 3) else "medium",
         "image_url": image_url,

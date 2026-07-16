@@ -19,28 +19,43 @@ to find something or restock.
 
 ## Features
 
-- 📷 **Phone‑first capture** — on mobile the Photos button opens the **camera
-  directly** (`capture="environment"`) so you snap an item and it saves; on a
-  desktop the same button opens the file picker. Attach multiple photos per item,
-  preview before saving, and view them full‑size in a carousel.
-- 🗂️ **Organize** — every item has a **Category** and **Location** (with
-  type‑ahead suggestions from what you've already used), a **Quantity**, a
-  description, and photos.
+- 📷 **Phone‑first capture** — on mobile the Photos button lets you **snap a new
+  picture or choose an existing photo** from the same chooser; on a desktop it
+  opens the file picker. **Add as many photos as you like** — take several shots
+  in a row or pick multiple files and they all **stack up** on the item — then
+  view them full‑size in a carousel.
+- 🗂️ **Organize** — every item has a coarse **Type**, a detailed **Category**,
+  and a **Location** (all with type‑ahead suggestions from what you've already
+  used), plus a **Quantity**, description, and photos.
+- 🏷️ **Type (top‑level grouping)** — a short, stable group for browsing:
+  **Tools · Components · Cables & Adapters · Devices · Consumables · Other**.
+  Leave it blank and the app **auto‑groups** each item from its name/category
+  (so a shelf of scraped listings sorts itself into tools‑with‑tools,
+  parts‑with‑parts), while **Category** keeps the specific sub‑label underneath.
+  Filter, and sort by Type from the dashboard.
 - ⚡ **Fast batch entry** — **Save & Next** stores the item and keeps the
-  category / location / bin so you can rip through a whole shelf without
+  type / category / location / bin so you can rip through a whole shelf without
   re‑typing where things live.
 - 📷 **Quick phone scan** — on your phone, just snap a photo and tap **Save &
   Next**: a blank name **auto‑numbers** (Item 0001, Item 0002 …), so you can bang
   through a pile of items with photos only, then fill in real names/details later
   from a desktop.
-- 🔎 **Find fast** — full‑text search across name / category / location / bin /
-  notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters for
-  category and location.
-- ✅ **Bulk edit** — tick several rows to set their category / location / bin in
-  one go, or delete them together — quick cleanup after a big scan. Merges and
-  bulk deletes offer a one‑click **Undo**.
-- 📊 **At‑a‑glance** — KPI cards (total items, total quantity, low‑stock count,
-  categories) and an **Overview** grouped by location and by category.
+- 🔎 **Find fast** — full‑text search across name / type / category / location /
+  bin / notes / tags / specs / OCR text (multi‑word = AND), plus dropdown filters
+  for type, category, and location (each showing how many items it holds, e.g.
+  *Tools (12)*). Sort newest / name / quantity, or **Group by Type / Category /
+  Location** to cluster related items together in the list.
+- ✅ **Bulk edit & merge** — tick several rows to set their type / category /
+  location / bin in one go, **merge them into a single entry** (keeps the richest
+  one, adds up the quantities, and combines every photo/spec/tag), or delete them
+  together. Merges and bulk deletes offer a one‑click **Undo**.
+- 📊 **At‑a‑glance** — KPI cards (total items, total quantity, **needs‑reorder**
+  count, categories) and an **Overview** with item/quantity totals grouped by
+  **type**, by location, and by category.
+- 🔔 **Per‑item reorder points** — set a **Reorder at** number on an item and it's
+  flagged (and counted in the KPI) only when its quantity drops to or below that
+  point. Items with no reorder point are never flagged — low stock is opt‑in, so
+  the count reflects only things you actually need to restock.
 - 📤 **Export** — one‑click CSV of your whole inventory (including bin, specs,
   value, dimensions, tags, and product link).
 - 🔎 **Identify from photo** — send an item's photo to a local vision AI
@@ -58,10 +73,14 @@ to find something or restock.
   many), ranks the best deal, and can **track prices over time** across repeat
   runs. If a listing matches something you own, one click **writes the best unit
   price + link back** onto that item.
-- 🧺 **Storage system** — give items a short **bin / location code**, or run
-  **Smart Organize** to group like items into labelled bins automatically. A live
-  **Storage map** shows what lives in each bin so a keyword search tells you
-  exactly where to look.
+- 🧺 **Storage system** — set up your storage in a **simple row editor** (no
+  syntax): each container — any box, drawer, tote, bag or shelf — is a row with a
+  **Name** and, optionally, the **bags** inside it. Click **Add container** for
+  another, remove one with ✕, or generate a numbered set (type a count and a
+  label like Bin/Box/Drawer). The live **Storage map** shows every container —
+  even empty ones — with its bags and how full it is, so a keyword search tells
+  you exactly where to look. **Smart Organize** can also group like items into
+  labelled containers automatically.
 - 🧬 **Merge duplicates** — scanned the same thing twice? **Merge duplicates**
   finds identical / very similar entries, previews the combined item (quantities
   added, photos/specs/tags kept), and merges the ones you pick — while keeping
@@ -239,6 +258,54 @@ for speed, or the Tailscale one to reach it from anywhere. (QR codes need the
 optional `qrcode` package from `requirements.txt`; without it you still get the
 links.)
 
+## Access it from the internet (optional)
+
+Tailscale already lets you reach the app from anywhere **on your tailnet**. If you
+want a *public* URL — reachable from any browser without the Tailscale client —
+do it in two parts: **turn on the login**, then **expose it over HTTPS**.
+
+### 1. Turn on the login (required before exposing)
+
+The app ships with **no authentication**, so never put it on the public internet
+without this. Set a username and password and the app requires them on every
+request:
+
+```bash
+export INVENTORY_AUTH_USER="tj"
+export INVENTORY_AUTH_PASSWORD="a-long-random-passphrase"
+# or the shorthand:  export INVENTORY_AUTH="tj:a-long-random-passphrase"
+```
+
+(In the HTTP Server Manager, add these to the program's **env** so they persist.)
+Leave them unset and auth stays **off** — unchanged for LAN use. `/healthz` stays
+open (no credentials) so a tunnel or uptime monitor can probe it. Basic Auth sends
+the password on each request, so only expose the app **over HTTPS** — both options
+below give you that.
+
+### 2. Expose it over HTTPS — pick one
+
+**Tailscale Funnel (easiest — you already run Tailscale).** Publishes the local
+port on a public `https://<machine>.<tailnet>.ts.net` URL with automatic TLS and
+**no router ports opened**. Enable Funnel for the node in your tailnet's ACLs
+once, then:
+
+```bash
+sudo tailscale funnel 8001        # serve the app publicly over HTTPS
+tailscale funnel status           # shows the public URL
+```
+
+**Cloudflare Tunnel (add your own domain + SSO).** `cloudflared` dials out to
+Cloudflare (again, no open ports) and serves the app at your domain; pair it with
+**Cloudflare Access** for real SSO/2FA in front:
+
+```bash
+cloudflared tunnel --url http://localhost:8001   # quick throwaway *.trycloudflare.com URL
+```
+
+> ⚠️ **Don't** expose the **HTTP Server Manager** (port 3000) — only the app
+> (8001). And avoid raw router port‑forwarding: it publishes your home IP, has no
+> TLS, and AT&T CGNAT often blocks it. The tunnels above are safer and simpler.
+
 ## Import from a product page (Amazon, eBay & co.)
 
 When visual search lands you on a real product page, pull its details straight
@@ -309,19 +376,21 @@ make that fast:
    bin labels onto every item at once. Existing codes are preserved, so re‑running
    after you scan more items is safe and stable.
 
-3. **Fit to my bins.** Smart Organize invents as many bins as it needs — but in
-   real life you have a *fixed* set of drawers, totes and shelves. Click
-   **Fit to my bins** (next to Smart Organize) to describe the containers you
-   actually own and let the app pack everything into them. In the editor, list
-   one container per line as `CODE | Name | capacity`, for example:
+3. **Set up your storage (with bags).** Smart Organize invents as many bins as it
+   needs — but in real life you have a *fixed* set of drawers, totes, boxes and
+   shelves. Click **Set up bins** (next to Smart Organize) to open a simple row
+   editor — no syntax to learn. Each container is a row: type its **Name** and,
+   optionally, the **bags** inside it (comma-separated). **Add container** adds a
+   row; ✕ removes one. Have a set of identical ones? Enter a count and a label
+   (Bin, Box, Drawer, Tote…) and **Add** drops them straight in as rows. A short
+   code is derived from each name automatically — you never type codes.
 
-   ```
-   A1 | Small parts drawer | 20
-   B1 | Garage tote        | 50
-   SHELF | Workshop shelf   | 30
-   ```
+   The **Storage map** then lists every bin — even empty ones — with its bags and
+   how full it is; bags you've actually filled show a live item count. (Set an
+   item's **Location** to a bag name and its **Bin** to the bin code — both offer
+   type-ahead suggestions from what you've defined.)
 
-   *Capacity* is how many **different items** a container should hold. **Save
+   *Slots* is how many **different items** a container should hold. **Save
    bins** remembers them (in `containers.json`); **Fit items into bins** runs a
    bin‑packing pass that keeps related items together (the same Switches /
    Resistors groups as Smart Organize), drops each group into the tightest

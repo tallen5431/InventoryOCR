@@ -1,8 +1,10 @@
 from __future__ import annotations
 import json
+import re as _re_date
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from config import INVENTORY_JSON
+from config import INVENTORY_JSON, ASSET_IMAGE_PATH, ASSET_THUMB_PATH
 
 # --------------------------------------------------------------------
 # Persistence helpers
@@ -28,6 +30,89 @@ def _load() -> List[Dict[str, Any]]:
 
 def _save(rows: List[Dict[str, Any]]) -> None:
     Path(INVENTORY_JSON).write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+# --------------------------------------------------------------------
+# "Date added" tracking
+# --------------------------------------------------------------------
+# Every item carries a created_at ISO timestamp so the dashboard can sort by
+# when it was scanned in. New items are stamped on save. Legacy items (added
+# before this field existed) are backfilled from their images: app-saved photos
+# embed the upload time in the filename (…-<ms>.<ext>), which is exactly "when it
+# was submitted to the index"; otherwise we fall back to the photo's EXIF capture
+# time, then the image file's modification time.
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+# App-saved images end in "-<13-digit-ms>.<ext>" (see utils.save_image).
+_STAMP_RE = _re_date.compile(r"-(\d{13})\.[A-Za-z0-9]+$")
+
+
+def _dt_from_filename(filename: str) -> Optional[datetime]:
+    m = _STAMP_RE.search(filename or "")
+    if not m:
+        return None
+    try:
+        return datetime.fromtimestamp(int(m.group(1)) / 1000.0)
+    except (ValueError, OSError, OverflowError):
+        return None
+
+
+def _dt_from_exif(path: Path) -> Optional[datetime]:
+    """Read a photo's capture time (EXIF DateTimeOriginal/DateTime), if present."""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            exif = im.getexif()
+            if not exif:
+                return None
+            val = None
+            try:
+                ifd = exif.get_ifd(0x8769)  # Exif sub-IFD
+                val = ifd.get(36867) or ifd.get(36868)  # DateTimeOriginal / Digitized
+            except Exception:
+                val = None
+            val = val or exif.get(306)  # DateTime (base IFD)
+            if val:
+                return datetime.strptime(str(val).strip(), "%Y:%m:%d %H:%M:%S")
+    except Exception:
+        return None
+    return None
+
+
+def _derive_created_at(record: Dict[str, Any]) -> str:
+    """Best-effort 'date added' for a record with no stored created_at.
+
+    Uses the earliest signal across the item's images: upload stamp embedded in
+    the filename → EXIF capture time → file mtime. Returns an ISO string or "".
+    """
+    images = record.get("images") or []
+    if isinstance(images, str):
+        images = [images]
+    best: Optional[datetime] = None
+    for fn in images:
+        if not fn:
+            continue
+        dt = _dt_from_filename(fn)
+        if dt is None:
+            p = Path(ASSET_IMAGE_PATH) / fn
+            dt = _dt_from_exif(p)
+            if dt is None:
+                try:
+                    dt = datetime.fromtimestamp(p.stat().st_mtime)
+                except (OSError, OverflowError):
+                    dt = None
+        if dt is not None and (best is None or dt < best):
+            best = dt
+    return best.isoformat(timespec="seconds") if best else ""
+
+
+def _earliest_created(items: List[Dict[str, Any]]) -> str:
+    """Earliest non-empty created_at across items (ISO strings compare correctly)."""
+    vals = [(r.get("created_at") or "") for r in items]
+    vals = [v for v in vals if v]
+    return min(vals) if vals else ""
+
 
 def inventory() -> List[Dict[str, Any]]:
     rows = _load()
@@ -70,14 +155,17 @@ def inventory() -> List[Dict[str, Any]]:
             if old_img:
                 images = [old_img]
 
-        norm.append({
+        rec = {
             "id": rid,
             "name": r.get("name", ""),
             "description": r.get("description", ""),
             "category": (r.get("category") or "").strip(),
+            "type": (r.get("type") or "").strip(),
             "location": (r.get("location") or "").strip(),
             "location_code": (r.get("location_code") or "").strip(),
             "qty": int(r.get("qty") or 0),
+            # Optional per-item reorder point: low ⇔ set AND qty <= reorder_at.
+            "reorder_at": _coerce_reorder(r.get("reorder_at")),
             "images": images if isinstance(images, list) else [],
             "ocr_text": r.get("ocr_text", ""),
             "thumb_url": r.get("thumb_url", ""),
@@ -86,8 +174,22 @@ def inventory() -> List[Dict[str, Any]]:
             "estimated_value": (r.get("estimated_value") or "").strip(),
             "dimensions": (r.get("dimensions") or "").strip(),
             "product_url": (r.get("product_url") or "").strip(),
-            "tags": _norm_list(r.get("tags")),
-        })
+            "tags": _norm_tags(r.get("tags")),
+            # Raw marketplace title kept when the display name was condensed, so
+            # the original stays searchable without cluttering the name/tags.
+            "source_title": (r.get("source_title") or "").strip(),
+        }
+        # Coarse Type: keep a stored/hand-edited value, else auto-classify from
+        # the category/name/tags so grouping works without a manual pass.
+        if not rec["type"]:
+            rec["type"] = _classify_type(rec)
+        # Backfill a reorder/verify link from an ASIN we already scraped into
+        # specs — most Amazon items have one, and the field is otherwise blank.
+        if not rec["product_url"]:
+            rec["product_url"] = _derive_product_url(rec)
+        # When it was added: keep the stored value, else derive from the images.
+        rec["created_at"] = (r.get("created_at") or "").strip() or _derive_created_at(rec)
+        norm.append(rec)
     return norm
 
 
@@ -107,6 +209,109 @@ def _norm_list(v: Any) -> List[str]:
     return []
 
 import re as _re_auto
+
+
+# --------------------------------------------------------------------
+# Value parsing, tag hygiene, and product-link derivation
+# --------------------------------------------------------------------
+# These keep the free-text catalogue fields usable: a value we can total, tags
+# without machine-junk, and a reorder link derived from an ASIN we already have.
+
+_MONEY_RE = _re_auto.compile(r"[\d,]+(?:\.\d+)?")
+_PACK_PRICE_RE = _re_auto.compile(r"@\s*\$\s*([\d,]+(?:\.\d+)?)")
+_RANGE_RE = _re_auto.compile(r"\d\s*(?:-|–|—|to)\s*\$?\s*\d")
+
+
+def _to_float(s: Any) -> Optional[float]:
+    try:
+        return float(str(s).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_value(s: Any) -> Optional[float]:
+    """Parse a free-text ``estimated_value`` into a number, or ``None``.
+
+    Handles ``$13.99``, ranges like ``USD $10 - $25`` (midpoint), pack totals
+    such as ``... @ $7.99``, and returns ``None`` for qualitative buckets
+    (``Low to Medium``, ``small``) that carry no number.
+    """
+    txt = "" if s is None else str(s).strip()
+    if not txt:
+        return None
+    m = _PACK_PRICE_RE.search(txt)
+    if m:
+        return _to_float(m.group(1))
+    nums = [n for n in (_to_float(x) for x in _MONEY_RE.findall(txt)) if n is not None]
+    if not nums:
+        return None
+    if len(nums) >= 2 and _RANGE_RE.search(txt):
+        return round((nums[0] + nums[1]) / 2, 2)
+    return nums[0]
+
+
+def item_value(row: Dict[str, Any]) -> Optional[float]:
+    """Best estimate of the value of ONE unit (one ``qty``) of an item.
+
+    Prefers a pack total (``@ $X``) found in the value or specs over a per-piece
+    figure, so a 600-piece kit stored as ``$0.01 each`` is valued at its real
+    pack price rather than a cent. Returns ``None`` when nothing numeric exists.
+    """
+    for src in (row.get("estimated_value"), *(row.get("specifications") or [])):
+        m = _PACK_PRICE_RE.search(str(src or ""))
+        if m:
+            v = _to_float(m.group(1))
+            if v is not None:
+                return v
+    return parse_value(row.get("estimated_value"))
+
+
+_UUID_RE = _re_auto.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# Substrings that mark a tag as a dumped marketplace title rather than a facet.
+_TAG_NOISE_SUBSTR = ("amazon.com", "amazon.ae", "walmart.com", "aliexpress",
+                     ".com:", ": electronics", ": industrial")
+
+
+def _clean_tags(tags: List[str]) -> List[str]:
+    """Drop junk tags — UUIDs, raw marketplace titles, overlong noise — and dedupe.
+
+    Deliberately conservative: only clear machine-junk is removed so genuine
+    short facets (``usb-c``, ``M3``, a brand) are always kept.
+    """
+    out: List[str] = []
+    seen: set = set()
+    for t in tags or []:
+        s = str(t).strip()
+        if not s:
+            continue
+        low = s.lower()
+        if _UUID_RE.match(s) or len(s) > 60:
+            continue
+        if any(sub in low for sub in _TAG_NOISE_SUBSTR):
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append(s)
+    return out[:15]
+
+
+def _norm_tags(v: Any) -> List[str]:
+    """Normalise a tags value like ``_norm_list`` but also strip junk."""
+    return _clean_tags(_norm_list(v))
+
+
+_ASIN_RE = _re_auto.compile(r"\b(B0[0-9A-Z]{8})\b")
+
+
+def _derive_product_url(rec: Dict[str, Any]) -> str:
+    """Best-effort Amazon product URL from an ASIN already sitting in specs/tags."""
+    for src in list(rec.get("specifications") or []) + list(rec.get("tags") or []):
+        m = _ASIN_RE.search(str(src))
+        if m:
+            return f"https://www.amazon.com/dp/{m.group(1)}"
+    return ""
 
 
 def next_auto_name(prefix: str = "Item") -> str:
@@ -144,6 +349,24 @@ def _clean_images(images: Optional[List[str]]) -> List[str]:
         return [images] if images else []
     return [i for i in images if i]
 
+def _coerce_reorder(v: Any) -> Optional[int]:
+    """Parse a per-item reorder point into a non-negative int, or None if unset.
+
+    None means 'no reorder point set' — the item is never flagged low. 0 is a
+    valid point. Non-numeric/blank input becomes None.
+    """
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    try:
+        n = int(float(str(v).strip()))
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError guards against inf/Infinity — json.loads accepts a bare
+        # Infinity, and this runs on every row of every read, so an uncaught throw
+        # here would take down the whole inventory.
+        return None
+    return n if n >= 0 else None
+
+
 def add_item(
     name: str,
     description: str,
@@ -158,6 +381,9 @@ def add_item(
     dimensions: str = "",
     product_url: str = "",
     tags: Any = None,
+    item_type: str = "",
+    reorder_at: Any = None,
+    source_title: str = "",
 ) -> Dict[str, Any]:
     rows = inventory()
     # Unique by name
@@ -173,14 +399,21 @@ def add_item(
         "location": (location or "").strip(),
         "location_code": (location_code or "").strip(),
         "qty": int(qty or 0),
+        "reorder_at": _coerce_reorder(reorder_at),
         "images": _clean_images(images),
         "ocr_text": ocr_text or "",
+        "created_at": _now_iso(),
         "specifications": _norm_list(specifications),
         "estimated_value": (estimated_value or "").strip(),
         "dimensions": (dimensions or "").strip(),
         "product_url": (product_url or "").strip(),
-        "tags": _norm_list(tags),
+        "tags": _norm_tags(tags),
+        "source_title": (source_title or "").strip(),
     }
+    # Use the given Type, else auto-classify so new items are grouped on entry.
+    row["type"] = (item_type or "").strip() or _classify_type(row)
+    if not row["product_url"]:
+        row["product_url"] = _derive_product_url(row)
     rows.append(row)
     _save(rows)
     return row
@@ -206,6 +439,9 @@ def update_item(
     dimensions: Any = _KEEP,
     product_url: Any = _KEEP,
     tags: Any = _KEEP,
+    item_type: Any = _KEEP,
+    reorder_at: Any = _KEEP,
+    source_title: Any = _KEEP,
 ) -> Dict[str, Any]:
     rows = inventory()
     found = None
@@ -220,6 +456,10 @@ def update_item(
             r["images"] = _clean_images(images)
             r["ocr_text"] = ocr_text or ""
             # Optional fields: only overwrite when the caller supplied a value.
+            if item_type is not _KEEP:
+                # Blank Type falls back to an auto-classification rather than
+                # being left empty, so an edited item stays grouped.
+                r["type"] = (item_type or "").strip() or _classify_type(r)
             if location_code is not _KEEP:
                 r["location_code"] = (location_code or "").strip()
             if specifications is not _KEEP:
@@ -231,7 +471,11 @@ def update_item(
             if product_url is not _KEEP:
                 r["product_url"] = (product_url or "").strip()
             if tags is not _KEEP:
-                r["tags"] = _norm_list(tags)
+                r["tags"] = _norm_tags(tags)
+            if reorder_at is not _KEEP:
+                r["reorder_at"] = _coerce_reorder(reorder_at)
+            if source_title is not _KEEP:
+                r["source_title"] = (source_title or "").strip()
             found = r
             break
     if found is None:
@@ -266,9 +510,46 @@ def remove_item(item_id: int) -> Optional[Dict[str, Any]]:
     return removed
 
 
+def prune_unreferenced_images() -> int:
+    """Delete image/thumbnail files not referenced by any inventory item.
+
+    Photos are written to disk the moment they're taken/chosen (so several can
+    accumulate on an item before it's saved). If the entry is then cancelled, a
+    photo is removed, or an item is deleted, its files become orphans — this
+    reclaims them. Returns the number of files removed. Safe to call anytime:
+    anything still referenced by a saved item is kept.
+    """
+    referenced: set = set()
+    for r in _load():
+        imgs = r.get("images", [])
+        if isinstance(imgs, str):
+            imgs = [imgs]
+        for fn in imgs or []:
+            name = str(fn).strip()
+            if name:
+                referenced.add(name)
+        old = str(r.get("image_filename") or "").strip()
+        if old:
+            referenced.add(old)
+
+    removed = 0
+    for directory in (Path(ASSET_IMAGE_PATH), Path(ASSET_THUMB_PATH)):
+        if not directory.exists():
+            continue
+        for f in directory.iterdir():
+            if f.is_file() and f.name not in referenced:
+                try:
+                    f.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+    return removed
+
+
 # Fields that may be patched in place without a full form round-trip.
-_PATCHABLE = {"name", "description", "category", "location", "location_code",
-              "qty", "estimated_value", "dimensions", "product_url"}
+_PATCHABLE = {"name", "description", "category", "type", "location", "location_code",
+              "qty", "estimated_value", "dimensions", "product_url", "reorder_at",
+              "source_title"}
 
 
 def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
@@ -279,7 +560,12 @@ def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
         if int(r.get("id") or 0) == int(item_id):
             for k, v in fields.items():
                 if k in _PATCHABLE and v is not None:
-                    r[k] = int(v) if k == "qty" else (str(v).strip() if isinstance(v, str) else v)
+                    if k == "reorder_at":
+                        r[k] = _coerce_reorder(v)
+                    elif k == "qty":
+                        r[k] = int(v)
+                    else:
+                        r[k] = str(v).strip() if isinstance(v, str) else v
             found = r
             break
     if found is not None:
@@ -289,8 +575,10 @@ def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
 
 def bulk_set_fields(ids: List[int], category: Optional[str] = None,
                     location: Optional[str] = None,
-                    location_code: Optional[str] = None) -> int:
-    """Set category / location / bin on many items at once (only given fields).
+                    location_code: Optional[str] = None,
+                    item_type: Optional[str] = None) -> int:
+    """Set type / category / location / bin on many items at once (only given
+    fields).
 
     Passing ``None`` leaves a field untouched; passing ``""`` clears it.
     Returns the number of items changed.
@@ -302,6 +590,8 @@ def bulk_set_fields(ids: List[int], category: Optional[str] = None,
     changed = 0
     for r in rows:
         if int(r.get("id") or 0) in id_set:
+            if item_type is not None:
+                r["type"] = item_type.strip()
             if category is not None:
                 r["category"] = category.strip()
             if location is not None:
@@ -453,12 +743,14 @@ def _haystack(r: Dict[str, Any]) -> str:
         str(r.get("name", "")),
         str(r.get("description", "")),
         str(r.get("category", "")),
+        str(r.get("type", "")),
         str(r.get("location", "")),
         str(r.get("location_code", "")),
         str(r.get("ocr_text", "")),
         " ".join(r.get("specifications", []) or []),
         " ".join(r.get("tags", []) or []),
         str(r.get("dimensions", "")),
+        str(r.get("source_title", "")),
     ]).lower()
 
 def search(q: str) -> List[Dict[str, Any]]:
@@ -491,6 +783,117 @@ def locations(rows: Optional[List[Dict[str, Any]]] = None) -> List[str]:
     seen = {(r.get("location") or "").strip() for r in rows}
     return sorted((l for l in seen if l), key=str.lower)
 
+
+# --------------------------------------------------------------------
+# Type (coarse top-level grouping)
+# --------------------------------------------------------------------
+# The scraped `category` field is granular and noisy (Amazon breadcrumbs), so a
+# short, stable top-level "Type" makes browsing sane: tools with tools, parts
+# with parts. `category` stays as the detailed sub-label underneath.
+TYPE_GROUPS = ["Tools", "Components", "Cables & Adapters", "Devices",
+               "Consumables", "Other"]
+
+# Ordered keyword rules for auto-classifying an item into a TYPE_GROUP. First
+# match wins, so the order resolves overlaps between the noisy scraped strings:
+#   - Tools before Consumables so "tape measure" isn't read as "tape".
+#   - Tools before Other so a "desoldering pump" isn't read as a "pump".
+#   - Consumables before Cables so "cable ties" aren't read as a "cable".
+#   - Components (connectors/modules) before Cables so a "JST connector kit"
+#     whose name also says "cable" lands in Components, while a plain flat/ribbon
+#     cable falls through to Cables.
+#   - Devices last (before Other) so a network cable's name mentioning
+#     "router/modem" doesn't win over its cable signal.
+# Keywords with a leading space only match at a word boundary (" brush" won't
+# match "airbrush"). Matched against category + name + tags, never the long
+# description (too noisy).
+_TYPE_RULES: List[tuple] = [
+    ("Tools", [
+        "tape measure", "measuring tool", "wrench", "socket", "screwdriver",
+        "plier", "scalpel", "lab knife", " knife", "blade", "wire brush",
+        " brush", "desolder", "solder sucker", "solder removal", "sand drum",
+        "mandrel", "dremel", "rotary tool", "caliper", "hex key", "allen key",
+        "chisel", "hammer", "drill bit", "utility knife", "hand tool", "tool set",
+    ]),
+    ("Consumables", [
+        "cable tie", "zip tie", "fastening", "electrical tape", "duct tape",
+        " tape", "glue", "adhesive", "sewing", "thread", "office supplies",
+        "craft", "solder wire", "flux",
+    ]),
+    ("Components", [
+        "jst", "pin header", "header connector", " header", "dupont", "breadboard",
+        "led segment", "dot matrix", "max7219", "segment display", "led display",
+        "slide switch", " switch", "buck", "boost", "converter", "regulator",
+        "trigger board", "charging board", "charger module", "tp4056", "voltage",
+        "diode", "emitter", "receiver", "resistor", "capacitor", "transistor",
+        "single board", "camera module", "module", " lens", "sensor", "ic chip",
+        "potentiometer",
+    ]),
+    ("Cables & Adapters", [
+        "cable", "cord", "pigtail", "ribbon", "ffc", "fpc", "flex", "ethernet",
+        "cat6", "cat 6", "patch cord", "csi", "hdmi", "sd card", "microsd",
+        "memory card", "sd memory", "adapter",
+    ]),
+    ("Devices", [
+        "speaker", "amplifier", "flash drive", "thumb drive", "headphone",
+        "earbud", "microphone", " webcam", "power bank", "bluetooth", "soundbar",
+    ]),
+    ("Other", [
+        "cooler", "backpack", "water pump", " pump", "bottle", " bag", "fountain",
+    ]),
+]
+
+
+def _classify_type(row: Dict[str, Any]) -> str:
+    """Best-guess TYPE_GROUP for an item from its category, name, and tags.
+
+    Deterministic and side-effect free. Always returns one of TYPE_GROUPS,
+    defaulting to "Other" when nothing matches.
+    """
+    hay = " ".join([
+        str(row.get("category", "")),
+        str(row.get("name", "")),
+        " ".join(str(t) for t in (row.get("tags") or [])),
+    ]).lower()
+    # Pad so a leading-space keyword can also match a term at the very start.
+    hay = " " + hay
+    for group, keywords in _TYPE_RULES:
+        if any(kw in hay for kw in keywords):
+            return group
+    return "Other"
+
+
+def types(rows: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """Distinct type groups present, ordered by the canonical TYPE_GROUPS."""
+    rows = rows if rows is not None else inventory()
+    present = {(r.get("type") or "").strip() for r in rows}
+    present.discard("")
+    ordered = [g for g in TYPE_GROUPS if g in present]
+    # Include any non-canonical values a user typed, after the known groups.
+    ordered += sorted(present - set(TYPE_GROUPS), key=str.lower)
+    return ordered
+
+
+def assign_types(overwrite: bool = False) -> int:
+    """Persist an auto-classified Type onto stored items.
+
+    By default only fills items that don't already have a stored Type (so manual
+    choices are preserved); pass ``overwrite=True`` to reclassify everything.
+    Returns the number of items changed.
+    """
+    rows = _load()
+    changed = 0
+    for r in rows:
+        current = (r.get("type") or "").strip()
+        if current and not overwrite:
+            continue
+        new_type = _classify_type(r)
+        if new_type != current:
+            r["type"] = new_type
+            changed += 1
+    if changed:
+        _save(rows)
+    return changed
+
 def summary_by(field: str, rows: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """
     Group rows by ``field`` ("category" or "location") and total up the item
@@ -498,7 +901,8 @@ def summary_by(field: str, rows: Optional[List[Dict[str, Any]]] = None) -> List[
     / "Unassigned". Returns a list sorted by total quantity (desc).
     """
     rows = rows if rows is not None else inventory()
-    fallback = "Uncategorized" if field == "category" else ("Unassigned" if field == "location" else "—")
+    fallback = {"category": "Uncategorized", "location": "Unassigned",
+                "type": "Unclassified"}.get(field, "—")
     buckets: Dict[str, Dict[str, int]] = {}
     for r in rows:
         key = (r.get(field) or "").strip() or fallback
@@ -509,18 +913,28 @@ def summary_by(field: str, rows: Optional[List[Dict[str, Any]]] = None) -> List[
     out.sort(key=lambda d: (-d["qty"], -d["items"], d["name"].lower()))
     return out
 
+def is_low_stock(row: Dict[str, Any]) -> bool:
+    """An item needs reordering only when it has a reorder point set and its
+    quantity has fallen to or below it. Items with no reorder point are never
+    flagged — low stock is opt-in, per item."""
+    ra = _coerce_reorder(row.get("reorder_at"))
+    return ra is not None and int(row.get("qty") or 0) <= ra
+
+
 def stats(rows: Optional[List[Dict[str, Any]]] = None, low_stock_threshold: int = 5) -> Dict[str, int]:
-    """Headline numbers for the KPI bar."""
+    """Headline numbers for the KPI bar. ``low_stock_threshold`` is retained for
+    backward compatibility but ignored — low stock is now per-item (reorder_at)."""
     rows = rows if rows is not None else inventory()
     total_items = len(rows)
     total_qty = sum(int(r.get("qty") or 0) for r in rows)
-    low_stock = sum(1 for r in rows if int(r.get("qty") or 0) < low_stock_threshold)
+    low_stock = sum(1 for r in rows if is_low_stock(r))
     return {
         "items": total_items,
         "qty": total_qty,
         "low": low_stock,
         "categories": len(categories(rows)),
         "locations": len(locations(rows)),
+        "value": _sum_group_value(rows),
     }
 
 # --------------------------------------------------------------------
@@ -593,18 +1007,18 @@ def _tokenize(text: str) -> List[str]:
 
 
 def _sum_group_value(rows: List[Dict[str, Any]]) -> float:
-    """Total estimated value of a group (per-item value × quantity)."""
+    """Total estimated value of a group (per-item value × quantity).
+
+    Uses :func:`item_value`, so qualitative buckets and ranges are handled and a
+    bulk pack is valued at its real pack price rather than a per-piece cent.
+    """
     total = 0.0
     found = False
     for r in rows:
-        v = str(r.get("estimated_value") or "").replace(",", "")
-        m = _re.search(r"\d+(?:\.\d+)?", v)
-        if m:
-            try:
-                total += float(m.group(0)) * max(1, int(r.get("qty") or 1))
-                found = True
-            except ValueError:
-                pass
+        v = item_value(r)
+        if v is not None:
+            total += v * max(1, int(r.get("qty") or 1))
+            found = True
     return round(total, 2) if found else 0.0
 
 
@@ -791,8 +1205,32 @@ from pathlib import Path as _Path
 CONTAINERS_FILE = _Path(INVENTORY_JSON).parent / "containers.json"
 
 
+def _clean_bags(v: Any) -> List[str]:
+    """Normalise a bin's sub-compartment ('bag') labels into a clean, de-duped list.
+
+    Accepts a list or a comma/newline-separated string. Order is preserved and
+    case-insensitive duplicates are dropped.
+    """
+    if isinstance(v, str):
+        v = v.replace("\n", ",").split(",")
+    if not isinstance(v, (list, tuple)):
+        return []
+    out: List[str] = []
+    seen = set()
+    for b in v:
+        s = str(b).strip()
+        if s and s.lower() not in seen:
+            seen.add(s.lower())
+            out.append(s)
+    return out
+
+
 def containers() -> List[Dict[str, Any]]:
-    """Load the user-defined containers: [{code, name, capacity}]."""
+    """Load the user-defined containers: [{code, name, capacity, bags}].
+
+    ``bags`` are optional sub-compartment labels within a bin (e.g. different
+    bags of parts on one shelf). Legacy files without ``bags`` load as [].
+    """
     p = CONTAINERS_FILE
     if not p.exists():
         return []
@@ -811,7 +1249,8 @@ def containers() -> List[Dict[str, Any]]:
             cap = max(0, int(c.get("capacity") or 0))
         except (TypeError, ValueError):
             cap = 0
-        out.append({"code": code, "name": (c.get("name") or code).strip(), "capacity": cap})
+        out.append({"code": code, "name": (c.get("name") or code).strip(),
+                    "capacity": cap, "bags": _clean_bags(c.get("bags"))})
     return out
 
 
@@ -827,35 +1266,225 @@ def save_containers(conts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             cap = max(0, int(c.get("capacity") or 0))
         except (TypeError, ValueError):
             cap = 0
-        clean.append({"code": code, "name": (c.get("name") or code).strip(), "capacity": cap})
+        clean.append({"code": code, "name": (c.get("name") or code).strip(),
+                      "capacity": cap, "bags": _clean_bags(c.get("bags"))})
     CONTAINERS_FILE.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
     return clean
 
 
-def parse_containers_text(text: str) -> List[Dict[str, Any]]:
-    """Parse an editor textarea (one container per line: ``CODE | Name | capacity``)."""
+def make_bins(count: Any, prefix: str = "BIN", capacity: Any = 25,
+              start: int = 1, bags: Any = None) -> List[Dict[str, Any]]:
+    """Generate ``count`` sequentially-numbered bins, e.g. BIN-01 … BIN-09.
+
+    The number is zero-padded to a consistent width so codes sort naturally.
+    Any ``bags`` given are applied to every generated bin as starting labels.
+    """
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        count = 0
+    count = max(0, min(count, 200))  # sane upper bound
+    try:
+        capacity = max(0, int(capacity))
+    except (TypeError, ValueError):
+        capacity = 25
+    prefix = (str(prefix or "").strip() or "BIN").rstrip("-")
+    bag_list = _clean_bags(bags)
+    last = start + count - 1
+    width = max(2, len(str(last)))
     out: List[Dict[str, Any]] = []
+    for i in range(start, start + count):
+        code = f"{prefix}-{str(i).zfill(width)}"
+        out.append({"code": code, "name": f"{prefix.title()} {i}",
+                    "capacity": capacity, "bags": list(bag_list)})
+    return out
+
+
+def containers_from_rows(names: Any, bags_texts: Any = None, slots: Any = None) -> List[Dict[str, Any]]:
+    """Build saved container dicts from the visual editor's parallel field lists.
+
+    Skips rows with a blank name, derives a unique code per container, and
+    defaults capacity to 25. The row-editor equivalent of parse_containers_text.
+    """
+    names = names or []
+    bags_texts = bags_texts or []
+    slots = slots or []
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for i, nm in enumerate(names):
+        name = (nm or "").strip()
+        if not name:
+            continue
+        bags = _clean_bags(bags_texts[i] if i < len(bags_texts) else "")
+        raw_cap = slots[i] if i < len(slots) else None
+        try:
+            cap = int(raw_cap) if raw_cap not in (None, "") else 25
+        except (TypeError, ValueError):
+            cap = 25
+        base = _derive_code(name)
+        code, k = base, 2
+        while code.lower() in seen:
+            code = f"{base}-{k}"
+            k += 1
+        seen.add(code.lower())
+        out.append({"code": code, "name": name, "capacity": max(1, cap), "bags": bags})
+    return out
+
+
+def _derive_code(name: str) -> str:
+    """Make a short, stable code from a container's name.
+
+    A container can be any kind of box, drawer, tote, bag or shelf, so people
+    shouldn't have to invent codes. If the text already looks like a code
+    (SHELF-01, A1) it's kept verbatim; a descriptive name becomes its initials
+    (e.g. 'Small parts drawer' → 'SPD').
+    """
+    s = (name or "").strip()
+    if not s:
+        return "BIN"
+    if " " not in s and len(s) <= 16 and _re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", s):
+        return s
+    words = _re.findall(r"[A-Za-z0-9]+", s)
+    if len(words) >= 2:
+        code = "".join(w[0] for w in words).upper()[:8]
+    else:
+        code = _re.sub(r"[^A-Za-z0-9]+", "", s).upper()[:8]
+    return code or "BIN"
+
+
+def parse_containers_text(text: str) -> List[Dict[str, Any]]:
+    """Parse the storage editor. One container per line. The friendly form is just
+    a name, with its bags after a dash or colon::
+
+        Small parts drawer — resistors, capacitors, diodes
+        Garage tote: usb cables, ribbon
+        Workshop shelf
+
+    The explicit form still works too (any field optional)::
+
+        CODE | Name | slots | bag1, bag2, bag3
+
+    Codes are derived from names when not given, and made unique.
+    """
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def _uniq(code: str) -> str:
+        base = code or "BIN"
+        c, i = base, 2
+        while c.lower() in seen:
+            c = f"{base}-{i}"
+            i += 1
+        seen.add(c.lower())
+        return c
+
     for line in (text or "").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 3:
-            code, name, cap = parts[0], parts[1], parts[2]
-        elif len(parts) == 2:
-            code, name, cap = parts[0], parts[0], parts[1]
+        if "|" in line:
+            parts = [p.strip() for p in line.split("|")]
+            bags = _clean_bags(parts[3]) if len(parts) >= 4 else []
+            if len(parts) >= 3:
+                code, name, cap = parts[0], parts[1], parts[2]
+            elif len(parts) == 2:
+                code, name, cap = parts[0], parts[0], parts[1]
+            else:
+                code, name, cap = parts[0], parts[0], "25"
+            m = _re.search(r"\d+", cap or "")
+            capacity = int(m.group(0)) if m else 25
+            name = name or code
+            code = code or _derive_code(name)
         else:
-            code, name, cap = parts[0], parts[0], "25"
-        m = _re.search(r"\d+", cap or "")
-        capacity = int(m.group(0)) if m else 25
+            # Plain "Name — bags" / "Name: bags" line — no code needed.
+            name, bags = line, []
+            split = _re.split(r"\s+[—–]\s+|\s*:\s+|\s+-\s+", line, maxsplit=1)
+            if len(split) == 2:
+                name, bags = split[0].strip(), _clean_bags(split[1])
+            code, capacity = _derive_code(name), 25
         if code:
-            out.append({"code": code, "name": name or code, "capacity": capacity})
+            out.append({"code": _uniq(code), "name": name or code,
+                        "capacity": capacity, "bags": bags})
     return out
 
 
 def containers_to_text(conts: Optional[List[Dict[str, Any]]] = None) -> str:
     conts = conts if conts is not None else containers()
-    return "\n".join(f"{c['code']} | {c['name']} | {c['capacity']}" for c in conts)
+    lines = []
+    for c in conts:
+        name = c.get("name") or c["code"]
+        bags = c.get("bags") or []
+        # Keep the friendly "Name — bags" form when the code is just derived from
+        # the name and the capacity is the default; otherwise show the explicit
+        # "CODE | Name | slots | bags" so custom codes/capacities survive.
+        if c["code"] == _derive_code(name) and int(c.get("capacity") or 0) == 25:
+            line = name + (" — " + ", ".join(bags) if bags else "")
+        else:
+            line = f"{c['code']} | {name} | {c['capacity']}"
+            if bags:
+                line += " | " + ", ".join(bags)
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def storage_overview(rows: Optional[List[Dict[str, Any]]] = None,
+                     conts: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Every defined bin (even empty) merged with what's actually in it now.
+
+    Combines your bin definitions (code / name / capacity / planned bags) with
+    the live per-bin counts, plus any bin codes that hold items but were never
+    defined, plus an 'Unfiled' bucket. Each bin also reports ``used_bags`` — the
+    distinct item ``location`` values seen inside it — so the bags actually in
+    use show up next to the ones you planned.
+    """
+    rows = rows if rows is not None else inventory()
+    conts = conts if conts is not None else containers()
+
+    smap: Dict[str, Dict[str, Any]] = {}
+    unfiled: Optional[Dict[str, Any]] = None
+    for b in storage_map(rows):
+        if b["location_code"]:
+            smap[b["location_code"]] = b
+        elif b["items"]:
+            unfiled = b
+
+    # Distinct in-use sub-groups (item.location) per bin code, with counts.
+    used_bags: Dict[str, Dict[str, int]] = {}
+    for r in rows:
+        code = (r.get("location_code") or "").strip()
+        loc = (r.get("location") or "").strip()
+        if not code or not loc:
+            continue
+        used_bags.setdefault(code, {})
+        used_bags[code][loc] = used_bags[code].get(loc, 0) + 1
+
+    def _entry(code, name, capacity, bags, b, defined):
+        return {
+            "code": code,
+            "name": name,
+            "capacity": capacity,
+            "bags": bags,
+            "used_bags": sorted(used_bags.get(code, {}).items(), key=lambda kv: kv[0].lower()),
+            "items": (b or {}).get("items", 0),
+            "qty": (b or {}).get("qty", 0),
+            "names": (b or {}).get("names", []),
+            "defined": defined,
+        }
+
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for c in conts:
+        code = c["code"]
+        seen.add(code.lower())
+        out.append(_entry(code, c.get("name") or code, c.get("capacity", 0),
+                          list(c.get("bags") or []), smap.get(code), True))
+    for code, b in smap.items():
+        if code.lower() in seen:
+            continue
+        out.append(_entry(code, b.get("location_name") or code, 0, [], b, False))
+    if unfiled:
+        out.append(_entry("", "Unfiled", 0, [], unfiled, False))
+    return out
 
 
 def fit_to_containers(
@@ -1014,13 +1643,51 @@ def _codes(row: Dict[str, Any]) -> set:
     return out
 
 
+def _desc_tokens(row: Dict[str, Any]) -> set:
+    """Significant words from the *description*, normalised like content tokens.
+
+    Used only as a light cross-check: a sparsely-named item ("7mm Shallow
+    Socket") whose description mentions the brand/kind of a richer item ("Kobalt
+    …socket") should read as related even though the names barely overlap.
+    """
+    text = (row.get("description") or "").lower()
+    out = set()
+    for t in _re.findall(r"[a-z0-9][a-z0-9\-]*", text):
+        t = t.strip("-")
+        if any(ch.isdigit() for ch in t):
+            out.add(t)
+        elif t in _DEDUP_SIZE_WORDS:
+            out.add(t)
+        elif len(t) >= 3 and t not in _GROUP_STOP:
+            out.add(_singular(t))
+    return out
+
+
+def _head_noun(row: Dict[str, Any]) -> str:
+    """The item's 'kind' — the last significant, non-code word of the name
+    (socket, battery, screwdriver). Lets us tell 'same kind, different size'
+    (a loose match worth surfacing) apart from two unrelated items."""
+    na = _norm_name(row.get("name", ""))
+    nouns = [w for w in na.split()
+             if not any(ch.isdigit() for ch in w) and len(w) >= 3 and w not in _GROUP_STOP]
+    return _singular(nouns[-1]) if nouns else ""
+
+
 def item_similarity(a: Dict[str, Any], b: Dict[str, Any]) -> float:
     """Similarity of two items in 0..1. 1.0 == a confident duplicate.
 
     Strong signals short-circuit: an identical normalised name, or the same
     non-empty product URL. Otherwise blend name closeness (typos / plurals) with
-    shared significant words, nudged up when the categories agree. Items whose
-    size/model codes exist but don't overlap (9V vs AA, M3 vs M5) are held apart.
+    shared significant words — using an overlap coefficient so a sparse name
+    that's a subset of a richer one still scores — then nudge up for a matching
+    category, the same head noun ("both sockets"), or a description that echoes
+    the other item's words.
+
+    Size/model codes that exist but don't overlap (9V vs AA, 1/4" vs 7mm) still
+    hold items apart, but as a *graduated* penalty rather than a hard cut: two
+    items that are otherwise the same kind of thing can surface at the loosest
+    setting (where the user decides) while staying below the auto-merge tiers;
+    genuinely different things are pushed well down.
     """
     na, nb = _norm_name(a.get("name", "")), _norm_name(b.get("name", ""))
     if na and na == nb:
@@ -1029,21 +1696,47 @@ def item_similarity(a: Dict[str, Any], b: Dict[str, Any]) -> float:
     if ua and ua == ub:
         return 0.97
 
-    # A model/size mismatch is a strong "not the same thing" signal.
-    ca_codes, cb_codes = _codes(a), _codes(b)
-    if ca_codes and cb_codes and not (ca_codes & cb_codes):
-        return round(min(0.5, _SeqMatcher(None, na, nb).ratio()), 3)
-
     name_ratio = _SeqMatcher(None, na, nb).ratio() if (na and nb) else 0.0
+
     ta, tb = _content_tokens(a), _content_tokens(b)
-    jac = (len(ta & tb) / len(ta | tb)) if (ta or tb) else 0.0
-    score = 0.6 * name_ratio + 0.4 * jac
+    inter = len(ta & tb)
+    jac = (inter / len(ta | tb)) if (ta or tb) else 0.0
+    # Overlap coefficient rescues sparse names: if the shorter item's words are
+    # mostly contained in the richer one, that's a strong signal Jaccard hides.
+    overlap = (inter / min(len(ta), len(tb))) if (ta and tb) else 0.0
+    tok = 0.5 * jac + 0.5 * overlap
+
+    score = 0.6 * name_ratio + 0.4 * tok
+
+    # Light description cross-check (bounded nudge): one item's description
+    # naming the other's brand/kind is a real "these belong together" signal.
+    da, db = _desc_tokens(a), _desc_tokens(b)
+    if (da & tb) or (db & ta):
+        score = min(1.0, score + 0.08)
 
     cat_a = (a.get("category") or "").strip().lower()
     cat_b = (b.get("category") or "").strip().lower()
+    same_cat = bool(cat_a and cat_b and cat_a == cat_b)
+    same_kind = bool(_head_noun(a)) and _head_noun(a) == _head_noun(b)
+
     if cat_a and cat_b:
-        score = min(1.0, score + 0.05) if cat_a == cat_b else score * 0.9
-    return round(score, 3)
+        score = min(1.0, score + 0.05) if same_cat else score * 0.9
+    # Same category *and* same kind of thing → surface as a near-match.
+    if same_cat and same_kind:
+        score = min(1.0, score + 0.08)
+
+    # Size/model code mismatch.
+    ca_codes, cb_codes = _codes(a), _codes(b)
+    if ca_codes and cb_codes and not (ca_codes & cb_codes):
+        if same_cat and same_kind:
+            # Same kind, different size: keep it in the "loose" band — visible to
+            # a user who asks for near-matches, but never auto-merged by default.
+            score = min(score, DUP_LEVELS["balanced"] - 0.02)
+        else:
+            # Different things that also disagree on size/model — push down hard.
+            score = min(score, 0.55)
+
+    return round(min(1.0, score), 3)
 
 
 def _pick_primary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1104,6 +1797,10 @@ def merge_preview(items: List[Dict[str, Any]],
             ocr_parts.append(t)
 
     total_qty = sum(max(0, int(r.get("qty") or 0)) for r in ordered)
+    # Keep the tightest reorder point among the merged items (else none).
+    _reorders = [_coerce_reorder(r.get("reorder_at")) for r in ordered]
+    _reorders = [x for x in _reorders if x is not None]
+    merged_reorder = min(_reorders) if _reorders else None
 
     # Note anything the merge has to choose between, so the user isn't surprised.
     conflicts: List[str] = []
@@ -1121,9 +1818,11 @@ def merge_preview(items: List[Dict[str, Any]],
         "name": primary.get("name", ""),
         "description": longest_desc,
         "category": _first_nonempty(ordered, "category"),
+        "type": _first_nonempty(ordered, "type"),
         "location": _first_nonempty(ordered, "location"),
         "location_code": _first_nonempty(ordered, "location_code"),
         "qty": total_qty,
+        "reorder_at": merged_reorder,
         "images": _union_list(ordered, "images"),
         "ocr_text": "\n".join(ocr_parts),
         "specifications": _union_list(ordered, "specifications"),
@@ -1131,6 +1830,9 @@ def merge_preview(items: List[Dict[str, Any]],
         "dimensions": _first_nonempty(ordered, "dimensions"),
         "product_url": _first_nonempty(ordered, "product_url"),
         "tags": _union_list(ordered, "tags"),
+        # Keep the earliest scan date so the merged item reflects when it first
+        # entered the inventory.
+        "created_at": _earliest_created(ordered),
         "_primary_id": int(primary.get("id")),
         "_conflicts": conflicts,
     }
@@ -1254,9 +1956,9 @@ def merge_group(primary_id: int, merge_ids: List[int],
         merged.update(overrides)
 
     # Write the merged fields onto the primary row (keep its id), drop the rest.
-    for k in ("name", "description", "category", "location", "location_code", "qty",
-              "images", "ocr_text", "specifications", "estimated_value", "dimensions",
-              "product_url", "tags"):
+    for k in ("name", "description", "category", "type", "location", "location_code", "qty",
+              "reorder_at", "images", "ocr_text", "specifications", "estimated_value",
+              "dimensions", "product_url", "tags", "created_at"):
         primary[k] = merged.get(k, primary.get(k))
 
     kept = [r for r in rows if int(r.get("id")) not in ids]

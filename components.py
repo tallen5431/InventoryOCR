@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dash import html, dcc, dash_table
 import dash_bootstrap_components as dbc
-from config import DATATABLE_PAGE_SIZE, TOAST_DURATION, LOW_STOCK_THRESHOLD
+from config import DATATABLE_PAGE_SIZE, TOAST_DURATION
 
 
 def _kpi_card(icon, color, label, value_id):
@@ -34,8 +34,9 @@ def kpi_bar():
         [
             _kpi_card("bi-box-seam", "text-primary", "Total Items", "kpi-total"),
             _kpi_card("bi-123", "text-success", "Total Quantity", "kpi-qty"),
-            _kpi_card("bi-exclamation-triangle-fill", "text-warning", f"Low Stock (< {LOW_STOCK_THRESHOLD})", "kpi-low"),
+            _kpi_card("bi-exclamation-triangle-fill", "text-warning", "Needs Reorder", "kpi-low"),
             _kpi_card("bi-tags-fill", "text-info", "Categories", "kpi-cat"),
+            _kpi_card("bi-cash-stack", "text-success", "Est. Value", "kpi-value"),
         ],
         className="g-3 mb-2",
     )
@@ -69,6 +70,28 @@ def sidebar_form():
                             ),
 
                             dbc.Row(
+                                dbc.Col(
+                                    [
+                                        dbc.Label("Type", className="mt-2"),
+                                        dbc.Input(
+                                            id="item-type",
+                                            debounce=True,
+                                            placeholder="Tools, Components, Cables & Adapters…",
+                                            list="type-datalist",
+                                            autoComplete="off",
+                                        ),
+                                        html.Div(
+                                            "Top-level group for browsing. Leave blank to auto-group "
+                                            "from the name/category.",
+                                            className="text-muted", style={"fontSize": "0.75rem"},
+                                        ),
+                                    ],
+                                    xs=12,
+                                ),
+                                className="g-2",
+                            ),
+
+                            dbc.Row(
                                 [
                                     dbc.Col(
                                         [
@@ -76,7 +99,7 @@ def sidebar_form():
                                             dbc.Input(
                                                 id="item-category",
                                                 debounce=True,
-                                                placeholder="e.g., Tools",
+                                                placeholder="e.g., Sockets, USB Cables",
                                                 list="category-datalist",
                                                 autoComplete="off",
                                             ),
@@ -112,6 +135,21 @@ def sidebar_form():
                                     dbc.Col(
                                         [
                                             dbc.Label(
+                                                [html.I(className="bi bi-bell me-1"), "Reorder at"],
+                                                className="mt-2",
+                                            ),
+                                            dbc.Input(id="item-reorder", type="number", min=0, step=1,
+                                                      placeholder="—"),
+                                            html.Div(
+                                                "Flag as low stock when quantity reaches this. Blank = never.",
+                                                className="text-muted", style={"fontSize": "0.72rem"},
+                                            ),
+                                        ],
+                                        xs=6,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label(
                                                 [html.I(className="bi bi-box2 me-1"), "Bin / code"],
                                                 className="mt-2",
                                             ),
@@ -130,6 +168,7 @@ def sidebar_form():
                             ),
 
                             # Datalists power the type-ahead suggestions above.
+                            html.Datalist(id="type-datalist"),
                             html.Datalist(id="category-datalist"),
                             html.Datalist(id="location-datalist"),
                             html.Datalist(id="location-code-datalist"),
@@ -145,14 +184,15 @@ def sidebar_form():
                                         html.Div("📷", className="upload-icon"),
                                         html.Div(
                                             [
-                                                html.Strong("Take a photo"),
+                                                html.Strong("Take photos"),
                                                 " or ",
-                                                html.A("choose a file"),
+                                                html.A("choose files"),
                                             ]
                                         ),
                                         html.Div(
-                                            "On your phone this opens the camera — snap an item and it saves. "
-                                            "On a computer it opens the file picker.",
+                                            "Add as many as you like — snap several shots or pick multiple "
+                                            "files, and they stack up on this item. On a phone you can also "
+                                            "pick an existing photo; on a computer it opens the file picker.",
                                             className="text-muted small mt-1",
                                         ),
                                     ]
@@ -299,17 +339,69 @@ def sidebar_form():
                 ],
                 className="shadow-sm",
             ),
-            filter_card(),
-            dbc.Toast(
-                id="action-toast",
-                is_open=False,
-                header="",
-                icon="info",
-                duration=TOAST_DURATION,
-                children="",
-                style={"position": "fixed", "top": 20, "right": 20, "zIndex": 2000},
+        ]
+    )
+
+
+def action_toast():
+    """The success/error toast. Mounted at the top level (never inside a
+    collapsible section) so it always shows, whatever's expanded."""
+    return dbc.Toast(
+        id="action-toast",
+        is_open=False,
+        header="",
+        icon="info",
+        duration=TOAST_DURATION,
+        children="",
+        style={"position": "fixed", "top": 20, "right": 20, "zIndex": 2000},
+    )
+
+
+def search_box():
+    """Always-visible search input for the toolbar."""
+    return dbc.InputGroup(
+        [
+            dbc.InputGroupText(html.I(className="bi bi-search")),
+            dbc.Input(
+                id="search-bar",
+                placeholder="Search name, type, category, bin, notes…",
+                debounce=True,
             ),
         ]
+    )
+
+
+def _toggle_button(label, icon, btn_id):
+    return dbc.Button(
+        [html.I(className=f"bi {icon} me-1"), label],
+        id=btn_id, color="light", size="sm", n_clicks=0, className="border",
+    )
+
+
+def dashboard_toolbar():
+    """Primary action + always-visible search + expand toggles for the cards."""
+    return dbc.Row(
+        [
+            dbc.Col(
+                dbc.Button(
+                    [html.I(className="bi bi-plus-lg me-1"), "Add item"],
+                    id="toggle-add", color="primary", n_clicks=0, className="w-100",
+                ),
+                xs=12, sm="auto",
+            ),
+            dbc.Col(search_box(), xs=12, sm=True),
+            dbc.Col(
+                dbc.ButtonGroup(
+                    [
+                        _toggle_button("Filter & sort", "bi-funnel", "toggle-filter"),
+                        _toggle_button("Overview", "bi-diagram-3", "toggle-overview"),
+                        _toggle_button("Storage", "bi-boxes", "toggle-storage"),
+                    ]
+                ),
+                xs=12, sm="auto",
+            ),
+        ],
+        className="g-2 align-items-center mb-2",
     )
 
 
@@ -321,13 +413,17 @@ def filter_card():
             ),
             dbc.CardBody(
                 [
-                    dbc.Input(
-                        id="search-bar",
-                        placeholder="Search name, category, location, notes, OCR…",
-                        debounce=True,
-                    ),
                     dbc.Row(
                         [
+                            dbc.Col(
+                                dcc.Dropdown(
+                                    id="filter-type",
+                                    placeholder="All types",
+                                    clearable=True,
+                                    options=[],
+                                ),
+                                xs=6, sm=3, className="mt-2",
+                            ),
                             dbc.Col(
                                 dcc.Dropdown(
                                     id="filter-category",
@@ -335,7 +431,7 @@ def filter_card():
                                     clearable=True,
                                     options=[],
                                 ),
-                                xs=12, sm=6, className="mt-2",
+                                xs=6, sm=3, className="mt-2",
                             ),
                             dbc.Col(
                                 dcc.Dropdown(
@@ -344,9 +440,41 @@ def filter_card():
                                     clearable=True,
                                     options=[],
                                 ),
-                                xs=12, sm=6, className="mt-2",
+                                xs=6, sm=3, className="mt-2",
+                            ),
+                            dbc.Col(
+                                dcc.Dropdown(
+                                    id="filter-bin",
+                                    placeholder="All bins",
+                                    clearable=True,
+                                    options=[],
+                                ),
+                                xs=6, sm=3, className="mt-2",
                             ),
                         ],
+                        className="g-2",
+                    ),
+                    dbc.Row(
+                        dbc.Col(
+                            dcc.Dropdown(
+                                id="sort-by",
+                                clearable=False,
+                                options=[
+                                    {"label": "🕑 Newest first", "value": "date_desc"},
+                                    {"label": "🕑 Oldest first", "value": "date_asc"},
+                                    {"label": "🔤 Name (A–Z)", "value": "name_asc"},
+                                    {"label": "🔤 Name (Z–A)", "value": "name_desc"},
+                                    {"label": "🔢 Qty (high → low)", "value": "qty_desc"},
+                                    {"label": "🔢 Qty (low → high)", "value": "qty_asc"},
+                                    {"label": "🗂 Group by Type", "value": "group_type"},
+                                    {"label": "🗂 Group by Category", "value": "group_category"},
+                                    {"label": "🗂 Group by Location", "value": "group_location"},
+                                    {"label": "🗂 Group by Bin", "value": "group_bin"},
+                                ],
+                                value="date_desc",
+                            ),
+                            xs=12, className="mt-2",
+                        ),
                         className="g-2",
                     ),
                     dbc.Button(
@@ -370,6 +498,9 @@ def inventory_table():
         {"name": "Photo", "id": "image", "presentation": "markdown"},
         {"name": "Name", "id": "name"},
         {"name": "Qty", "id": "qty", "type": "numeric"},
+        {"name": "Reorder at", "id": "reorder_at", "type": "numeric", "hideable": True},
+        {"name": "Added", "id": "added", "hideable": True},
+        {"name": "Type", "id": "type", "hideable": True},
         {"name": "Category", "id": "category", "hideable": True},
         {"name": "Location", "id": "location", "hideable": True},
         {"name": "Bin", "id": "location_code", "hideable": True},
@@ -378,6 +509,7 @@ def inventory_table():
         {"name": "OCR Text", "id": "ocr_text", "hideable": True},
         {"name": "id", "id": "id", "hideable": True},
         {"name": "all_images", "id": "all_images", "hideable": True},
+        {"name": "_low", "id": "_low"},  # server-computed low-stock flag (hidden)
     ]
     table = dash_table.DataTable(
         id="inventory-table",
@@ -389,8 +521,12 @@ def inventory_table():
         tooltip_delay=0,
         tooltip_duration=None,
         sort_action="native",
-        filter_action="native",
-        hidden_columns=["id", "all_images", "ocr_text"],
+        # No per-column filter row — the Find & Filter card (search + Type /
+        # Category / Location dropdowns) covers it without the extra clutter.
+        filter_action="none",
+        # Description is long; it's shown in full in the row's hover tooltip, so
+        # keep it out of the default view. Re-show any of these via Toggle Columns.
+        hidden_columns=["id", "all_images", "ocr_text", "description", "reorder_at", "_low"],
         style_table={
             "height": "70vh",
             "overflowY": "auto",
@@ -421,6 +557,7 @@ def inventory_table():
         },
         style_cell_conditional=[
             {"if": {"column_id": "name"}, "minWidth": "160px", "maxWidth": "260px", "fontWeight": "600"},
+            {"if": {"column_id": "type"}, "minWidth": "96px", "maxWidth": "150px", "fontWeight": "600"},
             {"if": {"column_id": "category"}, "minWidth": "90px", "maxWidth": "150px"},
             {"if": {"column_id": "location"}, "minWidth": "90px", "maxWidth": "160px"},
             {"if": {"column_id": "location_code"}, "minWidth": "72px", "maxWidth": "110px", "fontWeight": "600", "textAlign": "center"},
@@ -429,11 +566,14 @@ def inventory_table():
             {"if": {"column_id": "ocr_text"}, "minWidth": "150px", "maxWidth": "400px", "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
             {"if": {"column_id": "image"}, "width": "88px", "minWidth": "88px", "maxWidth": "96px", "textAlign": "center", "padding": "6px"},
             {"if": {"column_id": "qty"}, "textAlign": "center", "width": "64px", "minWidth": "64px", "maxWidth": "80px", "fontWeight": "600"},
+            {"if": {"column_id": "added"}, "width": "104px", "minWidth": "96px", "maxWidth": "120px", "textAlign": "center", "whiteSpace": "nowrap", "color": "var(--bs-secondary-color)"},
         ],
         style_data_conditional=[
             {"if": {"row_index": "odd"}, "backgroundColor": "var(--bs-table-striped-bg)"},
             {
-                "if": {"filter_query": "{qty} < " + str(LOW_STOCK_THRESHOLD), "column_id": "qty"},
+                # Highlight the qty of items at/below their own reorder point.
+                # Uses a server-computed flag ({_low}) for a robust equality query.
+                "if": {"filter_query": '{_low} = "low"', "column_id": "qty"},
                 "color": "var(--bs-warning)",
                 "fontWeight": "700",
             },
@@ -460,39 +600,65 @@ def inventory_table():
 
 
 def _bulk_bar():
-    """Actions that appear when 2+ rows are ticked: set fields / delete."""
+    """Actions that appear when 2+ rows are ticked: set fields, merge, or delete."""
     return dbc.Card(
         dbc.CardBody(
             [
                 html.Div(
                     [html.I(className="bi bi-check2-square me-2"),
-                     html.Strong(id="bulk-count"), " — set these on all, then Apply:"],
+                     html.Strong(id="bulk-count"), " selected"],
                     className="mb-2 small",
                 ),
+
+                # --- Set the same field(s) on every selected row ---
+                html.Div("Set on all, then Apply:", className="text-muted small mb-1"),
                 dbc.Row(
                     [
+                        dbc.Col(dbc.Input(id="bulk-type", placeholder="Type",
+                                          size="sm", list="type-datalist"), xs=6, sm=4, md=3),
                         dbc.Col(dbc.Input(id="bulk-category", placeholder="Category",
-                                          size="sm", list="category-datalist"), xs=12, sm=4, md=3),
+                                          size="sm", list="category-datalist"), xs=6, sm=4, md=3),
                         dbc.Col(dbc.Input(id="bulk-location", placeholder="Location",
-                                          size="sm", list="location-datalist"), xs=12, sm=4, md=3),
+                                          size="sm", list="location-datalist"), xs=6, sm=4, md=2),
                         dbc.Col(dbc.Input(id="bulk-code", placeholder="Bin / code",
-                                          size="sm", list="location-code-datalist"), xs=12, sm=4, md=2),
+                                          size="sm", list="location-code-datalist"), xs=6, sm=6, md=2),
                         dbc.Col(
                             dbc.Button([html.I(className="bi bi-check2 me-1"), "Apply"],
                                        id="bulk-apply", color="primary", size="sm", className="w-100"),
-                            xs=6, sm=6, md=2,
+                            xs=12, sm=6, md=2,
+                        ),
+                    ],
+                    className="g-2 align-items-center",
+                ),
+
+                html.Hr(className="my-2"),
+
+                # --- Combine or remove the selected rows ---
+                html.Div("Do this with the selected rows:", className="text-muted small mb-1"),
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            dbc.Button([html.I(className="bi bi-union me-1"), "Merge into one"],
+                                       id="bulk-merge", color="info", size="sm", className="w-100"),
+                            xs=12, sm=4,
                         ),
                         dbc.Col(
                             dbc.Button([html.I(className="bi bi-trash me-1"), "Delete"],
                                        id="bulk-delete", color="outline-danger", size="sm", className="w-100"),
-                            xs=6, sm=6, md=2,
+                            xs=6, sm=4,
+                        ),
+                        dbc.Col(
+                            dbc.Button("Clear selection", id="bulk-clear", color="link", size="sm",
+                                       className="w-100 text-muted"),
+                            xs=6, sm=4,
                         ),
                     ],
                     className="g-2 align-items-center",
                 ),
                 html.Div(
-                    dbc.Button("Clear selection", id="bulk-clear", color="link", size="sm",
-                               className="p-0 mt-1 text-muted"),
+                    "Merge keeps the richest entry, adds up the quantities, and combines "
+                    "every photo, spec and tag. One-click Undo after.",
+                    className="text-muted mt-1", style={"fontSize": "0.75rem"},
                 ),
             ]
         ),
@@ -503,7 +669,7 @@ def _bulk_bar():
 
 
 def breakdown_card():
-    """Compact 'where is everything' overview: totals grouped by location & category."""
+    """Compact 'where is everything' overview: totals grouped by type, location & category."""
     return dbc.Card(
         [
             dbc.CardHeader(
@@ -514,17 +680,24 @@ def breakdown_card():
                     [
                         dbc.Col(
                             [
+                                html.H6([html.I(className="bi bi-collection me-1"), "By Type"], className="text-muted"),
+                                html.Div(id="breakdown-type"),
+                            ],
+                            xs=12, md=4, className="mb-3 mb-md-0",
+                        ),
+                        dbc.Col(
+                            [
                                 html.H6([html.I(className="bi bi-geo-alt me-1"), "By Location"], className="text-muted"),
                                 html.Div(id="breakdown-location"),
                             ],
-                            xs=12, md=6, className="mb-3 mb-md-0",
+                            xs=12, md=4, className="mb-3 mb-md-0",
                         ),
                         dbc.Col(
                             [
                                 html.H6([html.I(className="bi bi-tags me-1"), "By Category"], className="text-muted"),
                                 html.Div(id="breakdown-category"),
                             ],
-                            xs=12, md=6,
+                            xs=12, md=4,
                         ),
                     ],
                     className="g-3",
@@ -708,12 +881,12 @@ def organize_card():
                                     title="Group like items into auto-created bins",
                                 ),
                                 dbc.Button(
-                                    [html.I(className="bi bi-box-seam me-1"), "Fit to my bins"],
+                                    [html.I(className="bi bi-box-seam me-1"), "Set up bins"],
                                     id="open-bins",
                                     color="secondary",
                                     size="sm",
                                     n_clicks=0,
-                                    title="Define the containers you own and pack items into them",
+                                    title="Say how many bins you have, name their bags, and pack items into them",
                                 ),
                                 dbc.Button(
                                     [html.I(className="bi bi-layers me-1"), "Merge duplicates",
@@ -734,9 +907,9 @@ def organize_card():
             dbc.CardBody(
                 [
                     html.Div(
-                        "Smart Organize analyses every item's name & category and groups related "
-                        "things into labelled bins (e.g. all your switches together). Then a keyword "
-                        "search tells you which bin something lives in.",
+                        "Set up how many bins you have and the bags inside each one, then see "
+                        "what's stored where. Smart Organize can also auto-group related items "
+                        "into labelled bins for you.",
                         className="text-muted small mb-2",
                     ),
                     html.Div(id="storage-map"),
@@ -755,26 +928,67 @@ def bins_modal():
             dbc.Modal(
                 [
                     dbc.ModalHeader(
-                        dbc.ModalTitle([html.I(className="bi bi-box-seam me-2"), "Storage bins & auto-fit"])
+                        dbc.ModalTitle([html.I(className="bi bi-box-seam me-2"), "Your storage"])
                     ),
                     dbc.ModalBody(
                         [
+                            dcc.Store(id="containers-store"),
+                            # --- Primary: a row per container (no typing of codes) ---
                             html.Div(
-                                [html.I(className="bi bi-pencil-square me-2"),
-                                 html.Strong("The containers you actually have")],
+                                [html.I(className="bi bi-card-list me-2"),
+                                 html.Strong("Your containers")],
                                 className="mb-1",
                             ),
                             html.Div(
-                                "One per line —  CODE | Name | capacity  "
-                                "(capacity = how many different items fit).",
-                                className="text-muted small mb-1",
+                                "Any box, drawer, tote, bag or shelf. Give each a name and, "
+                                "optionally, the bags inside it (comma-separated).",
+                                className="text-muted small mb-2",
                             ),
-                            dbc.Textarea(
-                                id="containers-text",
-                                rows=5,
-                                placeholder=("A1 | Small parts drawer | 20\n"
-                                             "B1 | Garage tote | 50\n"
-                                             "SHELF | Workshop shelf | 30"),
+                            html.Div(id="containers-list"),
+                            dbc.Button(
+                                [html.I(className="bi bi-plus-lg me-1"), "Add container"],
+                                id="add-container", color="link", size="sm",
+                                n_clicks=0, className="px-0",
+                            ),
+                            html.Hr(className="my-2"),
+                            # --- Optional: bulk-add a set of identical containers ---
+                            html.Div(
+                                [html.I(className="bi bi-stack me-2"),
+                                 html.Strong("Or add a set of identical ones")],
+                                className="mb-1",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        dbc.InputGroup([
+                                            dbc.InputGroupText("How many"),
+                                            dbc.Input(id="bin-count", type="number", min=1,
+                                                      max=200, step=1, placeholder="9"),
+                                        ]),
+                                        xs=12, sm=4,
+                                    ),
+                                    dbc.Col(
+                                        dbc.InputGroup([
+                                            dbc.InputGroupText("Label"),
+                                            dbc.Input(id="bin-prefix", value="Bin",
+                                                      placeholder="Bin, Box, Drawer, Tote…"),
+                                        ]),
+                                        xs=12, sm=5,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Button(
+                                            [html.I(className="bi bi-plus-square me-1"), "Add"],
+                                            id="generate-bins", color="primary", outline=True,
+                                            n_clicks=0, className="w-100",
+                                        ),
+                                        xs=12, sm=3,
+                                    ),
+                                ],
+                                className="g-2",
+                            ),
+                            html.Div(
+                                "Adds e.g. Bin 1 … Bin 9 as rows above. Existing ones are kept.",
+                                className="text-muted small mt-1 mb-2",
                             ),
                             dbc.Row(
                                 [
@@ -855,6 +1069,13 @@ def duplicates_modal():
                                                 ],
                                                 value="balanced",
                                                 inline=True,
+                                            ),
+                                            html.Div(
+                                                "Loosely similar also groups same-kind items that differ only "
+                                                "by size or model — e.g. a 1/4\" drive and a 7mm socket — so you "
+                                                "can decide whether to combine them.",
+                                                className="text-muted mt-1",
+                                                style={"fontSize": "0.78rem"},
                                             ),
                                         ],
                                         xs=12, sm=8,

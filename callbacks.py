@@ -5,7 +5,7 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 import data
 from utils import save_image, get_thumbnail_url, get_image_url
-from config import LOW_STOCK_THRESHOLD, ASSET_IMAGE_PATH, OCR_TEXT_MAX_CHARS
+from config import ASSET_IMAGE_PATH, OCR_TEXT_MAX_CHARS
 
 URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
 if URL_PREFIX and not URL_PREFIX.startswith("/"):
@@ -62,9 +62,19 @@ def _build_rows(filtered):
             row["all_images"] = []
 
         # Keep organizing fields present for the table (and CSV/native filters)
+        row["type"] = (row.get("type") or "").strip()
         row["category"] = (row.get("category") or "").strip()
         row["location"] = (row.get("location") or "").strip()
         row["estimated_value"] = (row.get("estimated_value") or "").strip()
+
+        # "Added" column: show just the date (YYYY-MM-DD). This form also sorts
+        # correctly under the table's native column sort.
+        row["added"] = (row.get("created_at") or "")[:10]
+
+        # Server-computed low-stock flag so the table highlight uses a simple,
+        # version-proof equality query ({_low} = "low") instead of relying on
+        # DataTable "is not blank"-style syntax that its grammar doesn't support.
+        row["_low"] = "low" if data.is_low_stock(r) else ""
 
         # Truncate the description so rows stay compact — the full text (and the
         # extracted specs) are shown in the row's hover tooltip.
@@ -87,13 +97,59 @@ def _build_rows(filtered):
         out_rows.append(row)
     return out_rows
 
-def _apply_filters(items, search, filter_cat, filter_loc):
+def _apply_filters(items, search, filter_cat, filter_loc, filter_type=None, filter_bin=None):
     filtered = data.search(search) if search else items
+    if filter_type:
+        filtered = [r for r in filtered if (r.get("type") or "").strip() == filter_type]
     if filter_cat:
         filtered = [r for r in filtered if (r.get("category") or "").strip() == filter_cat]
     if filter_loc:
         filtered = [r for r in filtered if (r.get("location") or "").strip() == filter_loc]
+    if filter_bin:
+        filtered = [r for r in filtered if (r.get("location_code") or "").strip() == filter_bin]
     return filtered
+
+
+def _apply_sort(rows, sort_by):
+    """Order rows for the table. Defaults to newest-added first.
+
+    Items missing a created_at (e.g. no image to derive one from) sort last under
+    the date orderings so the dated ones lead.
+    """
+    sb = sort_by or "date_desc"
+    if sb in ("date_desc", "date_asc"):
+        desc = sb == "date_desc"
+        # Empty created_at should always fall to the bottom, regardless of
+        # direction, so pair each row with a "has date" flag for the sort key.
+        def key(r):
+            c = r.get("created_at") or ""
+            return (bool(c), c) if desc else (not bool(c), c)
+        return sorted(rows, key=key, reverse=desc)
+    if sb in ("name_asc", "name_desc"):
+        return sorted(rows, key=lambda r: (r.get("name") or "").lower(),
+                      reverse=(sb == "name_desc"))
+    if sb in ("qty_asc", "qty_desc"):
+        return sorted(rows, key=lambda r: int(r.get("qty") or 0),
+                      reverse=(sb == "qty_desc"))
+    # Cluster related items together. Type follows the canonical TYPE_GROUPS order
+    # (Tools, Components, …); Category/Location go alphabetically. In every case
+    # items with no value for that field sink to the bottom, and rows within a
+    # group are ordered by name so the cluster reads cleanly.
+    if sb == "group_type":
+        order = {g: i for i, g in enumerate(data.TYPE_GROUPS)}
+        def tkey(r):
+            v = (r.get("type") or "").strip()
+            rank = order.get(v, len(order) + (1 if v else 2))  # custom types, then empty, last
+            return (rank, v.lower(), (r.get("name") or "").lower())
+        return sorted(rows, key=tkey)
+    if sb in ("group_category", "group_location", "group_bin"):
+        field = {"group_category": "category", "group_location": "location",
+                 "group_bin": "location_code"}[sb]
+        def gkey(r):
+            v = (r.get(field) or "").strip()
+            return (v == "", v.lower(), (r.get("name") or "").lower())
+        return sorted(rows, key=gkey)
+    return rows
 
 def _breakdown_list(groups):
     """Render a summary_by() result as a compact list with quantity badges."""
@@ -176,34 +232,65 @@ def _render_plan(plan):
     )
 
 def _render_storage_map(bins):
-    """Render data.storage_map() as a compact per-bin list."""
+    """Render data.storage_overview() — every bin with its bags and live counts."""
     if not bins:
-        return html.Div("No bins yet. Add items and run Smart Organize.", className="text-muted small")
+        return html.Div(
+            "No bins yet — click “Set up bins” to say how many you have, or run Smart Organize.",
+            className="text-muted small",
+        )
     cards = []
     for b in bins:
-        code = b.get("location_code", "")
+        code = b.get("code", "")
         label = code or "Unfiled"
         badge_class = "badge bg-primary" if code else "badge bg-secondary"
-        names = b.get("names", [])
-        preview = ", ".join(names[:6]) + ("…" if len(names) > 6 else "")
+        items = b.get("items", 0)
+        cap = b.get("capacity", 0)
+        over = bool(cap) and items > cap
+        usage = f"{items}/{cap}" if cap else f"{items}"
+        usage_class = "badge rounded-pill me-1 " + ("bg-danger" if over else "bg-primary")
+
+        # Bags: the ones actually in use (with counts) first, then any planned
+        # bags not yet used (as muted outlines).
+        used = b.get("used_bags", []) or []            # [(name, count), …]
+        used_names = {n.lower() for n, _ in used}
+        chips = [
+            html.Span(f"{name} · {cnt}",
+                      className="badge bg-info-subtle text-dark border border-info-subtle me-1 mb-1")
+            for name, cnt in used
+        ]
+        chips += [
+            html.Span(p, className="badge bg-light text-muted border me-1 mb-1")
+            for p in (b.get("bags") or []) if p.lower() not in used_names
+        ]
+
+        body = []
+        if chips:
+            body.append(html.Div(chips, className="mt-1"))
+        names = b.get("names", []) or []
+        if names:
+            preview = ", ".join(names[:6]) + ("…" if len(names) > 6 else "")
+            body.append(html.Div(preview, className="text-muted small mt-1"))
+        elif not chips:
+            body.append(html.Div("Empty", className="text-muted small fst-italic mt-1"))
+
         cards.append(
             html.Div(
                 [
                     html.Div(
                         [
                             html.Span(label, className=badge_class + " me-2"),
-                            html.Span(b.get("location_name", "") or "", className="text-muted small"),
+                            html.Span(b.get("name", "") or "", className="fw-semibold small"),
                             html.Span(
                                 [
-                                    html.Span(f"{b.get('qty', 0)}", className="badge bg-primary rounded-pill me-1"),
-                                    html.Span(f"{b.get('items', 0)} item{'s' if b.get('items') != 1 else ''}", className="text-muted small"),
+                                    html.Span(usage, className=usage_class),
+                                    html.Span(f"item{'s' if items != 1 else ''}", className="text-muted small"),
                                 ],
                                 className="ms-auto text-nowrap",
                             ),
                         ],
                         className="d-flex align-items-center",
                     ),
-                    html.Div(preview, className="text-muted small mt-1"),
+                    *body,
                 ],
                 className="py-2 border-bottom",
             )
@@ -624,7 +711,7 @@ def _render_identify(res, links=None):
                 html.P(
                     [
                         "Tip: set ", html.Code("OLLAMA_HOST"), " / ", html.Code("OLLAMA_VISION_MODEL"),
-                        " and pull a vision model, e.g. ", html.Code("ollama pull llama3.2-vision"), ".",
+                        " and pull a vision model, e.g. ", html.Code("ollama pull llava:13b"), ".",
                     ],
                     className="small text-muted",
                 ),
@@ -685,6 +772,49 @@ def _render_identify(res, links=None):
         ]
     )
 
+def _container_row(i, c):
+    """One editable container row: Name + Bags + a remove button (capacity is
+    carried in a hidden field so it survives without cluttering the row)."""
+    c = c or {}
+    return dbc.Row(
+        [
+            dbc.Col(dbc.Input(id={"type": "cont-name", "index": i}, value=c.get("name", ""),
+                              placeholder="Name — drawer, tote, box, bag…", size="sm"),
+                    xs=12, sm=6),
+            dbc.Col(dbc.Input(id={"type": "cont-bags", "index": i},
+                              value=", ".join(c.get("bags") or []),
+                              placeholder="bags inside (comma-separated)", size="sm"),
+                    xs=10, sm=5),
+            dbc.Col(dbc.Button(html.I(className="bi bi-x-lg"),
+                               id={"type": "cont-remove", "index": i},
+                               color="link", size="sm", title="Remove this container",
+                               className="text-danger px-1"),
+                    xs=2, sm=1, className="text-end"),
+            dbc.Input(id={"type": "cont-slots", "index": i}, type="number",
+                      value=(c.get("capacity") or 25), style={"display": "none"}),
+        ],
+        className="g-1 mb-1 align-items-center",
+    )
+
+
+def _raw_rows(names, bags, slots):
+    """Rebuild the on-screen container rows (blank rows kept, aligned to what the
+    user sees) so add/remove/generate operate on the exact visible list. Codes
+    are derived later, at save time."""
+    n = max(len(names or []), len(bags or []), len(slots or []))
+    out = []
+    for i in range(n):
+        nm = (names[i] if names and i < len(names) else "") or ""
+        bg = (bags[i] if bags and i < len(bags) else "") or ""
+        raw_cap = slots[i] if slots and i < len(slots) else None
+        try:
+            cap = int(raw_cap) if raw_cap not in (None, "") else 25
+        except (TypeError, ValueError):
+            cap = 25
+        out.append({"name": nm, "bags": data._clean_bags(bg), "capacity": max(1, cap)})
+    return out
+
+
 def register_callbacks(app):
     # ---------- Table & form (single source of truth for table + toast) ----------
     @app.callback(
@@ -694,6 +824,8 @@ def register_callbacks(app):
             Output("item-name", "value"),
             Output("item-desc", "value"),
             Output("item-qty", "value"),
+            Output("item-reorder", "value"),
+            Output("item-type", "value"),
             Output("item-category", "value"),
             Output("item-location", "value"),
             Output("item-location-code", "value"),
@@ -718,14 +850,19 @@ def register_callbacks(app):
             Input("inventory-table", "selected_rows"),
             Input("cancel-button", "n_clicks"),
             Input("search-bar", "value"),
+            Input("filter-type", "value"),
             Input("filter-category", "value"),
             Input("filter-location", "value"),
+            Input("filter-bin", "value"),
+            Input("sort-by", "value"),
             Input("refresh-seq", "data"),
         ],
         [
             State("item-name", "value"),
             State("item-desc", "value"),
             State("item-qty", "value"),
+            State("item-reorder", "value"),
+            State("item-type", "value"),
             State("item-category", "value"),
             State("item-location", "value"),
             State("item-location-code", "value"),
@@ -742,8 +879,8 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def manage_table(pathname, save_clicks, save_next_clicks, delete_clicks, sel_rows, cancel_clicks,
-                     search, filter_cat, filter_loc, _refresh_seq,
-                     name, desc, qty, category, location, location_code,
+                     search, filter_type, filter_cat, filter_loc, filter_bin, sort_by, _refresh_seq,
+                     name, desc, qty, reorder, item_type, category, location, location_code,
                      specs, value, dims, tags, producturl, img_contents,
                      current_images, editing_id, current_rows):
         triggered = (ctx.triggered_id or "")
@@ -753,21 +890,22 @@ def register_callbacks(app):
         # would immediately hide the success toast, so leave it untouched instead.
         toast_open, toast_header, toast_icon, toast_msg = no_update, no_update, no_update, no_update
         next_sel = sel_rows or []
-        next_name = next_desc = next_qty = next_category = next_location = no_update
+        next_name = next_desc = next_qty = next_type = next_category = next_location = no_update
         next_code = next_specs = next_value = next_dims = next_tags = next_url = no_update
-        next_editing = next_images = next_upload = no_update
+        next_editing = next_images = next_upload = next_reorder = no_update
 
         def _clear_form(keep_location=False):
-            """Reset the form. When keep_location, the category/location/bin stay so
-            you can scan a run of similar items without re-typing where they live."""
-            nonlocal next_name, next_desc, next_qty, next_category, next_location
+            """Reset the form. When keep_location, the type/category/location/bin stay
+            so you can scan a run of similar items without re-typing where they live."""
+            nonlocal next_name, next_desc, next_qty, next_type, next_category, next_location
             nonlocal next_code, next_specs, next_value, next_dims, next_tags, next_url
-            nonlocal next_editing, next_images, next_upload, next_sel
+            nonlocal next_editing, next_images, next_upload, next_sel, next_reorder
             next_sel = []
             next_name, next_desc, next_qty = "", "", 1
+            next_reorder = None
             next_specs, next_value, next_dims, next_tags, next_url = "", "", "", "", ""
             if not keep_location:
-                next_category, next_location, next_code = "", "", ""
+                next_type, next_category, next_location, next_code = "", "", "", ""
             next_editing, next_images, next_upload = None, [], None
 
         # Always load latest items
@@ -790,21 +928,15 @@ def register_callbacks(app):
             else:
                 ds = (desc or "").strip()
                 cat = (category or "").strip()
+                typ = (item_type or "").strip()
                 loc = (location or "").strip()
                 code = (location_code or "").strip()
                 nqty = _parse_qty(qty)
 
-                # Handle multiple image uploads
+                # Photos were saved and appended to current-images as they were
+                # taken/chosen (so multiple snaps and file picks accumulate), so we
+                # just persist that set here — no re-saving of a pending upload.
                 img_filenames = list(current_images or [])
-                if img_contents:
-                    # Support both single and multiple uploads
-                    if isinstance(img_contents, list):
-                        for img_content in img_contents:
-                            saved = save_image(img_content, ASSET_IMAGE_PATH, base_name=nm)
-                            img_filenames.append(saved["filename"])
-                    else:
-                        saved = save_image(img_contents, ASSET_IMAGE_PATH, base_name=nm)
-                        img_filenames.append(saved["filename"])
 
                 try:
                     if editing_id:
@@ -814,12 +946,14 @@ def register_callbacks(app):
                         data.update_item(editing_id, nm, ds, nqty, img_filenames, existing_ocr,
                                          category=cat, location=loc, location_code=code,
                                          specifications=specs, estimated_value=value,
-                                         dimensions=dims, tags=tags, product_url=producturl)
+                                         dimensions=dims, tags=tags, product_url=producturl,
+                                         item_type=typ, reorder_at=reorder)
                         toast_header, toast_icon, toast_msg = "Item Updated", "success", f'"{nm}" updated.'
                     else:
                         data.add_item(nm, ds, nqty, img_filenames, "", category=cat, location=loc,
                                       location_code=code, specifications=specs, estimated_value=value,
-                                      dimensions=dims, tags=tags, product_url=producturl)
+                                      dimensions=dims, tags=tags, product_url=producturl,
+                                      item_type=typ, reorder_at=reorder)
                         toast_header, toast_icon, toast_msg = "Item Added", "success", f'"{nm}" added.'
                 except ValueError as e:
                     toast_header, toast_icon, toast_msg = "Duplicate Name", "danger", str(e)
@@ -837,11 +971,13 @@ def register_callbacks(app):
                 if removed:
                     toast_open, toast_header, toast_icon, toast_msg = True, "Item Deleted", "danger", f'"{removed.get("name","")}" deleted.'
                 _clear_form()
+                data.prune_unreferenced_images()  # reclaim the deleted item's photos
                 items = data.inventory()
 
-        # Cancel clears form
+        # Cancel clears form (and reclaims any just-taken photos that weren't saved)
         elif triggered == "cancel-button":
             _clear_form()
+            data.prune_unreferenced_images()
 
         # Selecting a single row populates the form for editing. When 2+ rows are
         # ticked the user is bulk-editing, so leave the form alone (the bulk bar
@@ -856,6 +992,8 @@ def register_callbacks(app):
                     next_name = actual_row.get("name", row.get("name", ""))
                     next_desc = actual_row.get("description", row.get("description", ""))
                     next_qty = actual_row.get("qty", row.get("qty", None))
+                    next_reorder = actual_row.get("reorder_at")
+                    next_type = actual_row.get("type", "")
                     next_category = actual_row.get("category", "")
                     next_location = actual_row.get("location", "")
                     next_code = actual_row.get("location_code", "")
@@ -870,26 +1008,76 @@ def register_callbacks(app):
                     # the item we just switched to.
                     next_upload = None
 
-        # Search / filter change: drop the stale selection highlight (the edit form
-        # and editing-id are intentionally left as-is).
-        elif triggered in ("search-bar", "filter-category", "filter-location"):
+        # Search / filter / sort change: drop the stale selection highlight (the
+        # edit form and editing-id are intentionally left as-is).
+        elif triggered in ("search-bar", "filter-type", "filter-category", "filter-location",
+                           "filter-bin", "sort-by"):
             next_sel = []
 
-        # Filter/search
-        filtered = _apply_filters(items, search, filter_cat, filter_loc)
+        # Filter/search, then order for display.
+        filtered = _apply_filters(items, search, filter_cat, filter_loc, filter_type, filter_bin)
+        filtered = _apply_sort(filtered, sort_by)
         out_rows = _build_rows(filtered)
 
         return [
-            out_rows, next_sel, next_name, next_desc, next_qty, next_category, next_location,
+            out_rows, next_sel, next_name, next_desc, next_qty, next_reorder, next_type,
+            next_category, next_location,
             next_code, next_specs, next_value, next_dims, next_tags, next_url,
             next_editing, next_images, next_upload,
             toast_open, toast_header, toast_icon, toast_msg
         ]
 
+    # ---------- Collapsible dashboard sections (expand-for-detail cards) ----------
+    @app.callback(
+        Output("collapse-add", "is_open"),
+        Input("toggle-add", "n_clicks"),
+        Input("editing-id", "data"),
+        State("collapse-add", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_add_section(_n, editing_id, is_open):
+        # Picking a row for editing auto-opens the form; the Add-item button flips
+        # it. Clearing the selection (editing_id -> None) leaves it as-is.
+        if ctx.triggered_id == "editing-id":
+            if editing_id:
+                return True
+            raise PreventUpdate
+        return not is_open
+
+    @app.callback(
+        Output("collapse-filter", "is_open"),
+        Input("toggle-filter", "n_clicks"),
+        State("collapse-filter", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_filter_section(_n, is_open):
+        return not is_open
+
+    @app.callback(
+        Output("collapse-overview", "is_open"),
+        Input("toggle-overview", "n_clicks"),
+        State("collapse-overview", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_overview_section(_n, is_open):
+        return not is_open
+
+    @app.callback(
+        Output("collapse-storage", "is_open"),
+        Input("toggle-storage", "n_clicks"),
+        State("collapse-storage", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_storage_section(_n, is_open):
+        return not is_open
+
     # ---------- Populate filter dropdowns & type-ahead suggestions ----------
     @app.callback(
+        Output("filter-type", "options"),
         Output("filter-category", "options"),
         Output("filter-location", "options"),
+        Output("filter-bin", "options"),
+        Output("type-datalist", "children"),
         Output("category-datalist", "children"),
         Output("location-datalist", "children"),
         Output("location-code-datalist", "children"),
@@ -900,15 +1088,38 @@ def register_callbacks(app):
         # Always derive from the FULL inventory (not the filtered view) so you can
         # switch between filters freely and newly-added values show up immediately.
         all_items = data.inventory()
+        present_types = data.types(all_items)
         cats = data.categories(all_items)
         locs = data.locations(all_items)
         codes = data.location_codes(all_items)
-        cat_opts = [{"label": c, "value": c} for c in cats]
-        loc_opts = [{"label": l, "value": l} for l in locs]
+        # Item counts per value so the filter dropdowns read "Tools (12)" — a quick
+        # sense of how big each group is without opening it.
+        type_n = {g["name"]: g["items"] for g in data.summary_by("type", all_items)}
+        cat_n = {g["name"]: g["items"] for g in data.summary_by("category", all_items)}
+        loc_n = {g["name"]: g["items"] for g in data.summary_by("location", all_items)}
+        code_n = {g["name"]: g["items"] for g in data.summary_by("location_code", all_items)}
+        type_opts = [{"label": f"{t} ({type_n.get(t, 0)})", "value": t} for t in present_types]
+        cat_opts = [{"label": f"{c} ({cat_n.get(c, 0)})", "value": c} for c in cats]
+        loc_opts = [{"label": f"{l} ({loc_n.get(l, 0)})", "value": l} for l in locs]
+        bin_opts = [{"label": f"{c} ({code_n.get(c, 0)})", "value": c} for c in codes]
+        # Datalist suggestions for Type: always offer the canonical groups, plus
+        # any custom values already in use, so the form nudges toward consistency.
+        type_choices = list(data.TYPE_GROUPS) + [t for t in present_types if t not in data.TYPE_GROUPS]
+        type_dl = [html.Option(value=t) for t in type_choices]
         cat_dl = [html.Option(value=c) for c in cats]
-        loc_dl = [html.Option(value=l) for l in locs]
-        code_dl = [html.Option(value=c) for c in codes]
-        return cat_opts, loc_opts, cat_dl, loc_dl, code_dl
+        # Location type-ahead also offers the bag names defined on your bins, so a
+        # bag can be used as an item's sub-location without retyping it.
+        conts = data.containers()
+        bag_names = []
+        for c in conts:
+            bag_names += (c.get("bags") or [])
+        loc_choices = list(dict.fromkeys(list(locs) + bag_names))
+        # Bin/code type-ahead offers every defined bin code too.
+        code_choices = list(dict.fromkeys(list(codes) + [c["code"] for c in conts]))
+        loc_dl = [html.Option(value=l) for l in loc_choices]
+        code_dl = [html.Option(value=c) for c in code_choices]
+        return (type_opts, cat_opts, loc_opts, bin_opts,
+                type_dl, cat_dl, loc_dl, code_dl)
 
     # ---------- Rich hover tooltips (full extracted details per row) ----------
     @app.callback(
@@ -943,91 +1154,84 @@ def register_callbacks(app):
             tips.append({"name": cell, "description": cell, "estimated_value": cell})
         return tips
 
+    def _render_gallery(img_list):
+        """Thumbnails for the current photo set, each with a remove (×) button."""
+        from dash import html as h
+        items = []
+        for i, img_filename in enumerate(img_list or []):
+            thumb_url = get_thumbnail_url(img_filename)
+            if not thumb_url:
+                continue
+            items.append(
+                h.Div(
+                    [
+                        h.Img(src=thumb_url, className="gallery-thumb"),
+                        h.Button(
+                            "×",
+                            id={"type": "delete-image", "index": i},
+                            className="btn btn-sm btn-danger delete-img-btn",
+                            title="Remove photo",
+                            n_clicks=0,
+                        ),
+                        h.Div(f"Photo {i + 1}", className="text-muted small text-center"),
+                    ],
+                    className="gallery-item",
+                )
+            )
+        if not items:
+            return h.Div(
+                "No photos yet. Take a photo or choose files — add as many as you like.",
+                className="text-muted small",
+            )
+        return h.Div(items, className="image-gallery-grid")
+
     # ---------- Image gallery display ----------
+    # Each capture/selection is saved and appended immediately, so repeated camera
+    # snaps and file picks ACCUMULATE (the browser replaces the file input's
+    # contents on every use, so holding a single "pending" one would lose the
+    # earlier shots). The input is cleared after each add to arm the next capture.
     @app.callback(
         Output("image-gallery", "children"),
         Output("current-images", "data", allow_duplicate=True),
+        Output("image-upload", "contents", allow_duplicate=True),
         Input("current-images", "data"),
         Input("image-upload", "contents"),
         State("image-upload", "filename"),
         State("current-images", "data"),
+        State("item-name", "value"),
         prevent_initial_call='initial_duplicate',
     )
-    def update_image_gallery(current_imgs, upload_contents, upload_filenames, existing_imgs):
-        from dash import html as h
+    def update_image_gallery(current_imgs, upload_contents, upload_filenames, existing_imgs, item_name):
+        img_list = list(existing_imgs or [])
+        out_imgs = no_update      # only rewrite the store when we actually add photos
+        clear_upload = no_update
 
-        # Start with existing images
-        img_list = existing_imgs or []
-        preview_data = []  # For showing upload previews before save
-
-        # If this was triggered by upload, process the uploads for preview
         if ctx.triggered_id == "image-upload" and upload_contents:
-            # Support both single and multiple uploads
             uploads = upload_contents if isinstance(upload_contents, list) else [upload_contents]
-            filenames = upload_filenames if isinstance(upload_filenames, list) else [upload_filenames]
+            base = (item_name or "").strip() or "photo"
+            for content in uploads:
+                if not content:
+                    continue
+                try:
+                    saved = save_image(content, ASSET_IMAGE_PATH, base_name=base)
+                    img_list.append(saved["filename"])
+                except Exception:
+                    # Skip anything that isn't a decodable image rather than break the form.
+                    continue
+            out_imgs = img_list
+            clear_upload = None  # reset the input so the next capture fires a fresh event
 
-            for content, filename in zip(uploads, filenames):
-                if content:
-                    # Store the upload data for preview (don't save to disk yet)
-                    preview_data.append({
-                        'content': content,
-                        'filename': filename,
-                        'is_preview': True
-                    })
-
-        # Create gallery of thumbnails with delete buttons
-        gallery_items = []
-
-        # Show existing saved images
-        for i, img_filename in enumerate(img_list):
-            thumb_url = get_thumbnail_url(img_filename)
-            if thumb_url:
-                gallery_items.append(
-                    h.Div(
-                        [
-                            h.Img(src=thumb_url, className="gallery-thumb"),
-                            h.Button(
-                                "×",
-                                id={"type": "delete-image", "index": i},
-                                className="btn btn-sm btn-danger delete-img-btn",
-                                title="Remove image",
-                                n_clicks=0,
-                            ),
-                            h.Div(f"Image {i+1}", className="text-muted small text-center"),
-                        ],
-                        className="gallery-item",
-                    )
-                )
-
-        # Show upload previews
-        for j, preview in enumerate(preview_data):
-            gallery_items.append(
-                h.Div(
-                    [
-                        h.Img(src=preview['content'], className="gallery-thumb", style={'maxHeight': '150px', 'maxWidth': '150px', 'objectFit': 'contain'}),
-                        h.Div(f"New: {preview['filename']}", className="text-muted small text-center"),
-                    ],
-                    className="gallery-item",
-                    style={'border': '2px dashed #28a745'}
-                )
-            )
-
-        if not gallery_items:
-            return h.Div("No photos yet. Take a photo or upload to get started.", className="text-muted small"), img_list
-
-        return h.Div(gallery_items, className="image-gallery-grid"), img_list
+        return _render_gallery(img_list), out_imgs, clear_upload
 
     # ---------- Remove image from gallery ----------
+    # Only updates the store; the gallery re-renders from its current-images Input.
     @app.callback(
         Output("current-images", "data", allow_duplicate=True),
-        Output("image-gallery", "children", allow_duplicate=True),
         Input({"type": "delete-image", "index": ALL}, "n_clicks"),
         State("current-images", "data"),
         prevent_initial_call=True,
     )
     def remove_image_from_gallery(n_clicks_list, current_imgs):
-        from dash import html as h
-
         if not ctx.triggered or not current_imgs:
             raise PreventUpdate
 
@@ -1035,40 +1239,13 @@ def register_callbacks(app):
         if not n_clicks_list or all(clicks is None or clicks == 0 for clicks in n_clicks_list):
             raise PreventUpdate
 
-        # Find which button was clicked
         triggered_id = ctx.triggered_id
         if triggered_id and isinstance(triggered_id, dict):
             index = triggered_id.get("index")
             if index is not None and 0 <= index < len(current_imgs):
-                # Remove the image at the specified index
                 updated_imgs = current_imgs.copy()
                 del updated_imgs[index]
-
-                # Rebuild gallery with updated list
-                gallery_items = []
-                for i, img_filename in enumerate(updated_imgs):
-                    thumb_url = get_thumbnail_url(img_filename)
-                    if thumb_url:
-                        gallery_items.append(
-                            h.Div(
-                                [
-                                    h.Img(src=thumb_url, className="gallery-thumb"),
-                                    h.Button(
-                                        "×",
-                                        id={"type": "delete-image", "index": i},
-                                        className="btn btn-sm btn-danger delete-img-btn",
-                                        title="Remove image",
-                                        n_clicks=0,
-                                    ),
-                                    h.Div(f"Image {i+1}", className="text-muted small text-center"),
-                                ],
-                                className="gallery-item",
-                            )
-                        )
-
-                gallery_div = h.Div(gallery_items, className="image-gallery-grid") if gallery_items else h.Div("No photos yet. Take a photo or upload to get started.", className="text-muted small")
-
-                return updated_imgs, gallery_div
+                return updated_imgs
 
         raise PreventUpdate
 
@@ -1128,6 +1305,7 @@ def register_callbacks(app):
         Output("kpi-qty", "children"),
         Output("kpi-low", "children"),
         Output("kpi-cat", "children"),
+        Output("kpi-value", "children"),
         Input("inventory-table", "data"),
         prevent_initial_call=False,
     )
@@ -1135,12 +1313,15 @@ def register_callbacks(app):
         rows = rows or []
         total = len(rows)
         total_qty = sum(int(r.get("qty") or 0) for r in rows)
-        low = sum(1 for r in rows if (int(r.get("qty") or 0)) < LOW_STOCK_THRESHOLD)
+        low = sum(1 for r in rows if data.is_low_stock(r))
         cats = len({(r.get("category") or "").strip() for r in rows if (r.get("category") or "").strip()})
-        return total, total_qty, low, cats
+        total_value = data._sum_group_value(rows)
+        value_str = f"${total_value:,.0f}" if total_value else "—"
+        return total, total_qty, low, cats, value_str
 
-    # ---------- Overview breakdown (by location / category) ----------
+    # ---------- Overview breakdown (by type / location / category) ----------
     @app.callback(
+        Output("breakdown-type", "children"),
         Output("breakdown-location", "children"),
         Output("breakdown-category", "children"),
         Input("inventory-table", "data"),
@@ -1148,9 +1329,10 @@ def register_callbacks(app):
     )
     def update_breakdown(rows):
         rows = rows or []
+        by_type = data.summary_by("type", rows)
         by_loc = data.summary_by("location", rows)
         by_cat = data.summary_by("category", rows)
-        return _breakdown_list(by_loc), _breakdown_list(by_cat)
+        return _breakdown_list(by_type), _breakdown_list(by_loc), _breakdown_list(by_cat)
 
     # ---------- Export inventory to CSV ----------
     @app.callback(
@@ -1167,18 +1349,23 @@ def register_callbacks(app):
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow([
-            "id", "name", "category", "location", "bin", "qty", "description",
+            "id", "name", "type", "category", "location", "bin", "qty", "reorder_at",
+            "added", "description",
             "specifications", "estimated_value", "dimensions", "tags",
             "product_url", "ocr_text", "images",
         ])
         for r in rows:
+            ra = r.get("reorder_at")
             writer.writerow([
                 r.get("id"),
                 r.get("name", ""),
+                r.get("type", ""),
                 r.get("category", ""),
                 r.get("location", ""),
                 r.get("location_code", ""),
                 r.get("qty", 0),
+                "" if ra is None else ra,
+                r.get("created_at", ""),
                 r.get("description", ""),
                 " | ".join(r.get("specifications", []) or []),
                 r.get("estimated_value", ""),
@@ -1440,6 +1627,7 @@ def register_callbacks(app):
         tags = d.get("tags")
         tags_text = _tags_to_text(tags) if isinstance(tags, list) else _s(tags)
         url = _s(d.get("product_url"))
+        src_title = _s(d.get("source_title"))
         qty = _parse_qty(cur_qty)
         images = list(cur_imgs or [])
         loc = (cur_loc or "").strip()
@@ -1453,6 +1641,9 @@ def register_callbacks(app):
                     category=category, location=loc, location_code=code,
                     specifications=specs_text, estimated_value=value, dimensions=dims,
                     tags=tags_text, product_url=url,
+                    # Only set when the lookup carried one, so we never wipe an
+                    # existing source title with a blank.
+                    **({"source_title": src_title} if src_title else {}),
                 )
                 saved_id = editing_id
                 header, msg = "Item Updated", f'"{name}" updated from the lookup.'
@@ -1460,7 +1651,7 @@ def register_callbacks(app):
                 row = data.add_item(
                     name, desc, qty, images, "", category=category, location=loc,
                     location_code=code, specifications=specs_text, estimated_value=value,
-                    dimensions=dims, tags=tags_text, product_url=url,
+                    dimensions=dims, tags=tags_text, product_url=url, source_title=src_title,
                 )
                 saved_id = row.get("id")
                 header, msg = "Item Added", f'"{name}" added from the lookup.'
@@ -1562,6 +1753,27 @@ def register_callbacks(app):
                    if text.strip() else {"ok": False, "error": "Couldn't read that file."})
         else:
             raise PreventUpdate
+
+        # Multi-pack listings quote the whole-pack price; record the per-unit value
+        # instead so an item's "value" reflects one piece. Reuses Price Compare's
+        # pack detection. The full-pack price is kept as a note in the specs.
+        if res.get("ok"):
+            try:
+                import price_compare
+                d = res.get("data") or {}
+                pu = price_compare.per_unit_value(
+                    d.get("estimated_value", ""), d.get("name", ""),
+                    d.get("specifications"), d.get("what_it_is", ""))
+                if pu["unit_price"] is not None and 1 < pu["qty"] <= 2000:
+                    d["estimated_value"] = f"{pu['currency']}{pu['unit_price']:.2f}"
+                    note = pu["formatted"]
+                    specs = list(d.get("specifications") or [])
+                    if note and note not in specs:
+                        specs.insert(0, note)
+                    d["specifications"] = specs
+                    res["data"] = d
+            except Exception:
+                pass
 
         body = _render_import(res)
         if res.get("ok"):
@@ -1665,19 +1877,75 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def render_storage_map(_table_data):
-        return _render_storage_map(data.storage_map())
+        # storage_overview() merges the defined bins (with their bags) and the
+        # live counts, so empty bins you've set up still show on the map.
+        return _render_storage_map(data.storage_overview())
 
     # ---------- Storage bins: open editor (load current containers) ----------
     @app.callback(
         Output("bins-modal", "is_open"),
-        Output("containers-text", "value"),
+        Output("containers-store", "data"),
         Input("open-bins", "n_clicks"),
         prevent_initial_call=True,
     )
     def open_bins(n):
         if not n:
             raise PreventUpdate
-        return True, data.containers_to_text()
+        return True, data.containers()
+
+    # ---------- Storage bins: render the editable container rows ----------
+    @app.callback(
+        Output("containers-list", "children"),
+        Input("containers-store", "data"),
+        prevent_initial_call=False,
+    )
+    def render_container_rows(conts):
+        conts = conts or []
+        rows = [_container_row(i, c) for i, c in enumerate(conts)]
+        if not rows:
+            rows = [html.Div("No containers yet — click “Add container” or generate a set below.",
+                             className="text-muted small py-2")]
+        return rows
+
+    # ---------- Storage bins: add a row / remove a row / generate a set ----------
+    @app.callback(
+        Output("containers-store", "data", allow_duplicate=True),
+        Output("bins-status", "children", allow_duplicate=True),
+        Input("add-container", "n_clicks"),
+        Input({"type": "cont-remove", "index": ALL}, "n_clicks"),
+        Input("generate-bins", "n_clicks"),
+        State({"type": "cont-name", "index": ALL}, "value"),
+        State({"type": "cont-bags", "index": ALL}, "value"),
+        State({"type": "cont-slots", "index": ALL}, "value"),
+        State("bin-count", "value"),
+        State("bin-prefix", "value"),
+        prevent_initial_call=True,
+    )
+    def edit_container_rows(_add, remove_clicks, _gen, names, bags, slots, count, prefix):
+        rows = _raw_rows(names, bags, slots)   # exactly what's on screen right now
+        trig = ctx.triggered_id
+        status = no_update
+        if trig == "add-container":
+            rows.append({"name": "", "bags": [], "capacity": 25})
+        elif trig == "generate-bins":
+            if not count:
+                return no_update, html.Span("Enter how many first.", className="text-warning")
+            rows += [{"name": c["name"], "bags": c["bags"], "capacity": c["capacity"]}
+                     for c in data.make_bins(count, prefix or "Bin", 25)]
+            status = html.Span([html.I(className="bi bi-check-circle me-1"),
+                                f"Added {int(count)}."], className="text-success")
+        elif isinstance(trig, dict) and trig.get("type") == "cont-remove":
+            idx = trig.get("index")
+            # Guard the spurious fire when a freshly-mounted remove button reports
+            # n_clicks; only act on a real click (its n_clicks is truthy).
+            if (idx is not None and idx < len(remove_clicks)
+                    and remove_clicks[idx] and idx < len(rows)):
+                rows.pop(idx)
+            else:
+                raise PreventUpdate
+        else:
+            raise PreventUpdate
+        return rows, status
 
     @app.callback(
         Output("bins-modal", "is_open", allow_duplicate=True),
@@ -1692,41 +1960,49 @@ def register_callbacks(app):
     # ---------- Storage bins: save the container definitions ----------
     @app.callback(
         Output("bins-status", "children"),
-        Output("containers-text", "value", allow_duplicate=True),
+        Output("containers-store", "data", allow_duplicate=True),
+        Output("refresh-seq", "data", allow_duplicate=True),
         Input("save-containers", "n_clicks"),
-        State("containers-text", "value"),
+        State({"type": "cont-name", "index": ALL}, "value"),
+        State({"type": "cont-bags", "index": ALL}, "value"),
+        State({"type": "cont-slots", "index": ALL}, "value"),
         prevent_initial_call=True,
     )
-    def save_bins(n, text):
+    def save_bins(n, names, bags, slots):
         if not n:
             raise PreventUpdate
-        conts = data.save_containers(data.parse_containers_text(text))
+        conts = data.save_containers(data.containers_from_rows(names, bags, slots))
+        total_bags = sum(len(c.get("bags") or []) for c in conts)
+        bag_note = f" with {total_bags} bag{'s' if total_bags != 1 else ''}" if total_bags else ""
         msg = html.Span(
-            [html.I(className="bi bi-check-circle me-1"), f"Saved {len(conts)} bin{'s' if len(conts) != 1 else ''}."],
+            [html.I(className="bi bi-check-circle me-1"),
+             f"Saved {len(conts)} container{'s' if len(conts) != 1 else ''}{bag_note}."],
             className="text-success",
         )
-        return msg, data.containers_to_text(conts)
+        # Return the saved (deduped, coded) list to the store, and bump refresh-seq
+        # so the storage map re-renders.
+        return msg, conts, time.time()
 
     # ---------- Storage bins: fit items into the containers ----------
     @app.callback(
         Output("fit-result", "children"),
         Output("fit-plan", "data"),
-        Output("containers-text", "value", allow_duplicate=True),
         Output("bins-status", "children", allow_duplicate=True),
         Input("fit-bins", "n_clicks"),
-        State("containers-text", "value"),
+        State({"type": "cont-name", "index": ALL}, "value"),
+        State({"type": "cont-bags", "index": ALL}, "value"),
+        State({"type": "cont-slots", "index": ALL}, "value"),
         prevent_initial_call=True,
     )
-    def do_fit(n, text):
+    def do_fit(n, names, bags, slots):
         if not n:
             raise PreventUpdate
-        conts = data.save_containers(data.parse_containers_text(text))
+        conts = data.save_containers(data.containers_from_rows(names, bags, slots))
         if not conts:
-            return (html.Div("Add at least one container above (CODE | Name | capacity), then Fit.",
-                             className="text-warning"),
-                    None, no_update, no_update)
+            return (html.Div("Add at least one container first.", className="text-warning"),
+                    None, no_update)
         plan = data.fit_to_containers(conts=conts)
-        return _render_fit(plan), plan, data.containers_to_text(conts), ""
+        return _render_fit(plan), plan, ""
 
     # ---------- Storage bins: apply the fit onto every item ----------
     @app.callback(
@@ -1916,6 +2192,7 @@ def register_callbacks(app):
     @app.callback(
         Output("refresh-seq", "data", allow_duplicate=True),
         Output("inventory-table", "selected_rows", allow_duplicate=True),
+        Output("bulk-type", "value"),
         Output("bulk-category", "value"),
         Output("bulk-location", "value"),
         Output("bulk-code", "value"),
@@ -1926,27 +2203,29 @@ def register_callbacks(app):
         Input("bulk-apply", "n_clicks"),
         State("inventory-table", "selected_rows"),
         State("inventory-table", "data"),
+        State("bulk-type", "value"),
         State("bulk-category", "value"),
         State("bulk-location", "value"),
         State("bulk-code", "value"),
         prevent_initial_call=True,
     )
-    def bulk_apply(n, sel_rows, rows, cat, loc, code):
+    def bulk_apply(n, sel_rows, rows, typ, cat, loc, code):
         if not n:
             raise PreventUpdate
         ids = _selected_ids(sel_rows, rows)
         # Only patch fields the user actually filled in (blank = leave as-is).
+        typ = typ.strip() if isinstance(typ, str) and typ.strip() else None
         cat = cat.strip() if isinstance(cat, str) and cat.strip() else None
         loc = loc.strip() if isinstance(loc, str) and loc.strip() else None
         code = code.strip() if isinstance(code, str) and code.strip() else None
         if not ids:
-            return (no_update, no_update, no_update, no_update, no_update,
+            return (no_update, no_update, no_update, no_update, no_update, no_update,
                     True, "Nothing selected", "warning", "Tick some rows first.")
-        if cat is None and loc is None and code is None:
-            return (no_update, no_update, no_update, no_update, no_update,
-                    True, "Nothing to set", "warning", "Fill in Category, Location or Bin first.")
-        changed = data.bulk_set_fields(ids, category=cat, location=loc, location_code=code)
-        return (time.time(), [], "", "", "", True, "Bulk update",
+        if typ is None and cat is None and loc is None and code is None:
+            return (no_update, no_update, no_update, no_update, no_update, no_update,
+                    True, "Nothing to set", "warning", "Fill in Type, Category, Location or Bin first.")
+        changed = data.bulk_set_fields(ids, category=cat, location=loc, location_code=code, item_type=typ)
+        return (time.time(), [], "", "", "", "", True, "Bulk update",
                 "success", f"Updated {changed} item{'s' if changed != 1 else ''}.")
 
     # ---------- Bulk edit: delete the selected items ----------
@@ -1975,6 +2254,52 @@ def register_callbacks(app):
         data.commit_undo()  # checkpoint so undo can detect later edits
         msg = f"Removed {removed} item{'s' if removed != 1 else ''}."
         return (time.time(), [], _undo_alert(msg), True, "Deleted", "success", msg)
+
+    # ---------- Bulk edit: merge the selected rows into one ----------
+    @app.callback(
+        Output("refresh-seq", "data", allow_duplicate=True),
+        Output("inventory-table", "selected_rows", allow_duplicate=True),
+        Output("undo-bar", "children", allow_duplicate=True),
+        Output("action-toast", "is_open", allow_duplicate=True),
+        Output("action-toast", "header", allow_duplicate=True),
+        Output("action-toast", "icon", allow_duplicate=True),
+        Output("action-toast", "children", allow_duplicate=True),
+        Input("bulk-merge", "n_clicks"),
+        State("inventory-table", "selected_rows"),
+        State("inventory-table", "data"),
+        prevent_initial_call=True,
+    )
+    def bulk_merge(n, sel_rows, rows):
+        if not n:
+            raise PreventUpdate
+        ids = _selected_ids(sel_rows, rows)
+        if len(ids) < 2:
+            return (no_update, no_update, no_update, True, "Pick at least two",
+                    "warning", "Tick two or more rows to merge them into one.")
+
+        inv = data.inventory()
+        by_id = {int(r["id"]): r for r in inv}
+        items = [by_id[i] for i in ids if i in by_id]
+        if len(items) < 2:
+            return (no_update, no_update, no_update, True, "Nothing to merge",
+                    "warning", "Couldn't find the selected rows — refresh and retry.")
+
+        # Auto-pick the richest entry as the survivor (same rule the duplicate
+        # finder uses); everything else folds into it.
+        preview = data.merge_preview(items)
+        primary_id = int(preview["_primary_id"])
+        merge_ids = [i for i in ids if i != primary_id]
+
+        data.snapshot_inventory()  # enable one-click undo
+        result = data.merge_group(primary_id, merge_ids)
+        data.commit_undo()
+
+        if result is None:
+            return (no_update, no_update, no_update, True, "Merge failed",
+                    "danger", "Could not merge the selected rows.")
+        name = result.get("name", "")
+        msg = f'Merged {len(merge_ids) + 1} items into "{name}".'
+        return (time.time(), [], _undo_alert(msg), True, "Merged", "success", msg)
 
     # ---------- Undo the last merge / bulk delete ----------
     @app.callback(
