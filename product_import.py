@@ -534,9 +534,9 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
             if len(v) <= 40 and v.lower() not in {t.lower() for t in tags}:
                 tags.append(v)
     tags = tags[:10]
-    # Keep the full original title searchable even though we display a short name.
-    if full_title and full_title != name and full_title.lower() not in {t.lower() for t in tags}:
-        tags.append(full_title)
+    # Keep the full original title searchable via its own field (not as a tag,
+    # where the tag sanitiser would strip an over-long marketplace title).
+    source_title = full_title if (full_title and full_title != name) else ""
 
     data = {
         "name": name,
@@ -546,6 +546,7 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
         "estimated_value": price,
         "dimensions": dimensions or "unknown",
         "tags": tags,
+        "source_title": source_title,
         "product_url": source_url,
         "confidence": "high" if (prod or dimensions or len(specs) >= 3) else "medium",
         "image_url": image_url,

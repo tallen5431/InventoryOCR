@@ -401,7 +401,17 @@ def merge_into(local_data: Optional[Dict[str, Any]], web: Optional[Dict[str, Any
 
     best = (web.get("best_guess") or "").strip()
     if best:
-        out["name"] = best
+        # Condense the marketplace title the same way the HTML importer does, so
+        # a photo→web lookup doesn't store a 200-char SEO title as the name. The
+        # full title is retained (searchable) in source_title.
+        try:
+            from product_import import _short_name
+            cleaned = _short_name(best)
+        except Exception:
+            cleaned = best
+        out["name"] = cleaned or best
+        if cleaned and cleaned.strip().lower() != best.lower():
+            out["source_title"] = best
         if not out.get("confidence") or str(out.get("confidence")).lower() == "low":
             out["confidence"] = "medium"
 

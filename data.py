@@ -174,12 +174,19 @@ def inventory() -> List[Dict[str, Any]]:
             "estimated_value": (r.get("estimated_value") or "").strip(),
             "dimensions": (r.get("dimensions") or "").strip(),
             "product_url": (r.get("product_url") or "").strip(),
-            "tags": _norm_list(r.get("tags")),
+            "tags": _norm_tags(r.get("tags")),
+            # Raw marketplace title kept when the display name was condensed, so
+            # the original stays searchable without cluttering the name/tags.
+            "source_title": (r.get("source_title") or "").strip(),
         }
         # Coarse Type: keep a stored/hand-edited value, else auto-classify from
         # the category/name/tags so grouping works without a manual pass.
         if not rec["type"]:
             rec["type"] = _classify_type(rec)
+        # Backfill a reorder/verify link from an ASIN we already scraped into
+        # specs — most Amazon items have one, and the field is otherwise blank.
+        if not rec["product_url"]:
+            rec["product_url"] = _derive_product_url(rec)
         # When it was added: keep the stored value, else derive from the images.
         rec["created_at"] = (r.get("created_at") or "").strip() or _derive_created_at(rec)
         norm.append(rec)
@@ -202,6 +209,109 @@ def _norm_list(v: Any) -> List[str]:
     return []
 
 import re as _re_auto
+
+
+# --------------------------------------------------------------------
+# Value parsing, tag hygiene, and product-link derivation
+# --------------------------------------------------------------------
+# These keep the free-text catalogue fields usable: a value we can total, tags
+# without machine-junk, and a reorder link derived from an ASIN we already have.
+
+_MONEY_RE = _re_auto.compile(r"[\d,]+(?:\.\d+)?")
+_PACK_PRICE_RE = _re_auto.compile(r"@\s*\$\s*([\d,]+(?:\.\d+)?)")
+_RANGE_RE = _re_auto.compile(r"\d\s*(?:-|–|—|to)\s*\$?\s*\d")
+
+
+def _to_float(s: Any) -> Optional[float]:
+    try:
+        return float(str(s).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_value(s: Any) -> Optional[float]:
+    """Parse a free-text ``estimated_value`` into a number, or ``None``.
+
+    Handles ``$13.99``, ranges like ``USD $10 - $25`` (midpoint), pack totals
+    such as ``... @ $7.99``, and returns ``None`` for qualitative buckets
+    (``Low to Medium``, ``small``) that carry no number.
+    """
+    txt = "" if s is None else str(s).strip()
+    if not txt:
+        return None
+    m = _PACK_PRICE_RE.search(txt)
+    if m:
+        return _to_float(m.group(1))
+    nums = [n for n in (_to_float(x) for x in _MONEY_RE.findall(txt)) if n is not None]
+    if not nums:
+        return None
+    if len(nums) >= 2 and _RANGE_RE.search(txt):
+        return round((nums[0] + nums[1]) / 2, 2)
+    return nums[0]
+
+
+def item_value(row: Dict[str, Any]) -> Optional[float]:
+    """Best estimate of the value of ONE unit (one ``qty``) of an item.
+
+    Prefers a pack total (``@ $X``) found in the value or specs over a per-piece
+    figure, so a 600-piece kit stored as ``$0.01 each`` is valued at its real
+    pack price rather than a cent. Returns ``None`` when nothing numeric exists.
+    """
+    for src in (row.get("estimated_value"), *(row.get("specifications") or [])):
+        m = _PACK_PRICE_RE.search(str(src or ""))
+        if m:
+            v = _to_float(m.group(1))
+            if v is not None:
+                return v
+    return parse_value(row.get("estimated_value"))
+
+
+_UUID_RE = _re_auto.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# Substrings that mark a tag as a dumped marketplace title rather than a facet.
+_TAG_NOISE_SUBSTR = ("amazon.com", "amazon.ae", "walmart.com", "aliexpress",
+                     ".com:", ": electronics", ": industrial")
+
+
+def _clean_tags(tags: List[str]) -> List[str]:
+    """Drop junk tags — UUIDs, raw marketplace titles, overlong noise — and dedupe.
+
+    Deliberately conservative: only clear machine-junk is removed so genuine
+    short facets (``usb-c``, ``M3``, a brand) are always kept.
+    """
+    out: List[str] = []
+    seen: set = set()
+    for t in tags or []:
+        s = str(t).strip()
+        if not s:
+            continue
+        low = s.lower()
+        if _UUID_RE.match(s) or len(s) > 60:
+            continue
+        if any(sub in low for sub in _TAG_NOISE_SUBSTR):
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append(s)
+    return out[:15]
+
+
+def _norm_tags(v: Any) -> List[str]:
+    """Normalise a tags value like ``_norm_list`` but also strip junk."""
+    return _clean_tags(_norm_list(v))
+
+
+_ASIN_RE = _re_auto.compile(r"\b(B0[0-9A-Z]{8})\b")
+
+
+def _derive_product_url(rec: Dict[str, Any]) -> str:
+    """Best-effort Amazon product URL from an ASIN already sitting in specs/tags."""
+    for src in list(rec.get("specifications") or []) + list(rec.get("tags") or []):
+        m = _ASIN_RE.search(str(src))
+        if m:
+            return f"https://www.amazon.com/dp/{m.group(1)}"
+    return ""
 
 
 def next_auto_name(prefix: str = "Item") -> str:
@@ -273,6 +383,7 @@ def add_item(
     tags: Any = None,
     item_type: str = "",
     reorder_at: Any = None,
+    source_title: str = "",
 ) -> Dict[str, Any]:
     rows = inventory()
     # Unique by name
@@ -296,10 +407,13 @@ def add_item(
         "estimated_value": (estimated_value or "").strip(),
         "dimensions": (dimensions or "").strip(),
         "product_url": (product_url or "").strip(),
-        "tags": _norm_list(tags),
+        "tags": _norm_tags(tags),
+        "source_title": (source_title or "").strip(),
     }
     # Use the given Type, else auto-classify so new items are grouped on entry.
     row["type"] = (item_type or "").strip() or _classify_type(row)
+    if not row["product_url"]:
+        row["product_url"] = _derive_product_url(row)
     rows.append(row)
     _save(rows)
     return row
@@ -327,6 +441,7 @@ def update_item(
     tags: Any = _KEEP,
     item_type: Any = _KEEP,
     reorder_at: Any = _KEEP,
+    source_title: Any = _KEEP,
 ) -> Dict[str, Any]:
     rows = inventory()
     found = None
@@ -356,9 +471,11 @@ def update_item(
             if product_url is not _KEEP:
                 r["product_url"] = (product_url or "").strip()
             if tags is not _KEEP:
-                r["tags"] = _norm_list(tags)
+                r["tags"] = _norm_tags(tags)
             if reorder_at is not _KEEP:
                 r["reorder_at"] = _coerce_reorder(reorder_at)
+            if source_title is not _KEEP:
+                r["source_title"] = (source_title or "").strip()
             found = r
             break
     if found is None:
@@ -431,7 +548,8 @@ def prune_unreferenced_images() -> int:
 
 # Fields that may be patched in place without a full form round-trip.
 _PATCHABLE = {"name", "description", "category", "type", "location", "location_code",
-              "qty", "estimated_value", "dimensions", "product_url", "reorder_at"}
+              "qty", "estimated_value", "dimensions", "product_url", "reorder_at",
+              "source_title"}
 
 
 def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
@@ -632,6 +750,7 @@ def _haystack(r: Dict[str, Any]) -> str:
         " ".join(r.get("specifications", []) or []),
         " ".join(r.get("tags", []) or []),
         str(r.get("dimensions", "")),
+        str(r.get("source_title", "")),
     ]).lower()
 
 def search(q: str) -> List[Dict[str, Any]]:
@@ -815,6 +934,7 @@ def stats(rows: Optional[List[Dict[str, Any]]] = None, low_stock_threshold: int 
         "low": low_stock,
         "categories": len(categories(rows)),
         "locations": len(locations(rows)),
+        "value": _sum_group_value(rows),
     }
 
 # --------------------------------------------------------------------
@@ -887,18 +1007,18 @@ def _tokenize(text: str) -> List[str]:
 
 
 def _sum_group_value(rows: List[Dict[str, Any]]) -> float:
-    """Total estimated value of a group (per-item value × quantity)."""
+    """Total estimated value of a group (per-item value × quantity).
+
+    Uses :func:`item_value`, so qualitative buckets and ranges are handled and a
+    bulk pack is valued at its real pack price rather than a per-piece cent.
+    """
     total = 0.0
     found = False
     for r in rows:
-        v = str(r.get("estimated_value") or "").replace(",", "")
-        m = _re.search(r"\d+(?:\.\d+)?", v)
-        if m:
-            try:
-                total += float(m.group(0)) * max(1, int(r.get("qty") or 1))
-                found = True
-            except ValueError:
-                pass
+        v = item_value(r)
+        if v is not None:
+            total += v * max(1, int(r.get("qty") or 1))
+            found = True
     return round(total, 2) if found else 0.0
 
 
