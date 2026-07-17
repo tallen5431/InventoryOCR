@@ -13,8 +13,9 @@ def price_compare_layout():
 
             html.H2("💲 Price Compare", className="mt-2 mb-1 text-center"),
             html.P(
-                "Download a few product pages for the same thing, drop the .html files here, "
-                "and see the best price per unit — packs of many are priced fairly against singles.",
+                "Drop a few saved product pages (.html) or screenshots (.png/.jpg) for the same "
+                "thing and see the best price per unit — packs of many are priced fairly against "
+                "singles. A screenshot of a whole search grid compares every listing in it at once.",
                 className="text-center text-muted mb-3",
             ),
 
@@ -27,23 +28,23 @@ def price_compare_layout():
                                 [
                                     html.Div(
                                         [html.I(className="bi bi-filetype-html me-2"),
-                                         html.Strong("Product pages")],
+                                         html.Strong("Product pages or screenshots")],
                                         className="mb-1",
                                     ),
                                     html.Div(
-                                        "Open each listing in your browser, Save Page As "
-                                        "(.html), then drop them all here.",
+                                        "Save each listing (.html), or screenshot it when the page "
+                                        "won't save cleanly, then drop them all here.",
                                         className="text-muted small mb-2",
                                     ),
                                     dcc.Upload(
                                         id="pc-upload",
                                         multiple=True,
-                                        accept=".html,.htm,text/html",
+                                        accept=".html,.htm,text/html,.png,.jpg,.jpeg,.webp,image/*",
                                         className="upload-dropzone",
                                         children=html.Div(
                                             [
                                                 html.Div("🗂️", className="upload-icon"),
-                                                html.Div([html.Strong("Drop HTML files"),
+                                                html.Div([html.Strong("Drop HTML or image files"),
                                                           " or ", html.A("choose files")]),
                                                 html.Div("Compare as many listings as you like",
                                                          className="text-muted small mt-1"),

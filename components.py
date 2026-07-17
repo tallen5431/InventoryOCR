@@ -839,14 +839,15 @@ def identify_modal():
                                         children=html.Div(
                                             [
                                                 html.Div("⬆️", className="upload-icon"),
-                                                html.Div(html.Strong("Upload the saved .html listing")),
+                                                html.Div(html.Strong("Upload the saved .html listing or a screenshot")),
                                                 html.Div(
-                                                    "Save the page (Ctrl+S) then drop it here — name, price & specs fill in automatically. Never gets blocked.",
+                                                    "Save the page (Ctrl+S) or screenshot it (.png/.jpg) and drop it here — "
+                                                    "name, price & specs fill in automatically. Never gets blocked.",
                                                     className="text-muted small mt-1",
                                                 ),
                                             ]
                                         ),
-                                        accept=".html,.htm,text/html",
+                                        accept=".html,.htm,text/html,.png,.jpg,.jpeg,.webp,image/*",
                                         className="upload-dropzone",
                                     ),
                                     # Secondary: fetch a URL directly (works on many non-Amazon sites).
@@ -1009,12 +1010,13 @@ def quick_add_modal():
                                         children=html.Div(
                                             [
                                                 html.Div("⬆️", className="upload-icon"),
-                                                html.Div(html.Strong("Upload a saved product page (.html)")),
-                                                html.Div("Save the listing (Ctrl+S) and drop it here.",
+                                                html.Div(html.Strong("Upload a saved product page (.html) or screenshot")),
+                                                html.Div("Save the listing (Ctrl+S) or screenshot it (.png/.jpg) "
+                                                         "and drop it here.",
                                                          className="text-muted small mt-1"),
                                             ]
                                         ),
-                                        accept=".html,.htm,text/html",
+                                        accept=".html,.htm,text/html,.png,.jpg,.jpeg,.webp,image/*",
                                         className="upload-dropzone",
                                     ),
                                     dbc.InputGroup(

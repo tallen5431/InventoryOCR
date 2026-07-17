@@ -557,6 +557,334 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# OCR text parsing — pull the same product fields out of a screenshot
+# ---------------------------------------------------------------------------
+# Some pages save to useless HTML (single-page apps, lazy-loaded prices) or can't
+# be saved at all, so you screenshot the listing instead. This path OCRs the
+# screenshot to text (Tesseract, via ocr_engine) and reads product fields out of
+# that free text — the OCR analogue of ``extract_from_html``.
+#
+# It's necessarily more heuristic than structured-data parsing: there's no JSON-LD
+# to lean on, only lines of text, so it uses layout cues — the title sits near the
+# top, the price is the prominent currency amount, and specs read as "Key: value".
+# The output shape matches ``extract_from_html`` so the Apply-to-item and Price
+# Compare flows consume it unchanged.
+
+_PRICE_RE = re.compile(r"[$£€¥₹]\s?\d[\d,]*(?:\.\d{1,2})?")
+
+# Chrome / boilerplate lines on a retailer page — never the product name.
+_BOILERPLATE = (
+    "add to cart", "add to basket", "add to list", "add to wish", "buy now",
+    "buy it now", "in stock", "out of stock", "free shipping", "free delivery",
+    "free returns", "ships from", "sold by", "sign in", "your account", "sponsored",
+    "results for", "sort by", "filter", "best seller", "amazon's choice",
+    "customer review", "customer ratings", "roll over image", "click to", "see all",
+    "see more", "add to registry", "one-time purchase", "subscribe & save",
+    "subscribe", "deal of the day", " left in stock", "delivery", "add gift",
+    "share", "report an issue", "visit the", "back to results", "you save",
+    "list price", "shopping cart", "out for delivery", "add to compare",
+)
+# Words that mark a price we should NOT treat as the listing's headline price
+# (shipping, strikethrough "was", per-unit breakdowns, financing…).
+_PRICE_NEG = (
+    "ship", "was ", "was:", "list", "save", " off", "coupon", "/mo", "per month",
+    "subscrib", "rrp", "msrp", "deliver", "tax", "import", "/count", "/ count",
+    "per count", "/ea", "each (", "you save",
+)
+
+_KV_RE = re.compile(r"^\s*([A-Za-z][\w /&.\-]{1,44}?)\s*[:：]\s*(.+?)\s*$")
+_BRAND_RE = re.compile(r"(?:brand|visit the)\s*[:\-]?\s*([A-Z0-9][\w&'.\- ]{1,40})", re.I)
+_CRUMB_RE = re.compile(r"[›»]|\s>\s|\s/\s")
+# A rating / review line ("4.7 out of 5", "12,345 ratings") — never the title.
+_RATING_RE = re.compile(r"\bout of\s*\d|\b(?:ratings?|reviews?|stars?)\b", re.I)
+
+
+def _lines(text: str) -> List[str]:
+    return [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+
+
+def _is_boilerplate(line: str) -> bool:
+    low = line.lower()
+    return any(b in low for b in _BOILERPLATE)
+
+
+def _alpha_ratio(s: str) -> float:
+    if not s:
+        return 0.0
+    return sum(c.isalpha() for c in s) / len(s)
+
+
+def _looks_like_price_line(line: str) -> bool:
+    """True when a line is essentially just a price (a few stray chars aside)."""
+    m = _PRICE_RE.search(line)
+    if not m:
+        return False
+    residue = line[: m.start()] + line[m.end():]
+    residue = re.sub(r"[\s()/*+\-.,:|]", "", residue)
+    return len(residue) <= 3
+
+
+def _looks_like_breadcrumb(line: str) -> bool:
+    """True for a navigation trail ('Home › Tools › Drills') — not a product title."""
+    if "›" in line or "»" in line:
+        return True
+    return len(re.findall(r"\s>\s|\s/\s", line)) >= 2
+
+
+def _find_price(text: str) -> str:
+    """Best-guess headline price from OCR text. Prefers a non-shipping, cents-
+    bearing amount, earliest on the page (the buy box sits up top)."""
+    candidates: List[tuple] = []
+    order = 0
+    for line in _lines(text):
+        low = line.lower()
+        penalty = 1 if any(w in low for w in _PRICE_NEG) else 0
+        for m in _PRICE_RE.finditer(line):
+            tok = m.group(0).replace(" ", "")
+            has_cents = 0 if re.search(r"[.,]\d{2}$", tok) else 1
+            candidates.append((penalty, has_cents, order, tok))
+            order += 1
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda c: (c[0], c[1], c[2]))
+    return candidates[0][3]
+
+
+def _is_name_candidate(line: str) -> bool:
+    """A line that could plausibly be the product title (not chrome/price/crumb)."""
+    if _is_boilerplate(line) or _looks_like_price_line(line) or _looks_like_breadcrumb(line):
+        return False
+    # Skip rating / review lines ("4.5 out of 5", "1,234 ratings") — they carry
+    # digits, so a low alpha ratio distinguishes them from a genuine title.
+    if _RATING_RE.search(line) and _alpha_ratio(line) < 0.6:
+        return False
+    return _alpha_ratio(line) >= 0.4
+
+
+def _find_name(text: str) -> str:
+    """The product title: the first substantial, non-boilerplate line near the top."""
+    lines = _lines(text)
+    for line in lines:
+        if _is_name_candidate(line) and 8 <= len(line) <= 200 and len(line.split()) >= 2:
+            return line
+    # Fallback: the longest plausible candidate line.
+    texty = [l for l in lines if _is_name_candidate(l) and len(l) >= 6]
+    return max(texty, key=len) if texty else ""
+
+
+def _find_pairs(text: str, skip: str = "") -> Tuple[List[tuple], List[str]]:
+    """Split lines into (Key: value) spec pairs and bullet-style feature lines."""
+    pairs: List[tuple] = []
+    bullets: List[str] = []
+    for line in _lines(text):
+        if skip and line == skip:
+            continue
+        if _looks_like_price_line(line):
+            continue
+        m = _KV_RE.match(line)
+        if m:
+            k, v = m.group(1), m.group(2)
+            if k and v:
+                pairs.append((k, v))
+            continue
+        stripped = re.sub(r"^[\-•*·•►▪]+\s*", "", line)
+        if stripped != line:
+            b = stripped.strip()
+            if 8 <= len(b) <= 110 and _alpha_ratio(b) >= 0.5:
+                bullets.append(b)
+    return pairs, bullets
+
+
+def _find_category(text: str) -> str:
+    """Read a breadcrumb line ('Home › Tools › Drills') into a category path."""
+    for line in _lines(text):
+        if len(_CRUMB_RE.findall(line)) >= 2 and _alpha_ratio(line) >= 0.3:
+            parts = [p.strip() for p in re.split(r"[›»>/]", line) if p.strip()]
+            if len(parts) >= 2:
+                return " / ".join(parts)
+    return ""
+
+
+def _build_data(name: str, price: str, specs: List[str], dimensions: str,
+                brand: str, category_raw: str, source_title: str,
+                source_url: str, confidence: str) -> Dict[str, Any]:
+    """Assemble the shared product-data dict (mirrors extract_from_html's tail)."""
+    tags: List[str] = []
+    if brand:
+        tags.append(brand)
+    cat_parts = [w.strip() for w in re.split(r"[>/›»|,]", category_raw) if w.strip()]
+    for w in cat_parts[-2:]:
+        if w.lower() not in {t.lower() for t in tags}:
+            tags.append(w)
+    tags = tags[:10]
+    return {
+        "name": name,
+        "category": _short_category(category_raw, brand),
+        "what_it_is": "",
+        "specifications": specs,
+        "estimated_value": price,
+        "dimensions": dimensions or "unknown",
+        "tags": tags,
+        "source_title": source_title,
+        "product_url": source_url,
+        "confidence": confidence,
+        "image_url": "",
+    }
+
+
+def extract_from_text(text: str, source_url: str = "") -> Dict[str, Any]:
+    """Read product fields out of free OCR'd text (one listing screenshot).
+
+    Best-effort mirror of ``extract_from_html`` for images. Returns
+    ``{ok, data|error}`` in the same shape. ``ok`` is False (with a helpful,
+    ``suggest_html``-flagged message) when no product name can be found.
+    """
+    text = (text or "").strip()
+    if not text:
+        return {"ok": False, "error": "No text to read.", "suggest_html": True}
+
+    full_title = _find_name(text)
+    if not full_title:
+        return {"ok": False,
+                "error": "Couldn't find a product name in that image. Try a clearer, tighter "
+                         "screenshot of the listing with the title and price in frame.",
+                "suggest_html": True}
+    name = _short_name(full_title)
+
+    price = _clean_price_text(_find_price(text))
+    pairs, bullets = _find_pairs(text, skip=full_title)
+
+    brand = ""
+    mb = _BRAND_RE.search(text)
+    if mb and not _is_placeholder(mb.group(1)):
+        brand = re.sub(r"\s+store\b", "", mb.group(1).strip(), flags=re.I).strip()
+    if not brand:
+        for k, v in pairs:
+            if k.strip().lower() == "brand" and v.strip() and not _is_placeholder(v):
+                brand = v.strip()
+                break
+
+    specs, dimensions = _isolate_specs(pairs)
+    for b in bullets:
+        if len(specs) >= 15:
+            break
+        if b not in specs:
+            specs.append(b)
+
+    # Promote model / part numbers to tags (as extract_from_html does).
+    category_raw = _find_category(text)
+    data = _build_data(name, price, specs, dimensions, brand, category_raw,
+                       source_title=(full_title if full_title != name else ""),
+                       source_url=source_url,
+                       confidence=("medium" if (price and (specs or brand)) else "low"))
+    _ID_KEYS = ("model", "mpn", "part number", "manufacturer part number", "model number", "model name")
+    for k, v in pairs:
+        kl, vv = k.strip().lower(), v.strip()
+        if vv and not _is_placeholder(vv) and any(idk in kl for idk in _ID_KEYS):
+            if len(vv) <= 40 and vv.lower() not in {t.lower() for t in data["tags"]}:
+                data["tags"].append(vv)
+    data["tags"] = data["tags"][:10]
+
+    return {"ok": True, "data": data, "source": source_url, "price": price,
+            "image_url": "", "brand": brand, "via": "OCR text", "spec_count": len(specs)}
+
+
+def _listing_result(full_title: str, price_tok: str, source_url: str = "") -> Dict[str, Any]:
+    """A minimal {ok, data} result for one row of a multi-product screenshot."""
+    name = _short_name(full_title)
+    price = _clean_price_text(price_tok)
+    data = _build_data(name, price, [], "", "", "",
+                       source_title=(full_title if full_title != name else ""),
+                       source_url=source_url, confidence="low")
+    return {"ok": True, "data": data, "source": source_url, "price": price,
+            "image_url": "", "brand": "", "via": "OCR list", "spec_count": 0}
+
+
+def extract_listings_from_text(text: str, source_url: str = "") -> List[Dict[str, Any]]:
+    """Split a multi-product screenshot (a search grid / price list) into one result
+    per listing. Falls back to a single ``extract_from_text`` when the text doesn't
+    clearly hold several priced items. Returns a list of ``{ok, data, …}`` dicts.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    lines = _lines(text)
+    # Lines carrying a usable (non-shipping/strikethrough) price mark listing rows.
+    priced: List[tuple] = []
+    for i, line in enumerate(lines):
+        low = line.lower()
+        m = _PRICE_RE.search(line)
+        if m and not any(w in low for w in _PRICE_NEG):
+            priced.append((i, m.group(0).replace(" ", "")))
+
+    if len(priced) < 2:
+        one = extract_from_text(text, source_url)
+        return [one] if one.get("ok") else []
+
+    listings: List[Dict[str, Any]] = []
+    seen = set()
+    prev = -1
+    for i, price_tok in priced:
+        name_line = ""
+        for j in range(i - 1, prev, -1):
+            cand = lines[j]
+            if _is_name_candidate(cand) and len(cand.split()) >= 2 and len(cand) >= 6:
+                name_line = cand
+                break
+        prev = i
+        if not name_line:
+            continue
+        key = (name_line.lower()[:60], price_tok)
+        if key in seen:
+            continue
+        seen.add(key)
+        listings.append(_listing_result(name_line, price_tok, source_url))
+
+    if not listings:
+        one = extract_from_text(text, source_url)
+        return [one] if one.get("ok") else []
+    return listings
+
+
+def _ocr_image_text(image: Any) -> str:
+    """OCR an image to plain text. Currency-friendly (no char whitelist) so prices
+    survive. Never raises — returns "" when OCR is unavailable."""
+    try:
+        from ocr_engine import run_ocr_with_cache
+    except Exception:
+        return ""
+    try:
+        res = run_ocr_with_cache(image, whitelist="") or {}
+        return (res.get("text") or "").strip()
+    except Exception:
+        return ""
+
+
+def extract_from_image(image: Any, source_url: str = "") -> Dict[str, Any]:
+    """OCR an image (raw bytes / path / PIL.Image / file-like) then read product
+    fields out of the text. Returns the same shape as ``extract_from_html``."""
+    text = _ocr_image_text(image)
+    if not text.strip():
+        return {"ok": False,
+                "error": "Couldn't read any text from that image. Is Tesseract installed? "
+                         "Try a sharper, higher-contrast screenshot.",
+                "suggest_html": True}
+    res = extract_from_text(text, source_url)
+    if res.get("ok"):
+        res["via"] = "image OCR"
+    return res
+
+
+def extract_listings_from_image(image: Any, source_url: str = "") -> List[Dict[str, Any]]:
+    """OCR an image then split it into one result per listing (see
+    ``extract_listings_from_text``). Empty list when nothing readable is found."""
+    text = _ocr_image_text(image)
+    if not text.strip():
+        return []
+    return extract_listings_from_text(text, source_url)
+
+
+# ---------------------------------------------------------------------------
 # URL fetch (best-effort; blocked by some big stores)
 # ---------------------------------------------------------------------------
 
@@ -604,9 +932,14 @@ def fetch_url(url: str, timeout: Optional[int] = None) -> Tuple[str, str]:
         return "", f"Couldn't fetch the URL ({e}). Try the “paste HTML” option."
 
 
-def import_product(url: str = "", html_text: str = "") -> Dict[str, Any]:
-    """Top-level: extract from pasted HTML if given, else fetch the URL and extract."""
+def import_product(url: str = "", html_text: str = "", image: Any = None) -> Dict[str, Any]:
+    """Top-level: extract from an image screenshot / pasted HTML if given, else
+    fetch the URL and extract."""
     url = (url or "").strip()
+    if image is not None and not isinstance(image, str):
+        # Raw image bytes (or PIL/file-like) — OCR then read fields.
+        if not isinstance(image, (bytes, bytearray)) or len(image) > 0:
+            return extract_from_image(image, url)
     if (html_text or "").strip():
         return extract_from_html(html_text, url)
     if url:

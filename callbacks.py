@@ -1984,14 +1984,19 @@ def register_callbacks(app):
         elif trig == "import-html-upload":
             if not upload_contents:
                 raise PreventUpdate
-            text = ""
+            header, _, b64 = upload_contents.partition(",")
             try:
-                if "," in upload_contents:
-                    text = base64.b64decode(upload_contents.split(",", 1)[1]).decode("utf-8", "replace")
+                raw = base64.b64decode(b64) if b64 else b""
             except Exception:
-                text = ""
-            res = (product_import.import_product(url=url or "", html_text=text)
-                   if text.strip() else {"ok": False, "error": "Couldn't read that file."})
+                raw = b""
+            if "image/" in header:
+                # A screenshot of the listing — OCR it and read the fields.
+                res = (product_import.import_product(url=url or "", image=raw)
+                       if raw else {"ok": False, "error": "Couldn't read that image."})
+            else:
+                text = raw.decode("utf-8", "replace") if raw else ""
+                res = (product_import.import_product(url=url or "", html_text=text)
+                       if text.strip() else {"ok": False, "error": "Couldn't read that file."})
         else:
             raise PreventUpdate
 
@@ -2205,17 +2210,24 @@ def register_callbacks(app):
         elif trig == "qa-import-html-upload":
             if not up_contents:
                 raise PreventUpdate
-            text = ""
+            header, _, b64 = up_contents.partition(",")
             try:
-                if "," in up_contents:
-                    text = base64.b64decode(up_contents.split(",", 1)[1]).decode("utf-8", "replace")
+                raw = base64.b64decode(b64) if b64 else b""
             except Exception:
-                text = ""
-            if not text.strip():
+                raw = b""
+            if "image/" in header:
+                res = (product_import.import_product(url=url or "", image=raw)
+                       if raw else {"ok": False, "error": "Couldn't read that image."})
+            else:
+                text = raw.decode("utf-8", "replace") if raw else ""
+                if not text.strip():
+                    return (no_update,) * 6 + (
+                        html.Span("Couldn't read that file.", className="text-danger"),)
+                res = product_import.import_product(url=url or "", html_text=text)
+            if not res.get("ok"):
                 return (no_update,) * 6 + (
-                    html.Span("Couldn't read that .html file.", className="text-danger"),)
-            res = product_import.import_product(url=url or "", html_text=text)
-            # Keep the saved page as an attachment on the item too.
+                    html.Span(res.get("error", "Import failed."), className="text-warning"),)
+            # Keep the saved page / screenshot as an attachment on the item too.
             try:
                 atts.append(save_attachment(up_contents, up_name or "product-page.html"))
             except Exception:
