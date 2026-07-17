@@ -605,6 +605,7 @@ def inventory_table():
         {"name": "Location", "id": "location", "hideable": True},
         {"name": "Bin", "id": "location_code", "hideable": True},
         {"name": "Value", "id": "estimated_value", "hideable": True},
+        {"name": "Docs", "id": "docs", "hideable": True},
         {"name": "Description", "id": "description", "hideable": True},
         {"name": "OCR Text", "id": "ocr_text", "hideable": True},
         {"name": "id", "id": "id", "hideable": True},
@@ -662,6 +663,7 @@ def inventory_table():
             {"if": {"column_id": "location"}, "minWidth": "90px", "maxWidth": "160px"},
             {"if": {"column_id": "location_code"}, "minWidth": "72px", "maxWidth": "110px", "fontWeight": "600", "textAlign": "center"},
             {"if": {"column_id": "estimated_value"}, "minWidth": "80px", "maxWidth": "120px", "textAlign": "right", "fontWeight": "600", "color": "var(--bs-success)"},
+            {"if": {"column_id": "docs"}, "width": "72px", "minWidth": "64px", "maxWidth": "84px", "textAlign": "center", "whiteSpace": "nowrap"},
             {"if": {"column_id": "description"}, "minWidth": "160px", "maxWidth": "300px", "overflowWrap": "anywhere", "whiteSpace": "normal"},
             {"if": {"column_id": "ocr_text"}, "minWidth": "150px", "maxWidth": "400px", "overflowWrap": "anywhere", "whiteSpace": "pre-wrap"},
             {"if": {"column_id": "image"}, "width": "88px", "minWidth": "88px", "maxWidth": "96px", "textAlign": "center", "padding": "6px"},
@@ -837,14 +839,15 @@ def identify_modal():
                                         children=html.Div(
                                             [
                                                 html.Div("⬆️", className="upload-icon"),
-                                                html.Div(html.Strong("Upload the saved .html listing")),
+                                                html.Div(html.Strong("Upload the saved .html listing or a screenshot")),
                                                 html.Div(
-                                                    "Save the page (Ctrl+S) then drop it here — name, price & specs fill in automatically. Never gets blocked.",
+                                                    "Save the page (Ctrl+S) or screenshot it (.png/.jpg) and drop it here — "
+                                                    "name, price & specs fill in automatically. Never gets blocked.",
                                                     className="text-muted small mt-1",
                                                 ),
                                             ]
                                         ),
-                                        accept=".html,.htm,text/html",
+                                        accept=".html,.htm,text/html,.png,.jpg,.jpeg,.webp,image/*",
                                         className="upload-dropzone",
                                     ),
                                     # Secondary: fetch a URL directly (works on many non-Amazon sites).
@@ -1007,12 +1010,13 @@ def quick_add_modal():
                                         children=html.Div(
                                             [
                                                 html.Div("⬆️", className="upload-icon"),
-                                                html.Div(html.Strong("Upload a saved product page (.html)")),
-                                                html.Div("Save the listing (Ctrl+S) and drop it here.",
+                                                html.Div(html.Strong("Upload a saved product page (.html) or screenshot")),
+                                                html.Div("Save the listing (Ctrl+S) or screenshot it (.png/.jpg) "
+                                                         "and drop it here.",
                                                          className="text-muted small mt-1"),
                                             ]
                                         ),
-                                        accept=".html,.htm,text/html",
+                                        accept=".html,.htm,text/html,.png,.jpg,.jpeg,.webp,image/*",
                                         className="upload-dropzone",
                                     ),
                                     dbc.InputGroup(

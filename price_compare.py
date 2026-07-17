@@ -193,11 +193,46 @@ def match_inventory(name: str, tags: Optional[List[str]] = None,
 
 
 # --------------------------------------------------------------------
-# Analyse a batch of uploaded HTML files
+# Analyse a batch of uploaded product pages / screenshots
 # --------------------------------------------------------------------
 
-def analyze_htmls(files: List[Tuple[str, str]]) -> Dict[str, Any]:
-    """Scrape each (filename, html) pair, compute unit prices, and rank them.
+def _product_row(res: Dict[str, Any], source: str,
+                 rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Turn one extractor result into a ranked-table row (unit price + match)."""
+    d = res.get("data", {})
+    name = (d.get("name") or "").strip() or source
+    price_text = (res.get("price") or d.get("estimated_value") or "").strip()
+    pv = _parse_price(price_text)
+    qty, unit = detect_quantity(name, d.get("specifications", []), d.get("what_it_is", ""))
+    unit_price = round(pv / qty, 4) if (pv is not None and qty) else None
+    mid, mname = match_inventory(name, d.get("tags"), rows)
+    return {
+        "source": source,
+        "name": name,
+        "price_text": price_text,
+        "price_value": pv,
+        "currency": _currency(price_text),
+        "quantity": qty,
+        "unit": unit,
+        "unit_price": unit_price,
+        "url": d.get("product_url", ""),
+        "image_url": d.get("image_url", ""),
+        "category": d.get("category", ""),
+        "tags": d.get("tags", []),
+        "matched_item_id": mid,
+        "matched_item_name": mname,
+    }
+
+
+def analyze_uploads(files: List[Tuple[str, str, Any]]) -> Dict[str, Any]:
+    """Scrape a mix of saved HTML pages and listing screenshots; rank by unit price.
+
+    Each file is ``(source_name, kind, payload)`` where ``kind`` is:
+      * ``"html"``  — payload is the page text (str)
+      * ``"image"`` — payload is raw image bytes, OCR'd here
+
+    A single screenshot may hold several listings (a search-results grid); each
+    becomes its own ranked row (``"file.png #1"``, ``"#2"`` …).
 
     Returns ``{products:[...ranked...], errors:[{source,error}], best}``.
     """
@@ -205,42 +240,40 @@ def analyze_htmls(files: List[Tuple[str, str]]) -> Dict[str, Any]:
     products: List[Dict[str, Any]] = []
     errors: List[Dict[str, str]] = []
 
-    for fname, html_text in files or []:
+    for source, kind, payload in files or []:
         try:
-            res = _pi.extract_from_html(html_text or "", "")
+            if kind == "image":
+                listings = [r for r in _pi.extract_listings_from_image(payload) if r.get("ok")]
+                if not listings:
+                    errors.append({"source": source,
+                                   "error": "couldn't read a listing from that image "
+                                            "(is Tesseract installed? try a clearer screenshot)"})
+                    continue
+                multi = len(listings) > 1
+                for i, res in enumerate(listings):
+                    label = f"{source} #{i + 1}" if multi else source
+                    products.append(_product_row(res, label, rows))
+            else:
+                res = _pi.extract_from_html(payload or "", "")
+                if not res.get("ok"):
+                    errors.append({"source": source,
+                                   "error": res.get("error", "couldn't read that page")})
+                    continue
+                products.append(_product_row(res, source, rows))
         except Exception as e:  # pragma: no cover - defensive
-            errors.append({"source": fname, "error": f"parse error: {e}"})
-            continue
-        if not res.get("ok"):
-            errors.append({"source": fname, "error": res.get("error", "couldn't read that page")})
-            continue
-        d = res.get("data", {})
-        name = d.get("name", "").strip() or fname
-        price_text = (res.get("price") or d.get("estimated_value") or "").strip()
-        pv = _parse_price(price_text)
-        qty, unit = detect_quantity(name, d.get("specifications", []), d.get("what_it_is", ""))
-        unit_price = round(pv / qty, 4) if (pv is not None and qty) else None
-        mid, mname = match_inventory(name, d.get("tags"), rows)
-        products.append({
-            "source": fname,
-            "name": name,
-            "price_text": price_text,
-            "price_value": pv,
-            "currency": _currency(price_text),
-            "quantity": qty,
-            "unit": unit,
-            "unit_price": unit_price,
-            "url": d.get("product_url", ""),
-            "image_url": d.get("image_url", ""),
-            "category": d.get("category", ""),
-            "tags": d.get("tags", []),
-            "matched_item_id": mid,
-            "matched_item_name": mname,
-        })
+            errors.append({"source": source, "error": f"parse error: {e}"})
 
     ranked = _rank(products)
     best = next((p for p in ranked if p.get("best")), None)
     return {"products": ranked, "errors": errors, "best": best}
+
+
+def analyze_htmls(files: List[Tuple[str, str]]) -> Dict[str, Any]:
+    """Back-compat wrapper: analyse HTML-only ``(filename, html)`` pairs.
+
+    Prefer :func:`analyze_uploads`, which also handles image screenshots.
+    """
+    return analyze_uploads([(fn, "html", html_text) for fn, html_text in (files or [])])
 
 
 def _rank(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -302,7 +335,7 @@ def searches() -> List[Dict[str, Any]]:
 
 
 def _save_all(items: List[Dict[str, Any]]) -> None:
-    PRICE_FILE.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    _data.atomic_write_text(PRICE_FILE, json.dumps(items, ensure_ascii=False, indent=2))
 
 
 def _trim_product(p: Dict[str, Any]) -> Dict[str, Any]:

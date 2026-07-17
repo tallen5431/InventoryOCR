@@ -83,10 +83,22 @@ def preprocess_for_ocr(
     return out
 
 
-def extract_ocr_text(img: Image.Image, lang: str = "eng", psm: int = 6) -> str:
+# Default character whitelist — good for labels/part numbers. NOTE it deliberately
+# excludes currency symbols; callers that need prices (invoices, product listings)
+# pass ``whitelist=""`` to disable it so "$", "£", "€"… survive OCR.
+_DEFAULT_OCR_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-.,:/()%+"
+_UNSET = object()
+
+
+def extract_ocr_text(img: Image.Image, lang: str = "eng", psm: int = 6, whitelist=_UNSET) -> str:
     """
     Run Tesseract OCR on a preprocessed image.
     Accepts language and PSM mode for compatibility with ocr_engine.
+
+    ``whitelist`` controls the allowed character set:
+      * omitted        → the default label-friendly whitelist (no currency symbols)
+      * a string       → that exact whitelist
+      * ``""`` (empty) → no whitelist at all, so prices/symbols come through
     """
     try:
         import pytesseract
@@ -96,9 +108,10 @@ def extract_ocr_text(img: Image.Image, lang: str = "eng", psm: int = 6) -> str:
         if img.mode not in ("L", "RGB"):
             img = img.convert("RGB")
 
-        # whitelist and config
-        whitelist = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-.,:/()%+"
-        config_str = f"--oem 1 --psm {psm} -c tessedit_char_whitelist={whitelist}"
+        wl = _DEFAULT_OCR_WHITELIST if whitelist is _UNSET else whitelist
+        config_str = f"--oem 1 --psm {psm}"
+        if wl:
+            config_str += f" -c tessedit_char_whitelist={wl}"
 
         text = pytesseract.image_to_string(img, lang=lang, config=config_str)
 

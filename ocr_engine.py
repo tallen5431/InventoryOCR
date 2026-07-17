@@ -40,7 +40,14 @@ def run_ocr_with_cache(
         threshold=threshold,
         sharpen=sharpen,
     )
-    text = (extract_ocr_text(processed, lang=lang or "eng") or "").strip()
+    # Forward the whitelist only when the caller supplies one. Left as None it
+    # keeps extract_ocr_text's label-friendly default (unchanged behaviour for
+    # existing callers like the OCR Lab); passing "" disables the whitelist so
+    # currency symbols survive — used by invoice + product-listing OCR.
+    kw: Dict[str, Any] = {"lang": lang or "eng"}
+    if whitelist is not None:
+        kw["whitelist"] = whitelist
+    text = (extract_ocr_text(processed, **kw) or "").strip()
 
     return {
         "text": text,

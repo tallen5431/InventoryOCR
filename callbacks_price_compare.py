@@ -25,13 +25,36 @@ def _unit_money(v, cur="$"):
     return f"{cur}{v:.4f}".rstrip("0").rstrip(".") if v < 1 else f"{cur}{v:,.2f}"
 
 
+_IMG_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"}
+
+
+def _classify_upload(contents: str, filename: str) -> str:
+    """Decide whether an upload is an ``image`` screenshot or an ``html`` page."""
+    header = contents.split(",", 1)[0] if (contents and "," in contents) else ""
+    ext = filename.rsplit(".", 1)[-1].lower() if (filename and "." in filename) else ""
+    if "image/" in header or ext in _IMG_EXTS:
+        return "image"
+    return "html"
+
+
 def _decode_upload(contents: str) -> str:
+    """Decode a dcc.Upload data URL to text (for HTML pages)."""
     try:
         if contents and "," in contents:
             return base64.b64decode(contents.split(",", 1)[1]).decode("utf-8", "replace")
     except Exception:
         pass
     return ""
+
+
+def _decode_upload_bytes(contents: str) -> bytes:
+    """Decode a dcc.Upload data URL to raw bytes (for image screenshots)."""
+    try:
+        if contents and "," in contents:
+            return base64.b64decode(contents.split(",", 1)[1])
+    except Exception:
+        pass
+    return b""
 
 
 def _best_banner(res):
@@ -258,21 +281,28 @@ def register_price_compare_callbacks(app):
         filenames = filenames if isinstance(filenames, list) else ([filenames] if filenames else [])
         if not contents:
             return no_update, no_update, no_update, no_update, \
-                html.Span("Drop at least one .html file first.", className="text-warning"), \
+                html.Span("Drop at least one .html page or screenshot first.", className="text-warning"), \
                 no_update, no_update
 
         files = []
         for c, fn in zip(contents, filenames):
-            text = _decode_upload(c)
-            if text.strip():
-                files.append((fn or "page.html", text))
+            if not c:
+                continue
+            if _classify_upload(c, fn) == "image":
+                raw = _decode_upload_bytes(c)
+                if raw:
+                    files.append((fn or "screenshot.png", "image", raw))
+            else:
+                text = _decode_upload(c)
+                if text.strip():
+                    files.append((fn or "page.html", "html", text))
 
         if not files:
             return no_update, no_update, no_update, no_update, \
                 html.Span("Couldn't read those files.", className="text-warning"), \
                 no_update, no_update
 
-        res = pc.analyze_htmls(files)
+        res = pc.analyze_uploads(files)
         errbox = html.Div()
         if res["errors"]:
             errbox = dbc.Alert(

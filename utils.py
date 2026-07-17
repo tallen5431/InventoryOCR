@@ -174,7 +174,9 @@ def read_attachment_text(filename: str) -> str:
             return path.read_text(encoding="utf-8", errors="replace")
         if kind == "image":
             from ocr_engine import run_ocr_with_cache
-            return (run_ocr_with_cache(str(path)) or {}).get("text", "") or ""
+            # whitelist="" keeps currency symbols so an invoice's "$23.98" (and a
+            # listing's price) survives OCR for the downstream parsers.
+            return (run_ocr_with_cache(str(path), whitelist="") or {}).get("text", "") or ""
     except Exception:
         return ""
     return ""

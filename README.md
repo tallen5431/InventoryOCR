@@ -76,17 +76,20 @@ to find something or restock.
 - 🔗 **Import from a product page** — found it online? Paste the product URL (or,
   when a store blocks bots, paste/upload the page's HTML) and the app reads the
   embedded product data (name, price, brand, specs) and fills the item for you.
+  When a page won't save cleanly, **drop a screenshot (.png/.jpg)** instead: it's
+  **OCR'd with Tesseract** and the same fields are read straight off the image.
 - 🧾 **Purchase records & attached documents** — keep the paperwork **with** the
   item: attach the invoice, saved product page, receipt, manual — **any file** —
   and view or download it later. Invoices (image or saved HTML) are **auto‑read**
   for **order # · purchase date · price paid · seller** into fields you confirm
   before saving. Purchase details are searchable ("what did I buy from Mouser?")
   and are kept when items are merged.
-- 💲 **Price Compare** — drop several saved listing `.html` files for the same
-  product and the app works out each one's **price per unit** (handling packs of
-  many), ranks the best deal, and can **track prices over time** across repeat
-  runs. If a listing matches something you own, one click **writes the best unit
-  price + link back** onto that item.
+- 💲 **Price Compare** — drop several saved listing `.html` files **or screenshots
+  (.png/.jpg)** for the same product and the app works out each one's **price per
+  unit** (handling packs of many), ranks the best deal, and can **track prices over
+  time** across repeat runs. A screenshot of a whole **search grid** compares every
+  listing in it at once. If a listing matches something you own, one click **writes
+  the best unit price + link back** onto that item.
 - 🧺 **Storage system** — set up your storage in a **simple row editor** (no
   syntax): each container — any box, drawer, tote, bag or shelf — is a row with a
   **Name** and, optionally, the **bags** inside it. Click **Add container** for
@@ -174,6 +177,11 @@ sudo apt-get install -y tesseract-ocr
 On Windows you can drop a `Tesseract-OCR/` folder (with `tesseract.exe` and
 `tessdata/`) next to the app and it will be picked up automatically. Without
 Tesseract the inventory features all work — OCR simply returns empty text.
+
+OCR powers three things: the **OCR Lab** (tuning playground), **invoice auto‑read**
+on attached receipts, and **screenshot import** — dropping a listing screenshot on
+the import box or Price Compare reads the product's name, price and specs off the
+image the same way the HTML importer reads them from page source.
 
 ## Identify items from a photo (optional)
 
@@ -330,6 +338,10 @@ from a product link* button):
   save the page, then drop the file on the **Upload the saved .html** box — name,
   price, and specs fill in automatically, and it never gets blocked. (You can also
   paste the HTML source instead.)
+- **No usable HTML? Upload a screenshot (.png/.jpg).** Some pages save to useless
+  HTML (single‑page apps, lazy‑loaded prices) or can't be saved at all — just
+  screenshot the listing and drop it on the same box. It's **OCR'd with Tesseract**
+  and the title, price, brand and any *Key: value* specs are read off the text.
 - **Or paste a URL → Fetch.** The app fetches the page directly — works on many
   manufacturer/retailer sites; big stores (Amazon) block bots, so use the upload.
 
@@ -338,7 +350,9 @@ Amazon **detail/feature bullets & spec tables**, and **eBay item specifics** —
 puts each value in the right field: product name, **real price**, image, a short
 **category** (from the breadcrumb), **dimensions** pulled into their own field,
 and the **helpful specs** isolated (noise like *Best Sellers Rank*, *Customer
-Reviews*, and placeholders like *“Does not apply”* are dropped).
+Reviews*, and placeholders like *“Does not apply”* are dropped). Screenshots use
+layout cues instead of structured data, so they're best‑effort — always worth a
+quick review — but they turn an un‑saveable page into a filled‑in item in seconds.
 
 Then **Apply to form** (to review) or **Apply & Update** (one click) records it.
 The importer only reads embedded structured data — no login or account scraping —
@@ -351,9 +365,13 @@ The **💲 Price Compare** page (in the top nav) answers a different question:
 without trawling tabs by hand.
 
 1. Open a few listings for the **same kind of product** and **Save Page As**
-   (`.html`) each one.
-2. Drop them all on the **Product pages** dropzone and hit **Compare prices**.
-3. Each page is scraped for its name and price, its **pack size** is detected
+   (`.html`) each one — or **screenshot** any that won't save cleanly. A single
+   screenshot of a whole **search grid** works too: every priced listing in it is
+   pulled out and compared as its own row.
+2. Drop them all on the **Product pages or screenshots** dropzone and hit
+   **Compare prices**.
+3. Each page (or screenshot) is scraped for its name and price, its **pack size**
+   is detected
    (e.g. `150PCS`, `24 Pack`, `Pack of 6`, `x500`, `Qty: 50`), and the
    **price per unit** is worked out — so a 48‑pack at \$22.99 correctly beats an
    8‑pack at \$7.49. The table ranks cheapest‑per‑unit first and 🏆 marks the
@@ -491,7 +509,7 @@ This app ships as a bundled card in
 | `vision_lookup.py` | Ollama vision client for "Identify from photo" |
 | `web_detect.py` | Automatic web lookup (SerpApi / Google Vision), pluggable |
 | `web_search.py` | Google Lens / Google / Shopping search URL builders |
-| `product_import.py` | Extract product details from a page URL or pasted/saved HTML (JSON‑LD / OG) |
+| `product_import.py` | Extract product details from a page URL, pasted/saved HTML (JSON‑LD / OG), or a screenshot (OCR text → same fields) |
 | `invoice_parse.py` | Read order # · date · total · seller from receipt/order text (OCR'd image or HTML) |
 | `price_compare.py` | Price‑per‑unit comparison across saved listings + price‑over‑time history |
 | `net_info.py` | Enumerates reachable URLs (LAN / Tailscale) + QR codes for the Connect panel |

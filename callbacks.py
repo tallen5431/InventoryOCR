@@ -70,6 +70,18 @@ def _build_rows(filtered):
         row["location"] = (row.get("location") or "").strip()
         row["estimated_value"] = (row.get("estimated_value") or "").strip()
 
+        # Compact "paperwork" indicator: 🧾 = has a purchase record, 📎N = N
+        # attached documents. Full details show in the column's hover tooltip.
+        atts = r.get("attachments") or []
+        has_purchase = any((r.get(k) or "").strip()
+                           for k in ("order_number", "purchase_date", "price_paid", "seller"))
+        docs_bits = []
+        if has_purchase:
+            docs_bits.append("🧾")
+        if atts:
+            docs_bits.append(f"📎{len(atts)}")
+        row["docs"] = " ".join(docs_bits)
+
         # "Added" column: show just the date (YYYY-MM-DD). This form also sorts
         # correctly under the table's native column sort.
         row["added"] = (row.get("created_at") or "")[:10]
@@ -1347,8 +1359,30 @@ def register_callbacks(app):
                 parts.append(f"[Open product page]({item['product_url']})")
             md = "\n\n".join(parts) or "_No extra details yet._"
             cell = {"value": md, "type": "markdown"}
+
+            # Docs column tooltip: the purchase record + the attached files.
+            dparts = []
+            purchase = []
+            if item.get("seller"):
+                purchase.append(f"**Seller:** {item['seller']}")
+            if item.get("order_number"):
+                purchase.append(f"**Order #:** {item['order_number']}")
+            if item.get("purchase_date"):
+                purchase.append(f"**Date:** {item['purchase_date']}")
+            if item.get("price_paid"):
+                purchase.append(f"**Paid:** {item['price_paid']}")
+            if purchase:
+                dparts.append("\n".join(purchase))
+            atts = item.get("attachments") or []
+            if atts:
+                names = "\n".join(f"- {a.get('original_name') or a.get('filename')}" for a in atts[:12])
+                dparts.append(f"**Documents ({len(atts)}):**\n{names}")
+            docs_md = "\n\n".join(dparts) or "_No documents or purchase info yet._"
+            docs_cell = {"value": docs_md, "type": "markdown"}
+
             # Same rich tooltip on the columns you're most likely to hover.
-            tips.append({"name": cell, "description": cell, "estimated_value": cell})
+            tips.append({"name": cell, "description": cell, "estimated_value": cell,
+                         "docs": docs_cell})
         return tips
 
     def _render_gallery(img_list):
@@ -1550,9 +1584,13 @@ def register_callbacks(app):
             "added", "description",
             "specifications", "estimated_value", "dimensions", "tags",
             "product_url", "ocr_text", "images",
+            # Purchase record (for later spend analysis) + attachments.
+            "seller", "order_number", "purchase_date", "price_paid",
+            "attachment_count", "attachments",
         ])
         for r in rows:
             ra = r.get("reorder_at")
+            atts = r.get("attachments") or []
             writer.writerow([
                 r.get("id"),
                 r.get("name", ""),
@@ -1571,6 +1609,12 @@ def register_callbacks(app):
                 r.get("product_url", ""),
                 (r.get("ocr_text", "") or "").replace("\n", " ").strip(),
                 "; ".join(r.get("images", []) or []),
+                r.get("seller", ""),
+                r.get("order_number", ""),
+                r.get("purchase_date", ""),
+                r.get("price_paid", ""),
+                len(atts),
+                "; ".join(a.get("original_name") or a.get("filename") or "" for a in atts),
             ])
         return dcc.send_string(buf.getvalue(), "inventory.csv")
 
@@ -1940,14 +1984,19 @@ def register_callbacks(app):
         elif trig == "import-html-upload":
             if not upload_contents:
                 raise PreventUpdate
-            text = ""
+            header, _, b64 = upload_contents.partition(",")
             try:
-                if "," in upload_contents:
-                    text = base64.b64decode(upload_contents.split(",", 1)[1]).decode("utf-8", "replace")
+                raw = base64.b64decode(b64) if b64 else b""
             except Exception:
-                text = ""
-            res = (product_import.import_product(url=url or "", html_text=text)
-                   if text.strip() else {"ok": False, "error": "Couldn't read that file."})
+                raw = b""
+            if "image/" in header:
+                # A screenshot of the listing — OCR it and read the fields.
+                res = (product_import.import_product(url=url or "", image=raw)
+                       if raw else {"ok": False, "error": "Couldn't read that image."})
+            else:
+                text = raw.decode("utf-8", "replace") if raw else ""
+                res = (product_import.import_product(url=url or "", html_text=text)
+                       if text.strip() else {"ok": False, "error": "Couldn't read that file."})
         else:
             raise PreventUpdate
 
@@ -2161,17 +2210,24 @@ def register_callbacks(app):
         elif trig == "qa-import-html-upload":
             if not up_contents:
                 raise PreventUpdate
-            text = ""
+            header, _, b64 = up_contents.partition(",")
             try:
-                if "," in up_contents:
-                    text = base64.b64decode(up_contents.split(",", 1)[1]).decode("utf-8", "replace")
+                raw = base64.b64decode(b64) if b64 else b""
             except Exception:
-                text = ""
-            if not text.strip():
+                raw = b""
+            if "image/" in header:
+                res = (product_import.import_product(url=url or "", image=raw)
+                       if raw else {"ok": False, "error": "Couldn't read that image."})
+            else:
+                text = raw.decode("utf-8", "replace") if raw else ""
+                if not text.strip():
+                    return (no_update,) * 6 + (
+                        html.Span("Couldn't read that file.", className="text-danger"),)
+                res = product_import.import_product(url=url or "", html_text=text)
+            if not res.get("ok"):
                 return (no_update,) * 6 + (
-                    html.Span("Couldn't read that .html file.", className="text-danger"),)
-            res = product_import.import_product(url=url or "", html_text=text)
-            # Keep the saved page as an attachment on the item too.
+                    html.Span(res.get("error", "Import failed."), className="text-warning"),)
+            # Keep the saved page / screenshot as an attachment on the item too.
             try:
                 atts.append(save_attachment(up_contents, up_name or "product-page.html"))
             except Exception:
