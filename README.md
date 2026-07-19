@@ -140,8 +140,8 @@ All settings are environment variables:
 | `INVENTORY_THEME` | `dark`        | `dark` or `light` default theme |
 | `PUBLIC_BASE`     | *(unset)*     | Public base URL of the app. Also enables the **Google Lens by‑image** button (Google must be able to fetch the photo). |
 | `TAILSCALE_FUNNEL_BASE` | *(unset)* | Public [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) base (e.g. `https://host.tailnet.ts.net`). Alternative to `PUBLIC_BASE` for enabling Lens. |
-| `OLLAMA_HOST`     | `http://100.98.112.1:11434` | Ollama server for "Identify from photo" (a trailing `/v1` is accepted). |
-| `OLLAMA_VISION_MODEL` | `llama3.2-vision` | Vision model used for identification. Pull it first. |
+| `OLLAMA_HOST`     | `http://localhost:11434` | Ollama server for "Identify from photo" (a trailing `/v1` is accepted). |
+| `OLLAMA_VISION_MODEL` | `llava:13b` | Vision model used for identification. Pull it first. |
 | `VISION_TIMEOUT`  | `60`          | Identify request timeout, in seconds |
 | `SERPAPI_KEY`     | *(unset)*     | **Free web lookup** during Identify (SerpApi — 100/mo, no credit card). Real product name, tags, links, and price. |
 | `GOOGLE_VISION_API_KEY` | *(unset)* | Alternative web lookup (Google Vision reverse‑image; free tier needs billing on). |
@@ -191,11 +191,11 @@ Set it up:
 
 ```bash
 # On the machine running Ollama, pull a vision model:
-ollama pull llama3.2-vision       # or: qwen2.5vl, llava, moondream, …
+ollama pull llava:13b             # or: llama3.2-vision, qwen2.5vl, moondream, …
 
 # Point the app at your Ollama server (defaults shown):
-export OLLAMA_HOST=http://100.98.112.1:11434
-export OLLAMA_VISION_MODEL=llama3.2-vision
+export OLLAMA_HOST=http://localhost:11434
+export OLLAMA_VISION_MODEL=llava:13b
 ```
 
 > ⚠️ Estimated values and specs are the model's best guess from the photo —

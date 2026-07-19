@@ -55,6 +55,25 @@ def _load() -> List[Dict[str, Any]]:
         return []
     return _safe_read(path)
 
+
+def _load_or_none() -> Optional[List[Dict[str, Any]]]:
+    """Like ``_load`` but returns ``None`` when the inventory file EXISTS yet can't
+    be read/parsed, instead of masking the failure as an empty list.
+
+    Callers that DELETE files based on what's referenced (the prune helpers) use
+    this to tell a corrupt / half-written inventory.json apart from a genuinely
+    empty inventory — pruning on the former would wipe assets that are still in
+    use. A missing file is a real empty inventory, so that still returns ``[]``.
+    """
+    path = Path(INVENTORY_JSON)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, list) else None
+
 def _save(rows: List[Dict[str, Any]]) -> None:
     atomic_write_text(Path(INVENTORY_JSON), json.dumps(rows, ensure_ascii=False, indent=2))
 
@@ -141,6 +160,37 @@ def _earliest_created(items: List[Dict[str, Any]]) -> str:
     return min(vals) if vals else ""
 
 
+def _safe_str(v: Any) -> str:
+    """Coerce any stored value to a trimmed string, tolerating a JSON number/bool
+    where a string was expected (hand-edited files) instead of raising."""
+    return str(v or "").strip()
+
+
+def _safe_qty(v: Any) -> int:
+    """Coerce a stored quantity to int, tolerating '2.5', 'many', None, etc."""
+    try:
+        return int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _min_record(rid: Optional[int], r: Dict[str, Any]) -> Dict[str, Any]:
+    """Last-resort normalized row for a record too malformed to process, so one
+    bad entry can't take down the whole inventory read. Keeps id/name/qty."""
+    return {
+        "id": rid,
+        "name": _safe_str(r.get("name")) or (f"Item {rid}" if rid is not None else "Item"),
+        "description": _safe_str(r.get("description")),
+        "category": "", "type": "", "location": "", "location_code": "",
+        "qty": _safe_qty(r.get("qty")), "reorder_at": None,
+        "images": [], "ocr_text": "", "thumb_url": "",
+        "specifications": [], "estimated_value": "", "dimensions": "",
+        "product_url": "", "tags": [], "source_title": "",
+        "attachments": [], "order_number": "", "purchase_date": "",
+        "price_paid": "", "seller": "", "created_at": "",
+    }
+
+
 def inventory() -> List[Dict[str, Any]]:
     rows = _load()
 
@@ -150,15 +200,21 @@ def inventory() -> List[Dict[str, Any]]:
     # unique ids for any id-less record (deterministic across reads).
     used: set = set()
     for r in rows:
+        # AttributeError guards against a non-dict entry (hand-edited bare
+        # string/number); the normalization loop below skips those entirely.
         try:
             used.add(int(r.get("id")))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, AttributeError):
             pass
     next_free = (max(used) + 1) if used else 1
 
     # Normalize schema
     norm = []
     for r in rows:
+        # A hand-edited file can contain a non-object entry (a bare string/number/
+        # null); skip it rather than crash the whole read on r.get(...).
+        if not isinstance(r, dict):
+            continue
         try:
             rid = int(r.get("id"))
         except (TypeError, ValueError):
@@ -169,60 +225,65 @@ def inventory() -> List[Dict[str, Any]]:
             rid = next_free
             used.add(rid)
 
-        # Backward compatibility: normalize images to a list.
-        # Accept a bare string (hand-edited/legacy data) as a single image, and
-        # fall back to the old single image_filename field.
-        images = r.get("images", [])
-        if isinstance(images, str):
-            images = [images] if images.strip() else []
-        if not isinstance(images, list):
-            images = []
-        if not images:
-            old_img = r.get("image_filename")
-            if old_img:
-                images = [old_img]
+        # One malformed record must not blank the whole catalogue — normalize
+        # defensively and fall back to a minimal safe row on any surprise.
+        try:
+            # Backward compatibility: normalize images to a list.
+            # Accept a bare string (hand-edited/legacy data) as a single image, and
+            # fall back to the old single image_filename field.
+            images = r.get("images", [])
+            if isinstance(images, str):
+                images = [images] if images.strip() else []
+            if not isinstance(images, list):
+                images = []
+            if not images:
+                old_img = r.get("image_filename")
+                if old_img:
+                    images = [old_img]
 
-        rec = {
-            "id": rid,
-            "name": r.get("name", ""),
-            "description": r.get("description", ""),
-            "category": (r.get("category") or "").strip(),
-            "type": (r.get("type") or "").strip(),
-            "location": (r.get("location") or "").strip(),
-            "location_code": (r.get("location_code") or "").strip(),
-            "qty": int(r.get("qty") or 0),
-            # Optional per-item reorder point: low ⇔ set AND qty <= reorder_at.
-            "reorder_at": _coerce_reorder(r.get("reorder_at")),
-            "images": images if isinstance(images, list) else [],
-            "ocr_text": r.get("ocr_text", ""),
-            "thumb_url": r.get("thumb_url", ""),
-            # Richer catalogue fields (from vision AI / web lookup). All optional.
-            "specifications": _norm_list(r.get("specifications")),
-            "estimated_value": (r.get("estimated_value") or "").strip(),
-            "dimensions": (r.get("dimensions") or "").strip(),
-            "product_url": (r.get("product_url") or "").strip(),
-            "tags": _norm_tags(r.get("tags")),
-            # Raw marketplace title kept when the display name was condensed, so
-            # the original stays searchable without cluttering the name/tags.
-            "source_title": (r.get("source_title") or "").strip(),
-            # Attached documents (invoices, saved product pages, receipts, …) and
-            # the purchase details read off them. All optional / free-text.
-            "attachments": _norm_attachments(r.get("attachments")),
-            "order_number": (r.get("order_number") or "").strip(),
-            "purchase_date": (r.get("purchase_date") or "").strip(),
-            "price_paid": (r.get("price_paid") or "").strip(),
-            "seller": (r.get("seller") or "").strip(),
-        }
-        # Coarse Type: keep a stored/hand-edited value, else auto-classify from
-        # the category/name/tags so grouping works without a manual pass.
-        if not rec["type"]:
-            rec["type"] = _classify_type(rec)
-        # Backfill a reorder/verify link from an ASIN we already scraped into
-        # specs — most Amazon items have one, and the field is otherwise blank.
-        if not rec["product_url"]:
-            rec["product_url"] = _derive_product_url(rec)
-        # When it was added: keep the stored value, else derive from the images.
-        rec["created_at"] = (r.get("created_at") or "").strip() or _derive_created_at(rec)
+            rec = {
+                "id": rid,
+                "name": _safe_str(r.get("name")),
+                "description": _safe_str(r.get("description")),
+                "category": _safe_str(r.get("category")),
+                "type": _safe_str(r.get("type")),
+                "location": _safe_str(r.get("location")),
+                "location_code": _safe_str(r.get("location_code")),
+                "qty": _safe_qty(r.get("qty")),
+                # Optional per-item reorder point: low ⇔ set AND qty <= reorder_at.
+                "reorder_at": _coerce_reorder(r.get("reorder_at")),
+                "images": images if isinstance(images, list) else [],
+                "ocr_text": _safe_str(r.get("ocr_text")),
+                "thumb_url": _safe_str(r.get("thumb_url")),
+                # Richer catalogue fields (from vision AI / web lookup). All optional.
+                "specifications": _norm_list(r.get("specifications")),
+                "estimated_value": _safe_str(r.get("estimated_value")),
+                "dimensions": _safe_str(r.get("dimensions")),
+                "product_url": _safe_str(r.get("product_url")),
+                "tags": _norm_tags(r.get("tags")),
+                # Raw marketplace title kept when the display name was condensed, so
+                # the original stays searchable without cluttering the name/tags.
+                "source_title": _safe_str(r.get("source_title")),
+                # Attached documents (invoices, saved product pages, receipts, …) and
+                # the purchase details read off them. All optional / free-text.
+                "attachments": _norm_attachments(r.get("attachments")),
+                "order_number": _safe_str(r.get("order_number")),
+                "purchase_date": _safe_str(r.get("purchase_date")),
+                "price_paid": _safe_str(r.get("price_paid")),
+                "seller": _safe_str(r.get("seller")),
+            }
+            # Coarse Type: keep a stored/hand-edited value, else auto-classify from
+            # the category/name/tags so grouping works without a manual pass.
+            if not rec["type"]:
+                rec["type"] = _classify_type(rec)
+            # Backfill a reorder/verify link from an ASIN we already scraped into
+            # specs — most Amazon items have one, and the field is otherwise blank.
+            if not rec["product_url"]:
+                rec["product_url"] = _derive_product_url(rec)
+            # When it was added: keep the stored value, else derive from the images.
+            rec["created_at"] = _safe_str(r.get("created_at")) or _derive_created_at(rec)
+        except Exception:
+            rec = _min_record(rid, r)
         norm.append(rec)
     return norm
 
@@ -682,7 +743,12 @@ def prune_unreferenced_images() -> int:
     anything still referenced by a saved item is kept.
     """
     referenced: set = set()
-    for r in _load():
+    rows = _load_or_none()
+    if rows is None:
+        # inventory.json is unreadable/corrupt — we can't tell what's still in
+        # use, so pruning now could delete assets that ARE referenced. Bail out.
+        return 0
+    for r in rows:
         imgs = r.get("images", [])
         if isinstance(imgs, str):
             imgs = [imgs]
@@ -716,7 +782,11 @@ def prune_unreferenced_documents() -> int:
     removed, or an item is deleted, its files become orphans — this reclaims them.
     """
     referenced: set = set()
-    for r in _load():
+    rows = _load_or_none()
+    if rows is None:
+        # Corrupt/unreadable inventory — refuse to prune (see prune images).
+        return 0
+    for r in rows:
         for a in _norm_attachments(r.get("attachments")):
             fn = str(a.get("filename") or "").strip()
             if fn:

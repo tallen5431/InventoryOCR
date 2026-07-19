@@ -50,7 +50,7 @@ if exist "%APP_DIR%requirements.txt" (
 )
 
 REM --- Network env from caller (mini_server_manager passes HOST/PORT in env) ---
-if "%PORT%"=="" set "PORT=8050"
+if "%PORT%"=="" set "PORT=8001"
 if "%HOST%"=="" set "HOST=0.0.0.0"
 
 REM Make these visible to Python app that reads env

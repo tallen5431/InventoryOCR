@@ -1877,6 +1877,15 @@ def register_callbacks(app):
         try:
             if editing_id:
                 existing = next((r for r in data.inventory() if r.get("id") == editing_id), {})
+                # Merge, don't clobber: keep the item's stored value for any field
+                # the lookup didn't supply, so applying a partial result (e.g. a
+                # vision match that only knows the name) never wipes details you
+                # already had. The form outputs below reflect these merged values.
+                specs_text = specs_text or _specs_to_text(existing.get("specifications") or [])
+                value = value or (existing.get("estimated_value") or "")
+                dims = dims or (existing.get("dimensions") or "")
+                tags_text = tags_text or _tags_to_text(existing.get("tags") or [])
+                url = url or (existing.get("product_url") or "")
                 data.update_item(
                     editing_id, name, desc, qty, images, existing.get("ocr_text", ""),
                     category=category, location=loc, location_code=code,

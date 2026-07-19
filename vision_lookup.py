@@ -35,7 +35,7 @@ def _env(name: str, default: str) -> str:
 def get_config() -> Dict[str, Any]:
     """Resolve the current Ollama config (read live so env edits take effect)."""
     return {
-        "host": _normalize_base(_env("OLLAMA_HOST", "http://100.98.112.1:11434")),
+        "host": _normalize_base(_env("OLLAMA_HOST", "http://localhost:11434")),
         "model": _env("OLLAMA_VISION_MODEL", "llava:13b"),
         "timeout": int(_env("VISION_TIMEOUT", "60") or 60),
     }
