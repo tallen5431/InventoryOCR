@@ -72,6 +72,31 @@ def get_local_ip() -> str:
         s.close()
     return ip
 
+def resolve_bind_host(host: str, default: str = "0.0.0.0") -> str:
+    """Return a host string that is safe to hand to waitress' ``serve``.
+
+    Some launchers inject a bogus value — e.g. an unsubstituted ``HOST=PORT``
+    placeholder from a git-import manager. Waitress runs ``socket.getaddrinfo``
+    on the host and, when it can't be resolved, aborts the whole process with
+    ``ValueError: Invalid host/port specified.``. Rather than crash on launch,
+    warn and fall back to binding all interfaces so the server still comes up.
+    """
+    host = (host or "").strip()
+    if not host:
+        return default
+    # Wildcard / unspecified addresses are accepted by waitress without a DNS
+    # lookup — don't reject them just because getaddrinfo can be picky offline.
+    if host in ("0.0.0.0", "::", "*"):
+        return host
+    try:
+        socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError, ValueError):
+        print(f"[Config] Warning: HOST={host!r} is not a resolvable bind "
+              f"address; falling back to {default}")
+        return default
+    return host
+
+
 def get_external_url(host: str, port: int, url_prefix: str) -> tuple[str, list[str]]:
     """
     Automatically determine the correct external URL(s) for accessing the application.
@@ -435,9 +460,17 @@ register_price_compare_callbacks(app)
 if __name__ == "__main__":
     from waitress import serve
 
-    host = os.environ.get("HOST", "0.0.0.0")
+    # Guard against launchers that inject an invalid HOST (e.g. an
+    # unsubstituted "HOST=PORT" placeholder) — bind all interfaces instead of
+    # crashing during socket.getaddrinfo inside waitress.
+    host = resolve_bind_host(os.environ.get("HOST", "0.0.0.0"))
     # Default port aligned with your Caddy backend (PORT=8001)
-    port = int(os.environ.get("PORT", 8001))
+    try:
+        port = int(os.environ.get("PORT", 8001))
+    except (TypeError, ValueError):
+        print(f"[Config] Warning: PORT={os.environ.get('PORT')!r} is not a "
+              f"valid integer; falling back to 8001")
+        port = 8001
 
     # Automatically determine the correct external URL(s)
     primary_url, alternative_urls = get_external_url(host, port, URL_PREFIX)
