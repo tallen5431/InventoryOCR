@@ -288,10 +288,17 @@ def serve_image(filename: str):
 
 # Attached documents (invoices, saved pages, receipts, …). Served inline so a
 # browser can preview a PDF/HTML/image; the UI also offers an explicit download.
+# Unlike product images, these are often sensitive (financial) and the app can be
+# auth-gated, so they are NOT marked public/immutable: "private, no-cache" keeps
+# them out of any shared/intermediary cache and forces revalidation, so a stale
+# invoice can't be served from cache to a different/logged-out user on a shared
+# machine. (Content-stamped filenames still make the conditional check cheap.)
 @server.route(f"{URL_PREFIX}/assets/documents/<path:filename>")
 def serve_document(filename: str):
     dl = request.args.get("download") in ("1", "true", "yes")
-    return _serve_cached(ASSET_DOCS_PATH, filename, as_attachment=dl)
+    resp = send_from_directory(str(ASSET_DOCS_PATH), filename, as_attachment=dl)
+    resp.headers["Cache-Control"] = "private, no-cache"
+    return resp
 
 # ---------- Navbar ----------
 navbar = dbc.Navbar(

@@ -685,20 +685,23 @@ def register_operations_callbacks(app):
             if not nm and not has_photo and not editing_id:
                 _toast("Add a name or photo", "warning", "Type a name or add a photo first.")
                 return _pack(out)
-            # Resolve batch: a typed new-batch name wins and is created on the fly.
-            bid = od._safe_id(batch_val)
-            nb = (new_batch or "").strip()
-            if nb:
-                created = od.find_or_create_batch(nb)
-                if created:
-                    bid = created.get("id")
-            common = dict(
-                material_type=mtype, batch_id=bid, vendor=vendor, qty=qty,
-                unit_cost=unit_cost, total_cost=total_cost, order_number=order,
-                purchase_date=pdate, description=desc, specifications=specs, tags=tags,
-                images=list(images or []), attachments=list(attachments or []),
-            )
             try:
+                # Resolve batch inside the try: a typed new-batch name wins and
+                # is created on the fly. find_or_create_batch reads batches.json,
+                # which can raise on a corrupt file — keep it here so that surfaces
+                # as a "Couldn't save" toast rather than crashing the callback.
+                bid = od._safe_id(batch_val)
+                nb = (new_batch or "").strip()
+                if nb:
+                    created = od.find_or_create_batch(nb)
+                    if created:
+                        bid = created.get("id")
+                common = dict(
+                    material_type=mtype, batch_id=bid, vendor=vendor, qty=qty,
+                    unit_cost=unit_cost, total_cost=total_cost, order_number=order,
+                    purchase_date=pdate, description=desc, specifications=specs, tags=tags,
+                    images=list(images or []), attachments=list(attachments or []),
+                )
                 if editing_id:
                     # Omit name when blank so the existing name is preserved (_KEEP).
                     if nm:
@@ -800,6 +803,25 @@ def register_operations_callbacks(app):
         if n >= 2:
             return True, f"{n} selected"
         return False, ""
+
+    # ---------------- Clear a stale selection when the table data changes ----
+    # selected_rows are POSITIONAL indices. Anything that rebuilds op-mat-table
+    # data (search, either filter, or an op-refresh bump from any mutation —
+    # including a batch-tab action taken while a selection is held) would leave
+    # those indices pointing at DIFFERENT materials, so a follow-up bulk
+    # assign/unassign/delete would hit the wrong rows. Drop the selection
+    # whenever the data can change. (manage_material owns selected_rows; this is
+    # an allow_duplicate writer, hence prevent_initial_call.)
+    @app.callback(
+        Output("op-mat-table", "selected_rows", allow_duplicate=True),
+        Input("op-refresh", "data"),
+        Input("op-mat-search", "value"),
+        Input("op-mat-filter-type", "value"),
+        Input("op-mat-filter-batch", "value"),
+        prevent_initial_call=True,
+    )
+    def clear_selection_on_data_change(*_):
+        return []
 
     # ---------------- Photo modal (open from table) ------------------------
     @app.callback(
