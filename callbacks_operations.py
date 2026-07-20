@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import io
+import itertools
 import os
 
 from dash import Input, Output, State, ctx, no_update, ALL, html, dcc
@@ -39,6 +40,17 @@ _ATTACH_ICON = {
     "image": "bi-file-earmark-image", "html": "bi-filetype-html",
     "pdf": "bi-file-earmark-pdf", "other": "bi-file-earmark",
 }
+
+# Every mutation writes a fresh, strictly-increasing token into the op-refresh
+# store so the table/KPI/batch reader callbacks always re-fire. Summing n_clicks
+# (as a first cut did) can yield the SAME value for two different actions, which
+# Dash treats as "no change" — leaving the view stale. next() on itertools.count
+# is atomic under CPython's GIL, so it's safe across waitress worker threads.
+_REFRESH_SEQ = itertools.count(1)
+
+
+def _token():
+    return next(_REFRESH_SEQ)
 
 
 # --------------------------------------------------------------------
@@ -618,7 +630,7 @@ def register_operations_callbacks(app):
 
         def _bump():
             # Distinct token each time so downstream reload callbacks always fire.
-            out["refresh"] = (save_n or 0) + (del_n or 0) + (add_n or 0) + 1
+            out["refresh"] = _token()
 
         def _toast(hdr, icon, msg):
             out["toast_open"], out["toast_hdr"], out["toast_icon"], out["toast_msg"] = \
@@ -744,7 +756,7 @@ def register_operations_callbacks(app):
         ids = [i for i in ids if i is not None]
         if not ids:
             raise PreventUpdate
-        token = (apply_n or 0) + (unassign_n or 0) + (delete_n or 0) + 1
+        token = _token()
         if trig == "op-mat-bulk-apply":
             if bulk_batch is None:
                 return no_update, no_update, True, "Pick a batch", "warning", \
@@ -831,11 +843,12 @@ def register_operations_callbacks(app):
                     "description", "specifications", "tags", "created_at"])
         for m in mats:
             bid = m.get("batch_id")
+            cost = od.material_cost(m)
             w.writerow([
                 m.get("id"), m.get("name", ""), m.get("material_type", ""),
                 name_map.get(bid, "") if bid is not None else "", m.get("vendor", ""),
                 m.get("qty", 0), m.get("unit_cost", ""), m.get("total_cost", ""),
-                od.material_cost(m) if od.material_cost(m) is not None else "",
+                cost if cost is not None else "",
                 m.get("order_number", ""), m.get("purchase_date", ""),
                 m.get("description", ""), "; ".join(m.get("specifications") or []),
                 ", ".join(m.get("tags") or []), m.get("created_at", ""),
@@ -902,7 +915,7 @@ def register_operations_callbacks(app):
             if not nm:
                 return (no_update,) * 7 + (no_update, True, "Name required", "warning",
                                            "Give the batch a name.")
-            token = (save_n or 0) + 1
+            token = _token()
             if editing_id:
                 od.update_batch(editing_id, name=nm, product=product,
                                 units_produced=units, date=date, notes=notes)
@@ -931,7 +944,7 @@ def register_operations_callbacks(app):
         removed = od.remove_batch(trig.get("index"))
         if not removed:
             raise PreventUpdate
-        token = sum(c or 0 for c in clicks) + 1
+        token = _token()
         return (token, True, "Batch deleted", "danger",
                 f'"{removed.get("name","")}" deleted — its materials were unassigned.')
 
@@ -952,7 +965,7 @@ def register_operations_callbacks(app):
         n = od.set_materials_batch([trig.get("index")], None)
         if not n:
             raise PreventUpdate
-        token = sum(c or 0 for c in clicks) + 1
+        token = _token()
         return token, True, "Removed", "secondary", "Material removed from batch."
 
     # ---------------- Add materials to a batch -----------------------------
@@ -983,7 +996,7 @@ def register_operations_callbacks(app):
             return no_update, True, "Nothing selected", "warning", \
                 "Pick materials to add first."
         n = od.set_materials_batch(chosen, bid)
-        token = sum(c or 0 for c in clicks) + 1
+        token = _token()
         name = od.batch_name_map().get(od._safe_id(bid), "batch")
         return token, True, "Added", "success", f'{n} material(s) → "{name}".'
 
