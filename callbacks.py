@@ -5,7 +5,7 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 import data
 from utils import (
-    save_image, get_thumbnail_url, get_image_url,
+    save_image, get_thumbnail_url, get_image_url, get_preview_url,
     save_attachment, read_attachment_text, attachment_kind,
 )
 from config import ASSET_IMAGE_PATH, OCR_TEXT_MAX_CHARS
@@ -38,6 +38,25 @@ def _tags_to_text(tags):
         return ", ".join(str(t) for t in tags if str(t).strip())
     return str(tags or "")
 
+
+def _fullres_links(originals):
+    """Footer control that keeps the full-resolution originals one tap away when
+    the viewer is showing the fast preview. One link for a single photo, numbered
+    links when there are several."""
+    originals = [u for u in (originals or []) if u]
+    if not originals:
+        return ""
+    if len(originals) == 1:
+        return html.A([html.I(className="bi bi-arrows-fullscreen me-1"),
+                       "View full resolution"],
+                      href=originals[0], target="_blank", rel="noopener noreferrer",
+                      className="text-decoration-none")
+    links = [html.Span("Full resolution: ", className="text-muted")]
+    for i, u in enumerate(originals):
+        links.append(html.A(str(i + 1), href=u, target="_blank",
+                            rel="noopener noreferrer", className="me-2"))
+    return html.Span(links)
+
 def _build_rows(filtered):
     out_rows = []
     for r in filtered:
@@ -58,10 +77,12 @@ def _build_rows(filtered):
             img_count = len(images)
             badge = f" ({img_count})" if img_count > 1 else ""
             row["image"] = f"![thumb]({thumb_url}){badge}" if thumb_url else ""
-            # Store all image URLs for modal
+            # For the viewer: previews (fast) + originals (full-res link).
+            row["all_previews"] = [get_preview_url(img) for img in images]
             row["all_images"] = [get_image_url(img) for img in images]
         else:
             row["image"] = ""
+            row["all_previews"] = []
             row["all_images"] = []
 
         # Keep organizing fields present for the table (and CSV/native filters)
@@ -1492,6 +1513,7 @@ def register_callbacks(app):
         Output("image-modal", "is_open"),
         Output("image-modal-title", "children"),
         Output("image-carousel", "items"),
+        Output("image-modal-fullres", "children"),
         Input("inventory-table", "active_cell"),
         State("inventory-table", "data"),
         State("image-modal", "is_open"),
@@ -1510,21 +1532,22 @@ def register_callbacks(app):
             row = (rows or [])[ridx]
         if row is None:
             raise PreventUpdate
-        all_images = row.get("all_images", [])
-        if not all_images:
+        # The viewer loads the fast preview; the originals stay one tap away.
+        previews = row.get("all_previews") or row.get("all_images", [])
+        originals = row.get("all_images", [])
+        if not previews:
             raise PreventUpdate
 
-        # Create carousel items
         carousel_items = [
             {
                 "key": str(i),
                 "src": img_url,
                 "img_style": {"maxHeight": "70vh", "objectFit": "contain"},
             }
-            for i, img_url in enumerate(all_images)
+            for i, img_url in enumerate(previews)
         ]
 
-        return True, row.get("name", ""), carousel_items
+        return True, row.get("name", ""), carousel_items, _fullres_links(originals)
 
     @app.callback(
         Output("image-modal", "is_open", allow_duplicate=True),

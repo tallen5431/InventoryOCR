@@ -368,6 +368,7 @@ _MAT_COLUMNS = [
     {"name": "Docs", "id": "docs", "hideable": True},
     {"name": "id", "id": "id", "hideable": True},
     {"name": "all_images", "id": "all_images", "hideable": True},
+    {"name": "all_previews", "id": "all_previews", "hideable": True},
 ]
 
 
@@ -383,7 +384,7 @@ def _materials_table():
         filter_action="none",
         tooltip_delay=0,
         tooltip_duration=None,
-        hidden_columns=["id", "all_images"],
+        hidden_columns=["id", "all_images", "all_previews"],
         style_table={"height": "62vh", "overflowY": "auto", "overflowX": "auto",
                      "backgroundColor": "var(--bs-body-bg)"},
         style_as_list_view=True,
@@ -557,8 +558,12 @@ def _op_image_modal():
                 dbc.Carousel(id="op-image-carousel", items=[], controls=True,
                              indicators=True, interval=None, ride=False)
             ),
-            dbc.ModalFooter(dbc.Button("Close", id="op-close-image-modal",
-                                       className="ms-auto", n_clicks=0)),
+            dbc.ModalFooter(
+                [
+                    html.Div(id="op-image-modal-fullres", className="me-auto small"),
+                    dbc.Button("Close", id="op-close-image-modal", n_clicks=0),
+                ]
+            ),
         ],
         id="op-image-modal", is_open=False, size="xl", centered=True, backdrop="static",
     )

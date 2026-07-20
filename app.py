@@ -12,7 +12,9 @@ from config import (
     THEME_DEFAULT_MODE,
     ASSET_IMAGE_PATH,
     ASSET_THUMB_PATH,
+    ASSET_PREVIEW_PATH,
     ASSET_DOCS_PATH,
+    ASSET_CACHE_MAX_AGE,
 )
 from flask import send_from_directory, request, Response
 import authz
@@ -250,19 +252,38 @@ def _healthz():
 for _i, _rule in enumerate(["/healthz"] + ([f"{URL_PREFIX}/healthz"] if URL_PREFIX else [])):
     server.add_url_rule(_rule, f"_healthz_{_i}", _healthz)
 
-# ---- Static asset routes for images & thumbnails -----------------
+# ---- Static asset routes for images, previews & thumbnails -----------------
 # Browser URLs look like:
-#   https://<host>:8443/inventory/assets/images/<file>
-#   https://<host>:8443/inventory/assets/thumbnails/<file>
+#   https://<host>:8443/inventory/assets/images/<file>       (full resolution)
+#   https://<host>:8443/inventory/assets/previews/<file>     (mid-size, fast)
+#   https://<host>:8443/inventory/assets/thumbnails/<file>   (table grid)
+#
+# Asset filenames are content-stamped (…-<ms>.<ext>) and never change, so every
+# response is marked immutable with a 1-year max-age. Over the internet / on a
+# phone this is the difference between re-validating each image on every view and
+# serving it straight from the browser cache after the first load.
+
+def _serve_cached(directory, filename: str, *, as_attachment: bool = False):
+    resp = send_from_directory(str(directory), filename, as_attachment=as_attachment,
+                               max_age=ASSET_CACHE_MAX_AGE)
+    # Add "immutable" so browsers don't even conditionally re-check within the TTL.
+    resp.headers["Cache-Control"] = f"public, max-age={ASSET_CACHE_MAX_AGE}, immutable"
+    return resp
+
 
 @server.route(f"{URL_PREFIX}/assets/thumbnails/<path:filename>")
 def serve_thumbnail(filename: str):
-    return send_from_directory(str(ASSET_THUMB_PATH), filename, as_attachment=False)
+    return _serve_cached(ASSET_THUMB_PATH, filename)
+
+
+@server.route(f"{URL_PREFIX}/assets/previews/<path:filename>")
+def serve_preview(filename: str):
+    return _serve_cached(ASSET_PREVIEW_PATH, filename)
 
 
 @server.route(f"{URL_PREFIX}/assets/images/<path:filename>")
 def serve_image(filename: str):
-    return send_from_directory(str(ASSET_IMAGE_PATH), filename, as_attachment=False)
+    return _serve_cached(ASSET_IMAGE_PATH, filename)
 
 
 # Attached documents (invoices, saved pages, receipts, …). Served inline so a
@@ -270,7 +291,7 @@ def serve_image(filename: str):
 @server.route(f"{URL_PREFIX}/assets/documents/<path:filename>")
 def serve_document(filename: str):
     dl = request.args.get("download") in ("1", "true", "yes")
-    return send_from_directory(str(ASSET_DOCS_PATH), filename, as_attachment=dl)
+    return _serve_cached(ASSET_DOCS_PATH, filename, as_attachment=dl)
 
 # ---------- Navbar ----------
 navbar = dbc.Navbar(

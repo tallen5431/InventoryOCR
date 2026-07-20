@@ -3,7 +3,10 @@ import os, base64, io, re, time
 from pathlib import Path
 from typing import Dict, Any, Optional
 from PIL import Image, ImageOps
-from config import ASSET_IMAGE_PATH, ASSET_THUMB_PATH, ASSET_DOCS_PATH
+from config import (
+    ASSET_IMAGE_PATH, ASSET_THUMB_PATH, ASSET_DOCS_PATH, ASSET_PREVIEW_PATH,
+    PREVIEW_MAX_EDGE, PREVIEW_QUALITY,
+)
 
 # --------------------------------------------------------------------
 # URL base for assets when served behind Caddy
@@ -78,6 +81,37 @@ def _save_image_bytes(img: Image.Image, path: Path):
         img.save(path, format="PNG", compress_level=6)
 
 
+def _downscale(img: Image.Image, max_edge: int) -> Image.Image:
+    """Return a copy whose longest edge is <= ``max_edge`` (no upscaling)."""
+    w, h = img.size
+    longest = max(w, h)
+    if longest <= max_edge:
+        return img.copy()
+    scale = max_edge / float(longest)
+    return img.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+
+
+def _save_preview_bytes(img: Image.Image, path: Path):
+    """Save a mid-size preview: lossy formats at PREVIEW_QUALITY (small over the
+    wire), PNG kept lossless-but-optimized so screenshots/text stay crisp."""
+    ext = path.suffix.lower()
+    if ext in (".jpg", ".jpeg"):
+        img.save(path, format="JPEG", quality=PREVIEW_QUALITY, optimize=True)
+    elif ext == ".webp":
+        img.save(path, format="WEBP", quality=PREVIEW_QUALITY, method=6)
+    else:
+        img.save(path, format="PNG", optimize=True, compress_level=9)
+
+
+def _write_preview(img: Image.Image, filename: str) -> None:
+    """Downscale + write the preview tier for ``filename`` (best-effort)."""
+    try:
+        ASSET_PREVIEW_PATH.mkdir(parents=True, exist_ok=True)
+        _save_preview_bytes(_downscale(img, PREVIEW_MAX_EDGE), ASSET_PREVIEW_PATH / filename)
+    except Exception:
+        pass
+
+
 def _asset_url(kind: str, filename: str) -> str:
     """Build /inventory/assets/<kind>/<filename> (or /assets/... without prefix)."""
     kind = kind.strip("/")
@@ -102,11 +136,12 @@ def save_image(
 
     _save_image_bytes(img, out_path)
 
-    # Thumbnail
+    # Thumbnail (table grid) + medium preview (fast lightbox loads off-LAN).
     thumb = img.copy()
     thumb.thumbnail((320, 320))
     thumb_path = ASSET_THUMB_PATH / filename
     _save_image_bytes(thumb, thumb_path)
+    _write_preview(img, filename)
 
     return {
         "filename": filename,
@@ -114,6 +149,7 @@ def save_image(
         "thumb_path": str(thumb_path),
         "url": _asset_url("images", filename),
         "thumb_url": _asset_url("thumbnails", filename),
+        "preview_url": _asset_url("previews", filename),
     }
 
 
@@ -202,10 +238,27 @@ def get_thumbnail_url(filename: str | None) -> str:
 
 
 def get_image_url(filename: str | None) -> str:
-    """Get the full-size image URL."""
+    """Get the full-size (original) image URL."""
     if not filename:
         return ""
     return _asset_url("images", filename)
+
+
+def get_preview_url(filename: str | None) -> str:
+    """URL of the medium preview used by the photo viewer. Created on demand from
+    the original if it doesn't exist yet (so pre-existing photos get one on first
+    view). Falls back to the full-size URL if a preview can't be produced."""
+    if not filename:
+        return ""
+    p = ASSET_PREVIEW_PATH / filename
+    if not p.exists():
+        full = ASSET_IMAGE_PATH / filename
+        if full.exists():
+            try:
+                _write_preview(_ensure_pil(full.read_bytes()), filename)
+            except Exception:
+                pass
+    return _asset_url("previews", filename) if p.exists() else get_image_url(filename)
 
 
 def get_all_thumbnail_urls(filenames: list[str] | None) -> list[str]:
@@ -220,3 +273,10 @@ def get_all_image_urls(filenames: list[str] | None) -> list[str]:
     if not filenames:
         return []
     return [get_image_url(f) for f in filenames if f]
+
+
+def get_all_preview_urls(filenames: list[str] | None) -> list[str]:
+    """Get preview URLs for a list of filenames."""
+    if not filenames:
+        return []
+    return [get_preview_url(f) for f in filenames if f]

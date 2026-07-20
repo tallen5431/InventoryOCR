@@ -26,7 +26,7 @@ import invoice_parse
 import data  # for the shared, now materials-aware asset pruners
 from utils import (
     save_image, save_attachment, read_attachment_text,
-    get_thumbnail_url, get_image_url,
+    get_thumbnail_url, get_image_url, get_preview_url,
 )
 
 # Asset URL base (mirrors utils/callbacks so document links work behind Caddy).
@@ -78,6 +78,24 @@ def _human_size(n):
 def _doc_url(filename: str, *, download: bool = False) -> str:
     url = f"{ASSET_URL_BASE}/documents/{filename}"
     return url + "?download=1" if download else url
+
+
+def _fullres_links(originals):
+    """Footer control keeping the full-resolution originals one tap away while
+    the viewer shows the fast preview."""
+    originals = [u for u in (originals or []) if u]
+    if not originals:
+        return ""
+    if len(originals) == 1:
+        return html.A([html.I(className="bi bi-arrows-fullscreen me-1"),
+                       "View full resolution"],
+                      href=originals[0], target="_blank", rel="noopener noreferrer",
+                      className="text-decoration-none")
+    links = [html.Span("Full resolution: ", className="text-muted")]
+    for i, u in enumerate(originals):
+        links.append(html.A(str(i + 1), href=u, target="_blank",
+                            rel="noopener noreferrer", className="me-2"))
+    return html.Span(links)
 
 
 def _render_gallery(images, remove_type="op-mat-img-remove"):
@@ -144,6 +162,7 @@ def _build_mat_rows(mats, name_map):
         out.append({
             "id": m.get("id"),
             "image": f"![thumb]({thumb}){badge}" if thumb else "",
+            "all_previews": [get_preview_url(i) for i in images],
             "all_images": [get_image_url(i) for i in images],
             "name": m.get("name", ""),
             "material_type": m.get("material_type", ""),
@@ -761,6 +780,7 @@ def register_operations_callbacks(app):
         Output("op-image-modal", "is_open"),
         Output("op-image-modal-title", "children"),
         Output("op-image-carousel", "items"),
+        Output("op-image-modal-fullres", "children"),
         Input("op-mat-table", "active_cell"),
         State("op-mat-table", "data"),
         prevent_initial_call=True,
@@ -778,13 +798,14 @@ def register_operations_callbacks(app):
                 row = rows[i]
         if not row:
             raise PreventUpdate
-        imgs = row.get("all_images") or []
-        if not imgs:
+        previews = row.get("all_previews") or row.get("all_images") or []
+        originals = row.get("all_images") or []
+        if not previews:
             raise PreventUpdate
         items = [{"key": str(i), "src": u,
                   "img_style": {"maxHeight": "70vh", "objectFit": "contain"}}
-                 for i, u in enumerate(imgs)]
-        return True, row.get("name", ""), items
+                 for i, u in enumerate(previews)]
+        return True, row.get("name", ""), items, _fullres_links(originals)
 
     @app.callback(
         Output("op-image-modal", "is_open", allow_duplicate=True),

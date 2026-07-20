@@ -610,6 +610,7 @@ def inventory_table():
         {"name": "OCR Text", "id": "ocr_text", "hideable": True},
         {"name": "id", "id": "id", "hideable": True},
         {"name": "all_images", "id": "all_images", "hideable": True},
+        {"name": "all_previews", "id": "all_previews", "hideable": True},
         {"name": "_low", "id": "_low"},  # server-computed low-stock flag (hidden)
     ]
     table = dash_table.DataTable(
@@ -627,7 +628,8 @@ def inventory_table():
         filter_action="none",
         # Description is long; it's shown in full in the row's hover tooltip, so
         # keep it out of the default view. Re-show any of these via Toggle Columns.
-        hidden_columns=["id", "all_images", "ocr_text", "description", "reorder_at", "_low"],
+        hidden_columns=["id", "all_images", "all_previews", "ocr_text", "description",
+                        "reorder_at", "_low"],
         style_table={
             "height": "70vh",
             "overflowY": "auto",
@@ -1528,7 +1530,12 @@ def detail_panel():
                             ride=False,
                         )
                     ),
-                    dbc.ModalFooter(dbc.Button("Close", id="close-image-modal", className="ms-auto", n_clicks=0)),
+                    dbc.ModalFooter(
+                        [
+                            html.Div(id="image-modal-fullres", className="me-auto small"),
+                            dbc.Button("Close", id="close-image-modal", n_clicks=0),
+                        ]
+                    ),
                 ],
                 id="image-modal",
                 is_open=False,

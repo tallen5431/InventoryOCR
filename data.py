@@ -8,7 +8,8 @@ import re as _re_date
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from config import INVENTORY_JSON, ASSET_IMAGE_PATH, ASSET_THUMB_PATH, ASSET_DOCS_PATH
+from config import (INVENTORY_JSON, ASSET_IMAGE_PATH, ASSET_THUMB_PATH,
+                    ASSET_PREVIEW_PATH, ASSET_DOCS_PATH)
 
 # --------------------------------------------------------------------
 # Write serialization
@@ -827,7 +828,7 @@ def prune_unreferenced_images() -> int:
     referenced |= mat_refs
 
     removed = 0
-    for directory in (Path(ASSET_IMAGE_PATH), Path(ASSET_THUMB_PATH)):
+    for directory in (Path(ASSET_IMAGE_PATH), Path(ASSET_THUMB_PATH), Path(ASSET_PREVIEW_PATH)):
         if not directory.exists():
             continue
         for f in directory.iterdir():

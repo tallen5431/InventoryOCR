@@ -10,6 +10,10 @@ THUMB_DIR: Path = ASSETS_DIR / "thumbnails"
 # Attached documents (invoices, saved product pages, receipts, manuals…). Any
 # file type is kept here as a record; images/HTML are also parsed to fill fields.
 DOCS_DIR: Path = ASSETS_DIR / "documents"
+# Medium-size "preview" images for fast lightbox loads over the internet / on a
+# phone. The full-resolution original is always kept in IMAGE_DIR and stays one
+# tap away; the preview is what the photo viewer loads by default.
+PREVIEW_DIR: Path = ASSETS_DIR / "previews"
 DATA_FILE: Path = BASE_DIR / "inventory.json"
 # Operations module data. Materials (boards, packaging, shipping supplies,
 # marketing…) and the production Batches they roll up into live in their own
@@ -19,7 +23,7 @@ MATERIALS_FILE: Path = BASE_DIR / "materials.json"
 BATCHES_FILE: Path = BASE_DIR / "batches.json"
 
 # Ensure folders exist
-for p in (ASSETS_DIR, IMAGE_DIR, THUMB_DIR, DOCS_DIR):
+for p in (ASSETS_DIR, IMAGE_DIR, THUMB_DIR, DOCS_DIR, PREVIEW_DIR):
     p.mkdir(parents=True, exist_ok=True)
 for _f in (DATA_FILE, MATERIALS_FILE, BATCHES_FILE):
     if not _f.exists():
@@ -59,9 +63,27 @@ TOAST_DURATION = 3500
 LOW_STOCK_THRESHOLD = 5
 OCR_TEXT_MAX_CHARS = 400
 
+# ---------- Image serving / mobile performance ----------
+# The photo viewer loads a downscaled "preview" (longest edge <= PREVIEW_MAX_EDGE,
+# re-encoded at PREVIEW_QUALITY) instead of the multi-MB original, which is what
+# makes viewing snappy over the internet. The original is untouched on disk and
+# reachable via the "View full resolution" link. Tune with env vars if needed.
+try:
+    PREVIEW_MAX_EDGE = int(os.getenv("INVENTORY_PREVIEW_MAX_EDGE", "1600"))
+except (TypeError, ValueError):
+    PREVIEW_MAX_EDGE = 1600
+try:
+    PREVIEW_QUALITY = int(os.getenv("INVENTORY_PREVIEW_QUALITY", "82"))
+except (TypeError, ValueError):
+    PREVIEW_QUALITY = 82
+# Content-addressed asset filenames (…-<ms>.<ext>) never change, so they can be
+# cached hard. Seconds in the Cache-Control max-age (1 year) + "immutable".
+ASSET_CACHE_MAX_AGE = 31536000
+
 # Public helpers (used by other modules)
 ASSET_IMAGE_PATH = IMAGE_DIR
 ASSET_THUMB_PATH = THUMB_DIR
+ASSET_PREVIEW_PATH = PREVIEW_DIR
 ASSET_DOCS_PATH = DOCS_DIR
 INVENTORY_JSON = DATA_FILE
 MATERIALS_JSON = MATERIALS_FILE
