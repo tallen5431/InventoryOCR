@@ -37,7 +37,12 @@ _ORDER_RE = re.compile(
 # Money / totals
 # --------------------------------------------------------------------------
 _CUR = r"(?:USD|US\$|\$|£|€|CAD|AUD)"
-_AMT = r"\d[\d,]*(?:\.\d{2})?"
+# Allow 1 OR 2 decimal places so "$5.5" isn't truncated to "$5"; still tolerates
+# a whole-number amount ("$5").
+_AMT = r"\d[\d,]*(?:\.\d{1,2})?"
+# Symbol-less fallback amount: decimals are REQUIRED here, so a bare count like
+# "Total: 5 items" is not mistaken for a price while "Total 23.98" still matches.
+_AMT_DEC = r"\d[\d,]*\.\d{1,2}"
 # Prefer a labelled grand/order total over an unlabelled number. Ordered by how
 # trustworthy the label is.
 _TOTAL_LABELS = [
@@ -53,8 +58,15 @@ _TOTAL_LABELS = [
 ]
 # The leading \b keeps "total" from matching inside "subtotal" — a receipt's
 # subtotal must never be picked over its grand total.
-_TOTAL_RES = [
+# Two forms per label: currency-before-amount ("Total: $23.98", most trustworthy)
+# and a symbol-less fallback ("Total 23.98", "Total 23.98 USD" with an optional
+# trailing code). Both are tried per label in priority order (see _find_total).
+_TOTAL_RES_CUR = [
     re.compile(rf"\b{lbl}\s*[:\-]?\s*({_CUR})\s*({_AMT})", re.IGNORECASE)
+    for lbl in _TOTAL_LABELS
+]
+_TOTAL_RES_BARE = [
+    re.compile(rf"\b{lbl}\s*[:\-]?\s*({_AMT_DEC})\s*({_CUR})?", re.IGNORECASE)
     for lbl in _TOTAL_LABELS
 ]
 
@@ -166,12 +178,20 @@ def _find_date(text: str) -> str:
 
 
 def _find_total(text: str) -> str:
-    for rx in _TOTAL_RES:
-        m = rx.search(text)
+    def _fmt(cur: Optional[str], amt: str) -> str:
+        cur = (cur or "$").upper().replace("US$", "$").replace("USD", "$")
+        return f"{cur}{amt}"
+    # Walk labels in trust order (grand total > … > total). For each label prefer
+    # a currency-qualified amount, then fall back to a symbol-less decimal amount
+    # with an optional trailing currency code.
+    for i in range(len(_TOTAL_LABELS)):
+        m = _TOTAL_RES_CUR[i].search(text)
         if m:
-            cur = m.group(1).upper().replace("US$", "$").replace("USD", "$")
-            amt = m.group(2)
-            return f"{cur}{amt}"
+            return _fmt(m.group(1), m.group(2))
+        m = _TOTAL_RES_BARE[i].search(text)
+        if m:
+            # group(1)=amount, group(2)=optional trailing currency
+            return _fmt(m.group(2), m.group(1))
     return ""
 
 
