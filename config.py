@@ -11,12 +11,19 @@ THUMB_DIR: Path = ASSETS_DIR / "thumbnails"
 # file type is kept here as a record; images/HTML are also parsed to fill fields.
 DOCS_DIR: Path = ASSETS_DIR / "documents"
 DATA_FILE: Path = BASE_DIR / "inventory.json"
+# Operations module data. Materials (boards, packaging, shipping supplies,
+# marketing…) and the production Batches they roll up into live in their own
+# files, kept separate from the sellable inventory but sharing the same
+# assets/ dirs (images/thumbnails/documents) and helper code.
+MATERIALS_FILE: Path = BASE_DIR / "materials.json"
+BATCHES_FILE: Path = BASE_DIR / "batches.json"
 
 # Ensure folders exist
 for p in (ASSETS_DIR, IMAGE_DIR, THUMB_DIR, DOCS_DIR):
     p.mkdir(parents=True, exist_ok=True)
-if not DATA_FILE.exists():
-    DATA_FILE.write_text("[]", encoding="utf-8")
+for _f in (DATA_FILE, MATERIALS_FILE, BATCHES_FILE):
+    if not _f.exists():
+        _f.write_text("[]", encoding="utf-8")
 
 # ---------- Tesseract wiring ----------
 TESSERACT_DIR = BASE_DIR / "Tesseract-OCR"
@@ -57,3 +64,5 @@ ASSET_IMAGE_PATH = IMAGE_DIR
 ASSET_THUMB_PATH = THUMB_DIR
 ASSET_DOCS_PATH = DOCS_DIR
 INVENTORY_JSON = DATA_FILE
+MATERIALS_JSON = MATERIALS_FILE
+BATCHES_JSON = BATCHES_FILE

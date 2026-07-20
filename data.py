@@ -813,6 +813,19 @@ def prune_unreferenced_images() -> int:
         if old:
             referenced.add(old)
 
+    # The Operations module (materials) shares assets/images & assets/thumbnails
+    # with the inventory. Count its references too, or deleting an inventory item
+    # would orphan-prune a material's photo. If that file is unreadable we can't
+    # tell what's in use — bail rather than risk deleting live assets.
+    try:
+        import operations_data
+        mat_refs = operations_data.referenced_image_filenames()
+    except Exception:
+        mat_refs = None
+    if mat_refs is None:
+        return 0
+    referenced |= mat_refs
+
     removed = 0
     for directory in (Path(ASSET_IMAGE_PATH), Path(ASSET_THUMB_PATH)):
         if not directory.exists():
@@ -844,6 +857,17 @@ def prune_unreferenced_documents() -> int:
             fn = str(a.get("filename") or "").strip()
             if fn:
                 referenced.add(fn)
+
+    # Materials share assets/documents with the inventory — count their attached
+    # invoices/specs too (bail if unreadable, as above).
+    try:
+        import operations_data
+        mat_refs = operations_data.referenced_document_filenames()
+    except Exception:
+        mat_refs = None
+    if mat_refs is None:
+        return 0
+    referenced |= mat_refs
 
     removed = 0
     directory = Path(ASSET_DOCS_PATH)

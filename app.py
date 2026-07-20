@@ -41,11 +41,13 @@ from components import (
 # Page layouts
 from components_ocr_lab import ocr_lab_layout
 from components_price_compare import price_compare_layout
+from components_operations import operations_layout
 
 # Callback registrars
 from callbacks import register_callbacks
 from callbacks_ocr_lab import register_ocr_lab_callbacks
 from callbacks_price_compare import register_price_compare_callbacks
+from callbacks_operations import register_operations_callbacks
 
 BOOTSTRAP_ICONS = "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
 
@@ -278,6 +280,7 @@ navbar = dbc.Navbar(
             dbc.Nav(
                 [
                     dbc.NavItem(dbc.NavLink("Dashboard", href="/", external_link=False)),
+                    dbc.NavItem(dbc.NavLink("🏭 Operations", href="/operations", external_link=False)),
                     dbc.NavItem(dbc.NavLink("🧪 OCR Lab", href="/ocr-lab", external_link=False)),
                     dbc.NavItem(dbc.NavLink("💲 Price Compare", href="/price-compare", external_link=False)),
                 ],
@@ -383,7 +386,8 @@ app.layout = html.Div(
 )
 
 # Important: let Dash see all components/IDs across pages
-app.validation_layout = html.Div([dashboard_layout(), ocr_lab_layout(), price_compare_layout()])
+app.validation_layout = html.Div([dashboard_layout(), ocr_lab_layout(),
+                                  price_compare_layout(), operations_layout()])
 
 # ---------- Router ----------
 @app.callback(Output("page-content", "children"), Input("url", "pathname"), prevent_initial_call=False)
@@ -394,6 +398,8 @@ def display_page(pathname):
             return ocr_lab_layout()
         if key == "/price-compare":
             return price_compare_layout()
+        if key == "/operations":
+            return operations_layout()
         return dashboard_layout()
     except Exception:
         return html.Pre("display_page error:\n" + traceback.format_exc())
@@ -463,6 +469,7 @@ def _diag(_, path):
 register_callbacks(app)
 register_ocr_lab_callbacks(app)
 register_price_compare_callbacks(app)
+register_operations_callbacks(app)
 
 if __name__ == "__main__":
     from waitress import serve
