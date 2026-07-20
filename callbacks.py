@@ -6,14 +6,21 @@ from dash.exceptions import PreventUpdate
 import data
 from utils import (
     save_image, get_thumbnail_url, get_image_url, get_preview_url,
-    save_attachment, read_attachment_text, attachment_kind,
+    save_attachment, read_attachment_text,
+)
+# Pure formatters + component builders shared with the Operations tab
+# (ui_helpers is the single home for these; see that module for why the data
+# normalizers are deliberately NOT shared).
+from ui_helpers import (
+    specs_to_text as _specs_to_text, tags_to_text as _tags_to_text,
+    fullres_links as _fullres_links, attachment_list as _render_attachments,
+    photo_gallery,
 )
 from config import ASSET_IMAGE_PATH, OCR_TEXT_MAX_CHARS
 
 URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
 if URL_PREFIX and not URL_PREFIX.startswith("/"):
     URL_PREFIX = "/" + URL_PREFIX
-ASSET_URL_BASE = f"{URL_PREFIX}/assets" if URL_PREFIX else "/assets"
 
 # How much of the description to show inline before truncating (full text + the
 # extracted specs live in the row's hover tooltip).
@@ -25,37 +32,6 @@ def _parse_qty(q):
         return n if n >= 0 else 0
     except Exception:
         return 0
-
-def _specs_to_text(specs):
-    """Render a stored specifications list as one-per-line text for the textarea."""
-    if isinstance(specs, list):
-        return "\n".join(str(s) for s in specs if str(s).strip())
-    return str(specs or "")
-
-def _tags_to_text(tags):
-    """Render a stored tags list as a comma-separated string for the input."""
-    if isinstance(tags, list):
-        return ", ".join(str(t) for t in tags if str(t).strip())
-    return str(tags or "")
-
-
-def _fullres_links(originals):
-    """Footer control that keeps the full-resolution originals one tap away when
-    the viewer is showing the fast preview. One link for a single photo, numbered
-    links when there are several."""
-    originals = [u for u in (originals or []) if u]
-    if not originals:
-        return ""
-    if len(originals) == 1:
-        return html.A([html.I(className="bi bi-arrows-fullscreen me-1"),
-                       "View full resolution"],
-                      href=originals[0], target="_blank", rel="noopener noreferrer",
-                      className="text-decoration-none")
-    links = [html.Span("Full resolution: ", className="text-muted")]
-    for i, u in enumerate(originals):
-        links.append(html.A(str(i + 1), href=u, target="_blank",
-                            rel="noopener noreferrer", className="me-2"))
-    return html.Span(links)
 
 def _build_rows(filtered):
     out_rows = []
@@ -851,106 +827,9 @@ def _raw_rows(names, bags, slots):
     return out
 
 
-_ATTACH_ICON = {"image": "bi-file-image", "html": "bi-filetype-html",
-                "pdf": "bi-file-pdf", "other": "bi-file-earmark"}
-
-
-def _human_size(n) -> str:
-    try:
-        size = float(n or 0)
-    except (TypeError, ValueError):
-        return ""
-    if size <= 0:
-        return ""
-    for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024 or unit == "GB":
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024.0
-    return ""
-
-
-def _doc_url(filename: str, *, download: bool = False) -> str:
-    url = f"{ASSET_URL_BASE}/documents/{filename}"
-    return url + "?download=1" if download else url
-
-
-def _render_attachments(atts, remove_type="attach-remove"):
-    """A compact list of attached documents: icon, name, size, view + remove.
-
-    ``remove_type`` names the pattern-matching id of the × button so the main
-    form and the Quick Add wizard get independent remove wiring. Pass ``None`` to
-    render a read-only list with no remove button.
-    """
-    atts = atts or []
-    if not atts:
-        return html.Div("No documents attached yet.", className="text-muted small")
-    rows = []
-    for i, a in enumerate(atts):
-        fn = a.get("filename", "")
-        icon = _ATTACH_ICON.get(a.get("kind", "other"), "bi-file-earmark")
-        size = _human_size(a.get("size"))
-        meta = " · ".join([x for x in [a.get("kind", ""), size] if x])
-        line = [
-            html.I(className=f"bi {icon} me-2 text-secondary"),
-            html.A(
-                a.get("original_name") or fn,
-                href=_doc_url(fn),
-                target="_blank",
-                rel="noopener noreferrer",
-                className="text-truncate me-2",
-                style={"maxWidth": "60%"},
-            ),
-            html.Span(meta, className="text-muted small me-2"),
-            html.A(
-                html.I(className="bi bi-download"),
-                href=_doc_url(fn, download=True),
-                className="btn btn-sm btn-outline-secondary py-0 px-1 me-1",
-                title="Download",
-            ),
-        ]
-        if remove_type:
-            line.append(
-                dbc.Button(
-                    html.I(className="bi bi-x-lg"),
-                    id={"type": remove_type, "index": i},
-                    color="outline-danger",
-                    size="sm",
-                    className="py-0 px-1",
-                    title="Remove this attachment",
-                    n_clicks=0,
-                )
-            )
-        rows.append(html.Div(line, className="d-flex align-items-center border rounded px-2 py-1 mb-1"))
-    return html.Div(rows)
-
-
 def _qa_photo_gallery(photos):
     """Read-with-remove thumbnail strip for the Quick Add photo step."""
-    photos = photos or []
-    items = []
-    for i, fn in enumerate(photos):
-        thumb = get_thumbnail_url(fn)
-        if not thumb:
-            continue
-        items.append(
-            html.Div(
-                [
-                    html.Img(src=thumb, className="gallery-thumb"),
-                    html.Button(
-                        "×",
-                        id={"type": "qa-photo-remove", "index": i},
-                        className="btn btn-sm btn-danger delete-img-btn",
-                        title="Remove photo",
-                        n_clicks=0,
-                    ),
-                    html.Div(f"Photo {i + 1}", className="text-muted small text-center"),
-                ],
-                className="gallery-item",
-            )
-        )
-    if not items:
-        return html.Div("No photos yet.", className="text-muted small")
-    return html.Div(items, className="image-gallery-grid")
+    return photo_gallery(photos, "qa-photo-remove")
 
 
 def _batch_preview(photos):
@@ -958,33 +837,13 @@ def _batch_preview(photos):
     photos = photos or []
     if not photos:
         return html.Div("No photos yet — add some above.", className="text-muted small")
-    items = []
-    for i, fn in enumerate(photos):
-        thumb = get_thumbnail_url(fn)
-        if not thumb:
-            continue
-        items.append(
-            html.Div(
-                [
-                    html.Img(src=thumb, className="gallery-thumb"),
-                    html.Button(
-                        "×",
-                        id={"type": "batch-photo-remove", "index": i},
-                        className="btn btn-sm btn-danger delete-img-btn",
-                        title="Remove photo",
-                        n_clicks=0,
-                    ),
-                ],
-                className="gallery-item",
-            )
-        )
     n = len(photos)
     header = html.Div(
         [html.Strong(f"{n} photo{'s' if n != 1 else ''}"),
          html.Span(f" → {n} item{'s' if n != 1 else ''} will be created", className="text-muted")],
         className="small mb-1",
     )
-    return html.Div([header, html.Div(items, className="image-gallery-grid")])
+    return html.Div([header, photo_gallery(photos, "batch-photo-remove", labels=False)])
 
 
 def _qa_apply_parsed(d, cur_name, cur_cat, cur_value, cur_extra, cur_src):

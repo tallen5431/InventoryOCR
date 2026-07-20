@@ -16,7 +16,6 @@ from __future__ import annotations
 import csv
 import io
 import itertools
-import os
 
 from dash import Input, Output, State, ctx, no_update, ALL, html, dcc
 import dash_bootstrap_components as dbc
@@ -29,17 +28,11 @@ from utils import (
     save_image, save_attachment, read_attachment_text,
     get_thumbnail_url, get_image_url, get_preview_url,
 )
-
-# Asset URL base (mirrors utils/callbacks so document links work behind Caddy).
-URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
-if URL_PREFIX and not URL_PREFIX.startswith("/"):
-    URL_PREFIX = "/" + URL_PREFIX
-ASSET_URL_BASE = f"{URL_PREFIX}/assets" if URL_PREFIX else "/assets"
-
-_ATTACH_ICON = {
-    "image": "bi-file-earmark-image", "html": "bi-filetype-html",
-    "pdf": "bi-file-earmark-pdf", "other": "bi-file-earmark",
-}
+# Pure formatters + component builders shared with the inventory dashboard.
+from ui_helpers import (
+    money, specs_to_text, tags_to_text, fullres_links,
+    attachment_list, photo_gallery,
+)
 
 # Every mutation writes a fresh, strictly-increasing token into the op-refresh
 # store so the table/KPI/batch reader callbacks always re-fire. Summing n_clicks
@@ -64,112 +57,16 @@ def _on_ops_page(pathname) -> bool:
 
 
 # --------------------------------------------------------------------
-# Small rendering helpers
+# Small rendering wrappers — one true implementation lives in ui_helpers;
+# these just bind the Operations tab's pattern-matching remove-button ids.
 # --------------------------------------------------------------------
 
-def _money(v):
-    return f"${v:,.2f}" if isinstance(v, (int, float)) else "—"
-
-
-def _specs_to_text(specs):
-    if isinstance(specs, list):
-        return "\n".join(str(s) for s in specs if str(s).strip())
-    return str(specs or "")
-
-
-def _tags_to_text(tags):
-    if isinstance(tags, list):
-        return ", ".join(str(t) for t in tags if str(t).strip())
-    return str(tags or "")
-
-
-def _human_size(n):
-    try:
-        size = float(n)
-    except (TypeError, ValueError):
-        return ""
-    if size <= 0:
-        return ""
-    for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024 or unit == "GB":
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024.0
-    return ""
-
-
-def _doc_url(filename: str, *, download: bool = False) -> str:
-    url = f"{ASSET_URL_BASE}/documents/{filename}"
-    return url + "?download=1" if download else url
-
-
-def _fullres_links(originals):
-    """Footer control keeping the full-resolution originals one tap away while
-    the viewer shows the fast preview."""
-    originals = [u for u in (originals or []) if u]
-    if not originals:
-        return ""
-    if len(originals) == 1:
-        return html.A([html.I(className="bi bi-arrows-fullscreen me-1"),
-                       "View full resolution"],
-                      href=originals[0], target="_blank", rel="noopener noreferrer",
-                      className="text-decoration-none")
-    links = [html.Span("Full resolution: ", className="text-muted")]
-    for i, u in enumerate(originals):
-        links.append(html.A(str(i + 1), href=u, target="_blank",
-                            rel="noopener noreferrer", className="me-2"))
-    return html.Span(links)
-
-
 def _render_gallery(images, remove_type="op-mat-img-remove"):
-    images = images or []
-    items = []
-    for i, fn in enumerate(images):
-        thumb = get_thumbnail_url(fn)
-        if not thumb:
-            continue
-        items.append(
-            html.Div(
-                [
-                    html.Img(src=thumb, className="gallery-thumb"),
-                    html.Button("×", id={"type": remove_type, "index": i},
-                                className="btn btn-sm btn-danger delete-img-btn",
-                                title="Remove photo", n_clicks=0),
-                    html.Div(f"Photo {i + 1}", className="text-muted small text-center"),
-                ],
-                className="gallery-item",
-            )
-        )
-    if not items:
-        return html.Div("No photos yet.", className="text-muted small")
-    return html.Div(items, className="image-gallery-grid")
+    return photo_gallery(images, remove_type)
 
 
 def _render_doc_list(atts, remove_type="op-mat-doc-remove"):
-    atts = atts or []
-    if not atts:
-        return html.Div("No documents attached yet.", className="text-muted small")
-    rows = []
-    for i, a in enumerate(atts):
-        fn = a.get("filename", "")
-        icon = _ATTACH_ICON.get(a.get("kind", "other"), "bi-file-earmark")
-        meta = " · ".join([x for x in [a.get("kind", ""), _human_size(a.get("size"))] if x])
-        line = [
-            html.I(className=f"bi {icon} me-2 text-secondary"),
-            html.A(a.get("original_name") or fn, href=_doc_url(fn), target="_blank",
-                   rel="noopener noreferrer", className="text-truncate me-2",
-                   style={"maxWidth": "55%"}),
-            html.Span(meta, className="text-muted small me-2"),
-            html.A(html.I(className="bi bi-download"), href=_doc_url(fn, download=True),
-                   className="btn btn-sm btn-outline-secondary py-0 px-1 me-1", title="Download"),
-        ]
-        if remove_type:
-            line.append(
-                dbc.Button(html.I(className="bi bi-x-lg"),
-                           id={"type": remove_type, "index": i}, color="outline-danger",
-                           size="sm", className="py-0 px-1", title="Remove", n_clicks=0)
-            )
-        rows.append(html.Div(line, className="d-flex align-items-center border rounded px-2 py-1 mb-1"))
-    return html.Div(rows)
+    return attachment_list(atts, remove_type)
 
 
 def _build_mat_rows(mats, name_map):
@@ -191,7 +88,7 @@ def _build_mat_rows(mats, name_map):
             "batch": name_map.get(bid, "") if bid is not None else "",
             "qty": m.get("qty", 0),
             "unit_cost": m.get("unit_cost", "") or "—",
-            "total_display": _money(cost),
+            "total_display": money(cost),
             "vendor": m.get("vendor", ""),
             "purchase_date": m.get("purchase_date", ""),
             "docs": f"📎 {len(m.get('attachments') or [])}" if m.get("attachments") else "",
@@ -227,11 +124,11 @@ def _batch_card(rollup, mat_options):
     # Cost headline
     metrics = dbc.Row(
         [
-            dbc.Col(html.Div([html.Div(_money(total), className="fw-bold fs-5 text-success"),
+            dbc.Col(html.Div([html.Div(money(total), className="fw-bold fs-5 text-success"),
                               html.Div("materials cost", className="text-muted small")]), xs=4),
             dbc.Col(html.Div([html.Div(str(units) if units else "—", className="fw-bold fs-5"),
                               html.Div("units made", className="text-muted small")]), xs=4),
-            dbc.Col(html.Div([html.Div(_money(per_unit) if per_unit is not None else "—",
+            dbc.Col(html.Div([html.Div(money(per_unit) if per_unit is not None else "—",
                                        className="fw-bold fs-5 text-warning"),
                               html.Div("cost / unit", className="text-muted small")]), xs=4),
         ],
@@ -246,7 +143,7 @@ def _batch_card(rollup, mat_options):
                 html.Td(m.get("name", "")),
                 html.Td(m.get("material_type", ""), className="text-muted small"),
                 html.Td(str(m.get("qty", 0)), className="text-center"),
-                html.Td(_money(od.material_cost(m)), className="text-end"),
+                html.Td(money(od.material_cost(m)), className="text-end"),
                 html.Td(
                     dbc.Button(html.I(className="bi bi-x-lg"),
                                id={"type": "op-batch-remove-mat", "index": m.get("id")},
@@ -342,7 +239,7 @@ def _render_batch_list():
         bid = m.get("batch_id")
         where = f"in: {name_map.get(bid)}" if bid is not None else "unassigned"
         cost = od.material_cost(m)
-        cost_s = f" · {_money(cost)}" if cost is not None else ""
+        cost_s = f" · {money(cost)}" if cost is not None else ""
         return f"{m.get('name','')} ({where}{cost_s})"
 
     mat_options = [{"label": _opt_label(m), "value": m.get("id")} for m in mats]
@@ -391,9 +288,9 @@ def register_operations_callbacks(app):
             _build_mat_rows(rows, name_map),
             _mat_tooltips(rows),
             str(s["materials"]),
-            _money(s["spend"]),
+            money(s["spend"]),
             str(s["batches"]),
-            _money(s["avg_cost_per_unit"]) if s["avg_cost_per_unit"] is not None else "—",
+            money(s["avg_cost_per_unit"]) if s["avg_cost_per_unit"] is not None else "—",
         )
 
     # ---------------- Dropdown options + datalists (OWNER) -------------------
@@ -735,8 +632,8 @@ def register_operations_callbacks(app):
                         "unit": m.get("unit_cost", ""), "total": m.get("total_cost", ""),
                         "order": m.get("order_number", ""), "date": m.get("purchase_date", ""),
                         "desc": m.get("description", ""),
-                        "specs": _specs_to_text(m.get("specifications", [])),
-                        "tags": _tags_to_text(m.get("tags", [])),
+                        "specs": specs_to_text(m.get("specifications", [])),
+                        "tags": tags_to_text(m.get("tags", [])),
                         "images": list(m.get("images", [])),
                         "gallery": _render_gallery(m.get("images", [])),
                         "atts": list(m.get("attachments", [])),
@@ -853,7 +750,7 @@ def register_operations_callbacks(app):
         items = [{"key": str(i), "src": u,
                   "img_style": {"maxHeight": "70vh", "objectFit": "contain"}}
                  for i, u in enumerate(previews)]
-        return True, row.get("name", ""), items, _fullres_links(originals)
+        return True, row.get("name", ""), items, fullres_links(originals)
 
     @app.callback(
         Output("op-image-modal", "is_open", allow_duplicate=True),
