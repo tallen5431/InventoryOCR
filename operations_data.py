@@ -636,9 +636,12 @@ def remove_batch(batch_id: int) -> Optional[Dict[str, Any]]:
     return removed
 
 
+@_synchronized
 def find_or_create_batch(name: str) -> Optional[Dict[str, Any]]:
     """Return the batch with this name (case-insensitive), creating it if new.
-    Blank name → ``None`` (nothing to create)."""
+    Blank name → ``None`` (nothing to create). Synchronized so the check-then-
+    create is atomic — two concurrent saves of the same new name can't create
+    duplicate batches (add_batch's lock is reentrant, so nesting is safe)."""
     nm = (name or "").strip()
     if not nm:
         return None

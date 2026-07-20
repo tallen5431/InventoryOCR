@@ -53,6 +53,16 @@ def _token():
     return next(_REFRESH_SEQ)
 
 
+def _on_ops_page(pathname) -> bool:
+    """True when the current route is the Operations tab. The reader callbacks
+    take url.pathname as an Input (so they populate on navigation), which means
+    they'd otherwise re-read the JSON files and rebuild batch cards on EVERY
+    navigation app-wide. Their outputs only exist on this page, and every
+    mutation happens here too, so short-circuiting elsewhere is safe."""
+    last = (pathname or "").split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    return last == "operations"
+
+
 # --------------------------------------------------------------------
 # Small rendering helpers
 # --------------------------------------------------------------------
@@ -362,6 +372,8 @@ def register_operations_callbacks(app):
         prevent_initial_call=False,
     )
     def render_materials(_refresh, search, ftype, fbatch, _path):
+        if not _on_ops_page(_path):
+            raise PreventUpdate
         mats = od.materials()
         name_map = od.batch_name_map()
 
@@ -397,6 +409,8 @@ def register_operations_callbacks(app):
         prevent_initial_call=False,
     )
     def populate_options(_refresh, _path):
+        if not _on_ops_page(_path):
+            raise PreventUpdate
         mats = od.materials()
         bats = od.batches()
         types = od.material_types(mats)
@@ -866,6 +880,8 @@ def register_operations_callbacks(app):
         prevent_initial_call=False,
     )
     def render_batches(_refresh, _tab, _path):
+        if not _on_ops_page(_path):
+            raise PreventUpdate
         return _render_batch_list()
 
     # ---------------- Batch form: create / edit / cancel -------------------
