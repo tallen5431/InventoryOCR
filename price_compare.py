@@ -41,6 +41,12 @@ def _parse_price(text: str) -> Optional[float]:
     # European decimal ("8,99" / "1.299,00") — comma as the decimal separator.
     if re.search(r"\d,\d{2}(?:\D|$)", s) and not re.search(r"\d\.\d{2}(?:\D|$)", s):
         s = s.replace(".", "").replace(",", ".")
+    # Dot used as a THOUSANDS separator with no decimal part ("1.234" = 1234,
+    # "1.234.567" = 1234567). Only fires when the whole number is proper 3-digit
+    # grouping and there's no comma — so a normal decimal like "19.99" (2 digits)
+    # is left alone. Without this, "€1.234" was misread as 1.23 (off by ~1000x).
+    elif "," not in s and re.search(r"(?<!\d)\d{1,3}(?:\.\d{3})+(?!\d)", s):
+        s = re.sub(r"(?<=\d)\.(?=\d{3}(?:\D|$))", "", s)
     # Grab the first number that looks like money (allow thousands separators).
     m = re.search(r"(\d[\d,]*(?:\.\d+)?)", s)
     if not m:
@@ -252,14 +258,31 @@ def analyze_htmls(files: List[Tuple[str, str]]) -> Dict[str, Any]:
     return {"products": ranked, "errors": errors, "best": best}
 
 
+def _priced(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [p for p in products if p.get("unit_price") is not None]
+
+
+def _one_currency(priced: List[Dict[str, Any]]) -> bool:
+    """True when every priced product shares a currency, so unit prices are
+    actually comparable. Comparing €3.00 against $4.00 as bare floats would
+    otherwise crown the euro item 'best value' — apples to oranges."""
+    return len({p.get("currency") for p in priced}) <= 1
+
+
 def _rank(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Sort cheapest unit-price first (unknowns last) and flag the winner."""
+    """Sort cheapest unit-price first (unknowns last) and flag the winner.
+
+    The 'best' flag is only set when all priced listings share one currency;
+    across mixed currencies the sort still shows an order but no winner is
+    declared, since the comparison wouldn't be meaningful.
+    """
     def key(p):
         up = p.get("unit_price")
         return (0, up) if up is not None else (1, 0.0)
     ranked = sorted(products, key=key)
+    comparable = _one_currency(_priced(ranked))
     for i, p in enumerate(ranked):
-        p["best"] = bool(i == 0 and p.get("unit_price") is not None)
+        p["best"] = bool(i == 0 and p.get("unit_price") is not None and comparable)
     return ranked
 
 
@@ -349,12 +372,13 @@ def save_snapshot(label: str, products: List[Dict[str, Any]]) -> Dict[str, Any]:
     else:
         search["label"] = label  # keep the freshest display label
 
-    valid = [p.get("unit_price") for p in products if p.get("unit_price") is not None]
-    best = min(valid) if valid else None
+    # Only record a "best" when the priced listings share a currency — otherwise
+    # a euro price could be recorded as beating a dollar price (see _one_currency).
+    priced = _priced(products)
     best_p = None
-    if best is not None:
-        best_p = min((p for p in products if p.get("unit_price") is not None),
-                     key=lambda p: p["unit_price"])
+    if priced and _one_currency(priced):
+        best_p = min(priced, key=lambda p: p["unit_price"])
+    best = best_p["unit_price"] if best_p else None
     snap = {
         "date": _today(),
         "count": len(products),
