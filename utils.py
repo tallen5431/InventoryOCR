@@ -30,7 +30,14 @@ else:
 
 def _decode_upload(contents: str) -> tuple[bytes, str]:
     """dcc.Upload contents -> (bytes, ext)"""
-    header, b64 = contents.split(",", 1)
+    # dcc.Upload payloads are data URIs ("data:<mime>;base64,<b64>"), but guard
+    # against a header-less/base64-only string so we don't raise ValueError on
+    # split — save_attachment already handles this same case defensively.
+    contents = contents or ""
+    if "," in contents:
+        header, b64 = contents.split(",", 1)
+    else:
+        header, b64 = "", contents
     raw = base64.b64decode(b64)
     # Try to infer extension from header
     ext = "png"

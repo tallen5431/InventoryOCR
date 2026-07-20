@@ -101,15 +101,24 @@ def detect_quantity(name: str, specs: Optional[List[str]] = None,
     # "Pack of 6", "Set of 3", "Box of 24"
     for m in re.finditer(rf"\b({_UNIT_WORDS})\s+of\s+(\d[\d,]*)", text, re.I):
         _add(m.group(2).replace(",", ""), _norm_unit(m.group(1)))
-    # "x100" bundle notation ("x" THEN the count) — but NOT a dimension like
-    # "16x24" (digits on both sides) nor an 'x' buried in a model number like
-    # "MAX7219" (x preceded by a letter), so the 'x' must sit at a token boundary.
+    # "x100" bundle notation ("x" THEN the count) — e.g. "Cable Ties x100".
+    # Dimensions look almost identical, so guard hard against them: the lookbehind
+    # rejects an 'x' glued to a model number ("MAX7219") or a glued dimension
+    # ("16x24"), and we further skip when a NUMBER precedes the 'x' with spaces
+    # ("16 x 24", "M8 x 100mm" — a size, not a pack) or when a measurement unit
+    # immediately follows the count. Without these, "16 x 24 inch Poster Frame"
+    # was read as a 24-pack and divided the price by 24.
     # NOTE: the reverse "100x" form is deliberately NOT matched — it can't be told
-    # apart from a magnification ("40X-1000X microscope", "10X loupe"), which would
-    # otherwise be misread as a huge pack and wreck the per-unit value. Real packs
+    # apart from a magnification ("40X-1000X microscope", "10X loupe"). Real packs
     # written that way almost always carry a unit word ("100 pcs", "6-pack") caught
     # above, so nothing useful is lost.
+    _dim_units = ("mm", "cm", "in", "ft", "inch", '"', "'")
     for m in re.finditer(r"(?<![A-Za-z0-9])x\s*(\d{2,})(?!\s*[x\d])", text, re.I):
+        prefix = text[:m.start()].rstrip()
+        if prefix and prefix[-1].isdigit():
+            continue  # a number before the 'x' → dimension, not a bundle
+        if text[m.end():].lstrip().lower().startswith(_dim_units):
+            continue  # a measurement unit after the count → dimension
         _add(m.group(1), "each")
     # "Qty: 50" / "Quantity 50"
     for m in re.finditer(r"\b(?:qty|quantity)\.?\s*[:=]?\s*(\d[\d,]*)", text, re.I):

@@ -46,6 +46,9 @@ def plan_name_cleanup(rows: List[Dict[str, Any]]) -> List[Tuple[int, str, str]]:
             # untouched rather than create a duplicate.
             continue
         plan.append((rid, old, new))
+        # Claim the new name for THIS run too, so a later row that condenses to
+        # the same short name is skipped instead of producing a duplicate.
+        taken[new.strip().lower()] = rid
     return plan
 
 

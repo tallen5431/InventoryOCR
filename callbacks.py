@@ -1141,6 +1141,7 @@ def register_callbacks(app):
                 p_seller = (seller or "").strip()
                 atts = list(current_attachments or [])
 
+                saved_ok = True
                 try:
                     if editing_id:
                         # preserve existing ocr_text if not part of this form
@@ -1163,13 +1164,19 @@ def register_callbacks(app):
                                       purchase_date=p_date, price_paid=p_price, seller=p_seller)
                         toast_header, toast_icon, toast_msg = "Item Added", "success", f'"{nm}" added.'
                 except ValueError as e:
-                    toast_header, toast_icon, toast_msg = "Duplicate Name", "danger", str(e)
+                    # Save failed (duplicate name, or the edited item vanished).
+                    # Keep the form and any staged photos/attachments intact so the
+                    # user can fix the name and retry — don't clear on failure.
+                    saved_ok = False
+                    hdr = "Duplicate Name" if "already exists" in str(e).lower() else "Couldn't Save"
+                    toast_header, toast_icon, toast_msg = hdr, "danger", str(e)
 
                 toast_open = True
-                # Save & Next keeps where-it-lives sticky for rapid batch scanning.
-                _clear_form(keep_location=(triggered == "save-next-button"))
-                # refresh items for table build
-                items = data.inventory()
+                if saved_ok:
+                    # Save & Next keeps where-it-lives sticky for rapid batch scanning.
+                    _clear_form(keep_location=(triggered == "save-next-button"))
+                    # refresh items for table build
+                    items = data.inventory()
 
         # Delete
         elif triggered == "delete-button":

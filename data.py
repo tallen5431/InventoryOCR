@@ -50,10 +50,21 @@ def _safe_read(path: Path) -> List[Dict[str, Any]]:
 def _load() -> List[Dict[str, Any]]:
     path = Path(INVENTORY_JSON)
     if not path.exists():
-        # Create empty file – don’t seed unless you prefer
+        # A missing file is a genuinely empty inventory — seed and return it.
         atomic_write_text(path, "[]")
         return []
-    return _safe_read(path)
+    # The file EXISTS. If it can't be parsed as a JSON list it's corrupt/
+    # half-written, NOT empty — returning [] here would let the very next write
+    # overwrite a recoverable file with near-empty data (total data loss). Raise
+    # so mutators abort before _save() and the original bytes are preserved.
+    data = _load_or_none()
+    if data is None:
+        raise RuntimeError(
+            f"{INVENTORY_JSON} exists but is not readable as a JSON list; "
+            "refusing to read or overwrite it to avoid data loss. "
+            "Restore from .undo.json/backup or fix the file, then retry."
+        )
+    return data
 
 
 def _load_or_none() -> Optional[List[Dict[str, Any]]]:
@@ -210,6 +221,7 @@ def inventory() -> List[Dict[str, Any]]:
 
     # Normalize schema
     norm = []
+    seen_ids: set = set()
     for r in rows:
         # A hand-edited file can contain a non-object entry (a bare string/number/
         # null); skip it rather than crash the whole read on r.get(...).
@@ -219,11 +231,16 @@ def inventory() -> List[Dict[str, Any]]:
             rid = int(r.get("id"))
         except (TypeError, ValueError):
             rid = None
-        if rid is None:
+        # Reassign a fresh id when it's missing OR when an earlier record already
+        # claimed it. Two records sharing an id would otherwise be cross-wired —
+        # remove_item/bulk_remove would delete both, and the by-id maps used by
+        # organize/fit/merge would silently collapse one onto the other.
+        if rid is None or rid in seen_ids:
             while next_free in used:
                 next_free += 1
             rid = next_free
             used.add(rid)
+        seen_ids.add(rid)
 
         # One malformed record must not blank the whole catalogue — normalize
         # defensively and fall back to a minimal safe row on any surprise.
@@ -659,6 +676,17 @@ def update_item(
     rows = inventory()
     found = None
 
+    # Enforce unique-by-name on rename too (add_item already does): reject a name
+    # already held by a DIFFERENT item, so an edit can't silently create a
+    # duplicate the rest of the code treats as impossible.
+    new_key = (name or "").strip().lower()
+    if new_key and any(
+        int(r.get("id") or 0) != int(item_id)
+        and (r.get("name", "").strip().lower() == new_key)
+        for r in rows
+    ):
+        raise ValueError("An item with this name already exists.")
+
     for r in rows:
         if int(r.get("id") or 0) == int(item_id):
             r["name"] = (name or "").strip()
@@ -910,7 +938,10 @@ def snapshot_inventory() -> None:
         # A fresh snapshot invalidates any earlier op's validity checkpoint.
         _undo_chk_path().unlink(missing_ok=True)
     except Exception:
-        pass
+        # If snapshotting fails we must not leave a STALE snapshot paired with a
+        # fresh checkpoint from the upcoming commit_undo() — a later undo would
+        # then roll back to the wrong (older) state. Drop the undo state entirely.
+        _clear_undo()
 
 
 def commit_undo() -> None:

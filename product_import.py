@@ -575,6 +575,24 @@ def _is_public_host(url: str) -> bool:
         return False
 
 
+class _ValidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-run the SSRF host check on every redirect hop.
+
+    urllib follows redirects transparently, so without this a *public* start URL
+    could 302 to ``http://169.254.169.254/…`` (cloud metadata) or
+    ``http://127.0.0.1:…`` and we'd fetch the internal resource anyway. Reject
+    any hop whose target isn't a public host. (A determined attacker can still
+    attempt DNS rebinding between the check and the connect; pinning the resolved
+    IP would close that residual, which this does not do.)
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _is_public_host(newurl):
+            raise urllib.error.HTTPError(
+                newurl, code, "Refused redirect to a private/local address", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def fetch_url(url: str, timeout: Optional[int] = None) -> Tuple[str, str]:
     """Fetch a product page. Returns (html, error)."""
     if not re.match(r"^https?://", url or "", re.I):
@@ -589,7 +607,8 @@ def fetch_url(url: str, timeout: Optional[int] = None) -> Tuple[str, str]:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
     })
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _ValidatingRedirectHandler())
     try:
         with opener.open(req, timeout=timeout) as r:
             charset = r.headers.get_content_charset() or "utf-8"

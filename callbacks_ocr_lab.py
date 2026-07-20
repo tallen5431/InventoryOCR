@@ -136,8 +136,14 @@ def _proc_preview_bytes(
 
     if sharpen_flag and (sharpen_amt or 0) > 0:
         amt = float(sharpen_amt)
-        arr = cv2.GaussianBlur(arr, (0, 0), 0.0)
-        arr = cv2.addWeighted(arr, 1.0 + amt, arr, -amt, 0)
+        # Unsharp mask: sharpened = (1+amt)*original - amt*blurred.
+        # Two bugs fixed here: (1) ksize (0,0) with sigma 0.0 gives OpenCV no way
+        # to derive a kernel, so it raised cv2.error and the caller silently
+        # swallowed it — sharpening never ran; (2) the blur was written back over
+        # `arr` and then used for BOTH addWeighted terms, which cancels to just the
+        # blur (no sharpening) even when it didn't crash. Keep the original.
+        blurred = cv2.GaussianBlur(arr, (0, 0), 1.0)
+        arr = cv2.addWeighted(arr, 1.0 + amt, blurred, -amt, 0)
 
     ok, buf = cv2.imencode(".png", arr)
     if not ok:

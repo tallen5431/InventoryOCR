@@ -58,7 +58,10 @@ if URL_PREFIX and not URL_PREFIX.startswith("/"):
 # Dash requires pathname prefixes to start and end with "/". At the site root
 # that means a bare "/", otherwise "<prefix>/".
 PATHNAME_PREFIX = (URL_PREFIX + "/") if URL_PREFIX else "/"
-ASSETS_URL_PATH = (URL_PREFIX + "/assets") if URL_PREFIX else "/assets"
+# NB: pass this to Dash UNPREFIXED. Dash prepends ``requests_pathname_prefix``
+# to ``assets_url_path`` itself, so baking URL_PREFIX in here doubled it
+# (``/inventory/inventory/assets/…``) behind a reverse proxy.
+ASSETS_URL_PATH = "assets"
 
 def get_local_ip() -> str:
     """Get the local IP address for LAN access."""
@@ -221,7 +224,11 @@ if AUTH_ENABLED:
 
     @server.before_request
     def _enforce_basic_auth():
-        if request.path.rstrip("/").endswith("/healthz"):
+        # Exact-match the registered health routes only. A loose ``endswith``
+        # would un-authenticate ANY path ending in "/healthz" — e.g. an uploaded
+        # document literally named ".../healthz" served via a <path:filename>
+        # route — silently punching a hole in the auth boundary.
+        if request.path.rstrip("/") in ("/healthz", f"{URL_PREFIX}/healthz"):
             return None
         auth = request.authorization
         if auth and (auth.type or "").lower() == "basic" and \

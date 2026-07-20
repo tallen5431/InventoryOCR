@@ -16,6 +16,7 @@ blank than guess wrong, since the user confirms before saving.
 from __future__ import annotations
 
 import re
+from datetime import date as _date_cls
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -99,6 +100,11 @@ _SELLER_HOSTS = {
     "harborfreight": "Harbor Freight", "mcmaster": "McMaster-Carr",
     "grainger": "Grainger", "bestbuy": "Best Buy", "temu": "Temu",
 }
+
+# Brand keys that are also ordinary English words — too ambiguous to match in a
+# blind full-text scan. They can still be resolved from the source URL or an
+# explicit "sold by …" cue, just not from an incidental mention in body text.
+_AMBIGUOUS_SELLER_KEYS = {"target"}
 _SOLD_BY_RE = re.compile(r"(?:sold\s*by|ships?\s*from|seller|vendor|store)\s*[:\-]?\s*"
                          r"([A-Z0-9][\w&'.,\- ]{1,40})", re.IGNORECASE)
 
@@ -112,9 +118,13 @@ def _norm_two_digit_year(y: int) -> int:
 
 
 def _iso(y: int, m: int, d: int) -> str:
-    if not (1 <= m <= 12 and 1 <= d <= 31):
+    # Validate against the real calendar (rejects 02/30, 04/31, etc.) rather than
+    # a loose 1..31 day check, so we never emit a nonexistent date that later
+    # blows up date.fromisoformat or shows the user an impossible purchase date.
+    try:
+        return _date_cls(y, m, d).isoformat()
+    except (ValueError, TypeError):
         return ""
-    return f"{y:04d}-{m:02d}-{d:02d}"
 
 
 def _parse_one_date(s: str) -> str:
@@ -195,7 +205,15 @@ def _find_seller(text: str, source_url: str = "") -> str:
             return s
     low = text.lower()
     for key, name in _SELLER_HOSTS.items():
-        if key in low:
+        # This is a blind full-text scan, so match conservatively:
+        #  * exclude brand names that are also common English words ("target") —
+        #    they'd false-positive constantly ("the target location"); those are
+        #    still resolved via the URL or the explicit "sold by" cue below.
+        #  * require boundaries that also exclude hyphenated compounds, so
+        #    "etsy-style" / "amazon-compatible" don't count as the seller.
+        if key in _AMBIGUOUS_SELLER_KEYS:
+            continue
+        if re.search(rf"(?<![\w-]){re.escape(key)}(?![\w-])", low):
             return name
     m = _SOLD_BY_RE.search(text)
     if m:
