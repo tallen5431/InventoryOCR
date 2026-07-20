@@ -2,11 +2,36 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
+import functools
 import re as _re_date
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from config import INVENTORY_JSON, ASSET_IMAGE_PATH, ASSET_THUMB_PATH, ASSET_DOCS_PATH
+
+# --------------------------------------------------------------------
+# Write serialization
+# --------------------------------------------------------------------
+# waitress serves with multiple worker threads, so inventory callbacks can run
+# concurrently. Every mutator does read (inventory()) -> modify -> write
+# (_save()); without a lock two of those cycles can interleave and silently drop
+# one update (last-writer-wins). atomic_write_text keeps each file from ever
+# being *partial*, but it can't stop a *lost update* — that needs serialization.
+#
+# One reentrant lock guards the whole read-modify-write of every mutator (see the
+# _synchronized(...) wrapping block at the end of this module). RLock because some
+# mutators call others (e.g. merge_groups -> merge_group). Reads stay lock-free:
+# a reader always sees a complete file thanks to the atomic replace.
+_WRITE_LOCK = threading.RLock()
+
+
+def _synchronized(fn):
+    @functools.wraps(fn)
+    def _wrapped(*args, **kwargs):
+        with _WRITE_LOCK:
+            return fn(*args, **kwargs)
+    return _wrapped
 
 # --------------------------------------------------------------------
 # Persistence helpers
@@ -2293,3 +2318,21 @@ def merge_groups(plans: List[Dict[str, Any]]) -> Dict[str, int]:
             removed += len(p["merge_ids"])
             done += 1
     return {"groups": done, "items_removed": removed}
+
+
+# --------------------------------------------------------------------
+# Serialize every state-changing entry point against _WRITE_LOCK. Kept in one
+# place (rather than a decorator scattered on each def) so the exact set of
+# synchronized mutators is easy to audit. Read-only helpers (inventory(),
+# get_item, find_*, etc.) are deliberately NOT wrapped — they stay concurrent.
+# --------------------------------------------------------------------
+for _name in (
+    "add_item", "add_photo_items", "update_item", "update_item_fields",
+    "adjust_qty", "remove_item", "bulk_set_fields", "bulk_remove",
+    "add_image_to_item", "remove_image_from_item", "assign_types",
+    "set_location", "apply_organization", "apply_fit", "merge_group",
+    "merge_groups", "prune_unreferenced_images", "prune_unreferenced_documents",
+    "snapshot_inventory", "commit_undo", "restore_inventory",
+):
+    globals()[_name] = _synchronized(globals()[_name])
+del _name
