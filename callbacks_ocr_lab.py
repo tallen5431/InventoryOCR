@@ -411,7 +411,7 @@ def register_ocr_lab_callbacks(app):
                 profile=("fast" if profile == "fast" else None),
                 timeout=12 if profile == "fast" else 25,
                 lang=(lang or "eng"),
-                psm_list=[int(psm)] if (profile == "fast" and psm) else None,
+                psm_list=[int(psm)] if psm else None,
             )
             res = _run_ocr_base(io.BytesIO(img_b), **kw)
             text = (res.get("text") or "").strip()
@@ -443,7 +443,7 @@ def register_ocr_lab_callbacks(app):
                 profile=("fast" if profile == "fast" else None),
                 timeout=10 if profile == "fast" else 18,
                 lang=(lang or "eng"),
-                psm_list=[int(psm)] if (profile == "fast" and psm) else None,
+                psm_list=[int(psm)] if psm else None,
             )
             res = _run_ocr_base(io.BytesIO(img_b), **kw)
             text = (res.get("text") or "").strip()

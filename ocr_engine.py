@@ -40,7 +40,12 @@ def run_ocr_with_cache(
         threshold=threshold,
         sharpen=sharpen,
     )
-    text = (extract_ocr_text(processed, lang=lang or "eng") or "").strip()
+    # Honour the caller's page-segmentation mode and character whitelist instead
+    # of ignoring them: psm_list carries the OCR Lab's PSM selection (first entry
+    # wins; default 6), and whitelist=None keeps the built-in default set.
+    psm = int(psm_list[0]) if psm_list else 6
+    text = (extract_ocr_text(processed, lang=lang or "eng", psm=psm,
+                             whitelist=whitelist) or "").strip()
 
     return {
         "text": text,

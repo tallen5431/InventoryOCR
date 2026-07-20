@@ -83,10 +83,21 @@ def preprocess_for_ocr(
     return out
 
 
-def extract_ocr_text(img: Image.Image, lang: str = "eng", psm: int = 6) -> str:
+_DEFAULT_OCR_WHITELIST = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-.,:/()%+"
+)
+
+
+def extract_ocr_text(img: Image.Image, lang: str = "eng", psm: int = 6,
+                     whitelist: str | None = None) -> str:
     """
     Run Tesseract OCR on a preprocessed image.
-    Accepts language and PSM mode for compatibility with ocr_engine.
+
+    psm        Tesseract page-segmentation mode (the OCR Lab's PSM dropdown feeds
+               this through ``run_ocr_with_cache``).
+    whitelist  Characters Tesseract is allowed to emit. ``None`` keeps the
+               default set; pass ``""`` to disable the whitelist entirely (useful
+               when the default is stripping characters the user needs).
     """
     try:
         import pytesseract
@@ -96,9 +107,10 @@ def extract_ocr_text(img: Image.Image, lang: str = "eng", psm: int = 6) -> str:
         if img.mode not in ("L", "RGB"):
             img = img.convert("RGB")
 
-        # whitelist and config
-        whitelist = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-.,:/()%+"
-        config_str = f"--oem 1 --psm {psm} -c tessedit_char_whitelist={whitelist}"
+        wl = _DEFAULT_OCR_WHITELIST if whitelist is None else whitelist
+        config_str = f"--oem 1 --psm {int(psm)}"
+        if wl:
+            config_str += f" -c tessedit_char_whitelist={wl}"
 
         text = pytesseract.image_to_string(img, lang=lang, config=config_str)
 
