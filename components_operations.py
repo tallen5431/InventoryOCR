@@ -14,6 +14,7 @@ from dash import dash_table, dcc, html
 import dash_bootstrap_components as dbc
 
 from config import DATATABLE_PAGE_SIZE
+from ui_helpers import camera_upload
 
 
 # --------------------------------------------------------------------
@@ -210,15 +211,15 @@ def _material_form():
                             id="op-mat-image-upload",
                             children=html.Div(
                                 [
-                                    html.Div("📷", className="upload-icon"),
-                                    html.Div([html.Strong("Take photos"), " or ",
-                                              html.A("choose files")]),
-                                    html.Div("Snap several — they stack up on this material.",
+                                    html.Div("🖼️", className="upload-icon"),
+                                    html.Div([html.Strong("Choose photos"), " or drop files"]),
+                                    html.Div("Add several — they stack up on this material.",
                                              className="text-muted small mt-1"),
                                 ]
                             ),
                             multiple=True, accept="image/*", className="upload-dropzone",
                         ),
+                        camera_upload("op-mat-image-cam", "Take a photo"),
                         html.Div(id="op-mat-gallery", className="mt-2"),
                         dcc.Store(id="op-mat-images", data=[]),
 

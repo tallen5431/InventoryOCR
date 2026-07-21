@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os, socket, json, traceback
-from dash import Dash, html, dcc, Input, Output, State
+from dash import Dash, html, dcc, Input, Output, State, ctx, ALL
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 from werkzeug.middleware.proxy_fix import ProxyFix  # NEW: reverse-proxy aware
@@ -19,6 +19,7 @@ from config import (
 from flask import send_from_directory, request, Response
 import authz
 from version_info import VERSION_INFO, version_label, version_tooltip
+from ui_helpers import doc_viewer_modal, doc_viewer_body, doc_url
 
 # UI components
 from components import (
@@ -421,6 +422,9 @@ app.layout = html.Div(
         ),
         navbar,
         connect_modal(),
+        # Global in-app document previewer (opened from any attachment list, on
+        # any page — dashboard or Operations).
+        doc_viewer_modal(),
         # cross-page stores
         dcc.Store(id="image-contents"),
         dcc.Store(id="ocr-target"),
@@ -501,12 +505,39 @@ app.clientside_callback(
     Input("theme-mode", "data"),
 )
 
-# NOTE: we deliberately do NOT set the `capture` attribute on the photo input.
-# With a plain `<input type="file" accept="image/*">`, mobile browsers (iOS
-# Safari, Android Chrome) show a chooser offering BOTH "Take Photo" and "Photo
-# Library / Choose File", so the same button lets you snap a new picture or pick
-# an existing one. Forcing `capture="environment"` would open the camera
-# directly and hide the library option.
+# ---------- In-app document viewer ----------
+# Opened by the "doc-view" eye buttons that attachment_list renders on any page.
+# The filename/kind/label ride in the button id, so one global callback covers
+# every attachment list (dashboard form, item detail, Quick Add, Operations).
+@app.callback(
+    Output("doc-viewer-modal", "is_open"),
+    Output("doc-viewer-title", "children"),
+    Output("doc-viewer-body", "children"),
+    Output("doc-viewer-newtab", "href"),
+    Input({"type": "doc-view", "name": ALL, "kind": ALL, "label": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def _open_doc_viewer(clicks):
+    # Pattern buttons fire with n_clicks=0 when a list re-renders; ignore those.
+    if not any(clicks or []):
+        raise PreventUpdate
+    tid = ctx.triggered_id or {}
+    fn = tid.get("name", "")
+    if not fn:
+        raise PreventUpdate
+    kind = tid.get("kind", "other")
+    label = tid.get("label") or fn
+    return True, label, doc_viewer_body(fn, kind), doc_url(fn)
+
+
+@app.callback(
+    Output("doc-viewer-modal", "is_open", allow_duplicate=True),
+    Input("doc-viewer-close", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _close_doc_viewer(_n):
+    return False
+
 
 # ---------- Diagnostics ----------
 @app.callback(Output("diag", "children"), Input("diag-interval", "n_intervals"), Input("url", "pathname"))

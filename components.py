@@ -2,6 +2,7 @@ from __future__ import annotations
 from dash import html, dcc, dash_table
 import dash_bootstrap_components as dbc
 from config import DATATABLE_PAGE_SIZE, TOAST_DURATION
+from ui_helpers import camera_upload
 
 
 def _kpi_card(icon, color, label, value_id):
@@ -181,18 +182,16 @@ def sidebar_form():
                                 id="image-upload",
                                 children=html.Div(
                                     [
-                                        html.Div("📷", className="upload-icon"),
+                                        html.Div("🖼️", className="upload-icon"),
                                         html.Div(
                                             [
-                                                html.Strong("Take photos"),
-                                                " or ",
-                                                html.A("choose files"),
+                                                html.Strong("Choose photos"),
+                                                " (from your library or computer)",
                                             ]
                                         ),
                                         html.Div(
-                                            "Add as many as you like — snap several shots or pick multiple "
-                                            "files, and they stack up on this item. On a phone you can also "
-                                            "pick an existing photo; on a computer it opens the file picker.",
+                                            "Add as many as you like — pick multiple files and they stack "
+                                            "up on this item.",
                                             className="text-muted small mt-1",
                                         ),
                                     ]
@@ -201,6 +200,8 @@ def sidebar_form():
                                 accept="image/*",
                                 className="upload-dropzone",
                             ),
+                            # Opens the camera directly on a phone (see camera_upload).
+                            camera_upload("image-upload-cam", "Take a photo"),
                             html.Div(id="image-gallery", className="mt-2"),
                             dcc.Store(id="current-images", data=[]),
 
@@ -294,9 +295,9 @@ def sidebar_form():
                                 is_open=False,
                             ),
 
-                            # ----- Purchase record + attached documents -----
+                            # ----- Documents (product pages + invoices) + purchase record -----
                             dbc.Button(
-                                [html.I(className="bi bi-receipt me-1"), "Purchase & documents ",
+                                [html.I(className="bi bi-receipt me-1"), "Documents & purchase ",
                                  html.I(className="bi bi-chevron-down")],
                                 id="purchase-docs-toggle",
                                 color="link",
@@ -350,7 +351,8 @@ def sidebar_form():
                                             className="g-2",
                                         ),
                                         dbc.Label(
-                                            [html.I(className="bi bi-paperclip me-1"), "Attached documents"],
+                                            [html.I(className="bi bi-paperclip me-1"),
+                                             "Attach anything — one upload for all files"],
                                             className="mt-3",
                                         ),
                                         dcc.Upload(
@@ -358,11 +360,12 @@ def sidebar_form():
                                             children=html.Div(
                                                 [
                                                     html.Div("📎", className="upload-icon"),
-                                                    html.Div(html.Strong("Attach an invoice, saved page, or any file")),
+                                                    html.Div(html.Strong(
+                                                        "Product page, invoice, receipt, spec sheet, any file")),
                                                     html.Div(
-                                                        "Invoices & receipts (image or saved HTML) are read for "
-                                                        "order #, date and total — review before you Save. Any file "
-                                                        "type is kept as a record.",
+                                                        "A saved product page (.html) fills in name, price & specs; "
+                                                        "an invoice (image or HTML) fills order #, date & total — "
+                                                        "review before you Save. Every file is kept as a record.",
                                                         className="text-muted small mt-1",
                                                     ),
                                                 ]
@@ -491,6 +494,16 @@ def dashboard_toolbar():
             ),
             dbc.Col(search_box(), xs=12, sm=True),
             dbc.Col(
+                dbc.Switch(
+                    id="large-thumbs",
+                    label=[html.I(className="bi bi-image me-1"), "Large photos"],
+                    value=False,
+                    className="mb-0 text-nowrap",
+                ),
+                xs="auto",
+                className="d-flex align-items-center",
+            ),
+            dbc.Col(
                 dbc.ButtonGroup(
                     [
                         _toggle_button("Filter & sort", "bi-funnel", "toggle-filter"),
@@ -500,6 +513,8 @@ def dashboard_toolbar():
                 ),
                 xs=12, sm="auto",
             ),
+            # Sink for the clientside callback that toggles the large-thumbnail class.
+            html.Div(id="large-thumbs-sink", style={"display": "none"}),
         ],
         className="g-2 align-items-center mb-2",
     )
@@ -979,8 +994,8 @@ def quick_add_modal():
                                         id="qa-photo-upload",
                                         children=html.Div(
                                             [
-                                                html.Div("📷", className="upload-icon"),
-                                                html.Div(html.Strong("Take photos or choose files")),
+                                                html.Div("🖼️", className="upload-icon"),
+                                                html.Div(html.Strong("Choose photos")),
                                                 html.Div("Add one or more — they attach to this item.",
                                                          className="text-muted small mt-1"),
                                             ]
@@ -989,6 +1004,7 @@ def quick_add_modal():
                                         accept="image/*",
                                         className="upload-dropzone",
                                     ),
+                                    camera_upload("qa-photo-cam", "Take a photo"),
                                     html.Div(id="qa-photo-gallery", className="mt-2"),
                                     dbc.Button(
                                         [html.I(className="bi bi-stars me-1"), "Identify from photo"],
@@ -1000,48 +1016,39 @@ def quick_add_modal():
                                 ],
                             ),
                             html.Hr(),
-                            # ---- ② Documents ----
+                            # ---- ② Documents (one upload for everything) ----
                             _qa_section(
                                 2, "bi-paperclip", "Attach documents (optional)",
-                                "The product page fills in name, price & specs; an invoice adds order #, "
-                                "date and what you paid. Every file is kept with the item.",
+                                "One place for every file. A saved product page fills in name, price "
+                                "& specs; an invoice adds order #, date and what you paid. Every file "
+                                "is kept with the item.",
                                 [
                                     dcc.Upload(
-                                        id="qa-import-html-upload",
+                                        id="qa-attach-upload",
                                         children=html.Div(
                                             [
-                                                html.Div("⬆️", className="upload-icon"),
-                                                html.Div(html.Strong("Upload a saved product page (.html)")),
-                                                html.Div("Save the listing (Ctrl+S) and drop it here.",
-                                                         className="text-muted small mt-1"),
+                                                html.Div("📎", className="upload-icon"),
+                                                html.Div(html.Strong(
+                                                    "Attach anything — product page, invoice, receipt, spec sheet")),
+                                                html.Div(
+                                                    "Saved product pages (.html) and invoices (image or HTML) are "
+                                                    "read automatically; any file is kept as a record.",
+                                                    className="text-muted small mt-1"),
                                             ]
                                         ),
-                                        accept=".html,.htm,text/html",
+                                        multiple=True,
                                         className="upload-dropzone",
                                     ),
                                     dbc.InputGroup(
                                         [
                                             dbc.Input(id="qa-import-url",
-                                                      placeholder="…or paste a product URL", type="url"),
+                                                      placeholder="…or paste a product URL to fetch", type="url"),
                                             dbc.Button([html.I(className="bi bi-download me-1"), "Fetch"],
                                                        id="qa-import-fetch", color="secondary", n_clicks=0),
                                         ],
                                         className="mt-2",
                                     ),
                                     html.Div(id="qa-import-status", className="small mt-1"),
-                                    dcc.Upload(
-                                        id="qa-attach-upload",
-                                        children=html.Div(
-                                            [
-                                                html.Div("📎", className="upload-icon"),
-                                                html.Div(html.Strong("Attach an invoice, receipt, or any file")),
-                                                html.Div("Invoices (image or HTML) are read for order #, date "
-                                                         "& total.", className="text-muted small mt-1"),
-                                            ]
-                                        ),
-                                        multiple=True,
-                                        className="upload-dropzone mt-2",
-                                    ),
                                     dcc.Loading(html.Div(id="qa-attach-status", className="small mt-1"),
                                                 type="default"),
                                     html.Div(id="qa-attach-list", className="mt-2"),

@@ -886,7 +886,42 @@ def _qa_apply_parsed(d, cur_name, cur_cat, cur_value, cur_extra, cur_src):
     return name, category, value, extra, src
 
 
+def _per_unit_adjust(d):
+    """For a multi-pack listing, swap the whole-pack estimated_value for the
+    per-unit price and keep the pack total as a spec note (reuses Price Compare's
+    pack detection). Mutates and returns the data dict. Never raises."""
+    try:
+        import price_compare
+        pu = price_compare.per_unit_value(d.get("estimated_value", ""), d.get("name", ""),
+                                          d.get("specifications"), d.get("what_it_is", ""))
+        if pu["unit_price"] is not None and 1 < pu["qty"] <= 2000:
+            d["estimated_value"] = f"{pu['currency']}{pu['unit_price']:.2f}"
+            specs = list(d.get("specifications") or [])
+            if pu["formatted"] and pu["formatted"] not in specs:
+                specs.insert(0, pu["formatted"])
+            d["specifications"] = specs
+    except Exception:
+        pass
+    return d
+
+
 def register_callbacks(app):
+    # ---------- Large-photo mode: toggle a body class (clientside, no round-trip) ----------
+    # Bigger table thumbnails so you can visually confirm a search hit without
+    # opening the full image. Toggling a class on <body> survives table re-renders
+    # (the DataTable's data changes, but body doesn't), and the CSS in custom.css
+    # keys off body.large-thumbs.
+    app.clientside_callback(
+        """
+        function(on) {
+            try { document.body.classList.toggle('large-thumbs', !!on); } catch (e) {}
+            return '';
+        }
+        """,
+        Output("large-thumbs-sink", "children"),
+        Input("large-thumbs", "value"),
+    )
+
     # ---------- Table & form (single source of truth for table + toast) ----------
     @app.callback(
         [
@@ -1312,20 +1347,35 @@ def register_callbacks(app):
         Output("image-gallery", "children"),
         Output("current-images", "data", allow_duplicate=True),
         Output("image-upload", "contents", allow_duplicate=True),
+        Output("image-upload-cam", "contents", allow_duplicate=True),
         Input("current-images", "data"),
         Input("image-upload", "contents"),
+        Input("image-upload-cam", "contents"),
         State("image-upload", "filename"),
+        State("image-upload-cam", "filename"),
         State("current-images", "data"),
         State("item-name", "value"),
         prevent_initial_call='initial_duplicate',
     )
-    def update_image_gallery(current_imgs, upload_contents, upload_filenames, existing_imgs, item_name):
+    def update_image_gallery(current_imgs, upload_contents, cam_contents,
+                             upload_filenames, cam_filenames, existing_imgs, item_name):
+        # Two sibling uploads feed this: the dropzone ("Choose photos") and the
+        # camera button ("Take a photo"). Whichever fired, save & append its
+        # shots so repeated snaps and picks accumulate, then clear that input.
         img_list = list(existing_imgs or [])
-        out_imgs = no_update      # only rewrite the store when we actually add photos
-        clear_upload = no_update
+        out_imgs = no_update       # only rewrite the store when we actually add photos
+        clear_choose = no_update
+        clear_cam = no_update
 
-        if ctx.triggered_id == "image-upload" and upload_contents:
-            uploads = upload_contents if isinstance(upload_contents, list) else [upload_contents]
+        trig = ctx.triggered_id
+        contents = None
+        if trig == "image-upload" and upload_contents:
+            contents, clear_choose = upload_contents, None
+        elif trig == "image-upload-cam" and cam_contents:
+            contents, clear_cam = cam_contents, None
+
+        if contents is not None:
+            uploads = contents if isinstance(contents, list) else [contents]
             base = (item_name or "").strip() or "photo"
             for content in uploads:
                 if not content:
@@ -1337,9 +1387,8 @@ def register_callbacks(app):
                     # Skip anything that isn't a decodable image rather than break the form.
                     continue
             out_imgs = img_list
-            clear_upload = None  # reset the input so the next capture fires a fresh event
 
-        return _render_gallery(img_list), out_imgs, clear_upload
+        return _render_gallery(img_list), out_imgs, clear_choose, clear_cam
 
     # ---------- Remove image from gallery ----------
     # Only updates the store; the gallery re-renders from its current-images Input.
@@ -1967,20 +2016,30 @@ def register_callbacks(app):
         data.prune_unreferenced_documents()
         return False
 
-    # ---------- Quick Add: photo upload → save & accumulate ----------
+    # ---------- Quick Add: photo upload (choose or camera) → save & accumulate ----------
     @app.callback(
         Output("qa-photos", "data", allow_duplicate=True),
         Output("qa-photo-upload", "contents"),
+        Output("qa-photo-cam", "contents"),
         Input("qa-photo-upload", "contents"),
+        Input("qa-photo-cam", "contents"),
         State("qa-photo-upload", "filename"),
+        State("qa-photo-cam", "filename"),
         State("qa-photos", "data"),
         State("qa-name", "value"),
         prevent_initial_call=True,
     )
-    def qa_add_photos(contents, filenames, photos, name):
-        if not contents:
+    def qa_add_photos(contents, cam_contents, filenames, cam_filenames, photos, name):
+        trig = ctx.triggered_id
+        clear_choose = clear_cam = no_update
+        payload = None
+        if trig == "qa-photo-upload" and contents:
+            payload, clear_choose = contents, None
+        elif trig == "qa-photo-cam" and cam_contents:
+            payload, clear_cam = cam_contents, None
+        if payload is None:
             raise PreventUpdate
-        uploads = contents if isinstance(contents, list) else [contents]
+        uploads = payload if isinstance(payload, list) else [payload]
         base = (name or "").strip() or "photo"
         out = list(photos or [])
         for c in uploads:
@@ -1990,7 +2049,7 @@ def register_callbacks(app):
                 out.append(save_image(c, ASSET_IMAGE_PATH, base_name=base)["filename"])
             except Exception:
                 continue
-        return out, None
+        return out, clear_choose, clear_cam
 
     # ---------- Quick Add: render the photo strip ----------
     @app.callback(
@@ -2069,20 +2128,17 @@ def register_callbacks(app):
                             f'Suggested: "{name or "—"}". Review in step 3.'])
         return name, category, value, extra, src, status
 
-    # ---------- Quick Add: import a product page (URL fetch or .html upload) ----------
+    # ---------- Quick Add: import a product page by URL (files go through the
+    # single "attach anything" upload below, which also reads product pages) ----
     @app.callback(
         Output("qa-name", "value", allow_duplicate=True),
         Output("qa-category", "value", allow_duplicate=True),
         Output("qa-value", "value", allow_duplicate=True),
         Output("qa-extra", "data", allow_duplicate=True),
         Output("qa-source-title", "data", allow_duplicate=True),
-        Output("qa-attachments", "data", allow_duplicate=True),
         Output("qa-import-status", "children", allow_duplicate=True),
         Input("qa-import-fetch", "n_clicks"),
-        Input("qa-import-html-upload", "contents"),
-        State("qa-import-html-upload", "filename"),
         State("qa-import-url", "value"),
-        State("qa-attachments", "data"),
         State("qa-name", "value"),
         State("qa-category", "value"),
         State("qa-value", "value"),
@@ -2090,64 +2146,26 @@ def register_callbacks(app):
         State("qa-source-title", "data"),
         prevent_initial_call=True,
     )
-    def qa_import(fetch_n, up_contents, up_name, url, atts,
-                  cur_name, cur_cat, cur_value, cur_extra, cur_src):
-        import product_import, base64
-        trig = ctx.triggered_id
-        atts = list(atts or [])
-
-        if trig == "qa-import-fetch":
-            if not (url or "").strip():
-                raise PreventUpdate
-            res = product_import.import_product(url=url or "")
-        elif trig == "qa-import-html-upload":
-            if not up_contents:
-                raise PreventUpdate
-            text = ""
-            try:
-                if "," in up_contents:
-                    text = base64.b64decode(up_contents.split(",", 1)[1]).decode("utf-8", "replace")
-            except Exception:
-                text = ""
-            if not text.strip():
-                return (no_update,) * 6 + (
-                    html.Span("Couldn't read that .html file.", className="text-danger"),)
-            res = product_import.import_product(url=url or "", html_text=text)
-            # Keep the saved page as an attachment on the item too.
-            try:
-                atts.append(save_attachment(up_contents, up_name or "product-page.html"))
-            except Exception:
-                pass
-        else:
+    def qa_import(fetch_n, url, cur_name, cur_cat, cur_value, cur_extra, cur_src):
+        import product_import
+        if not (url or "").strip():
             raise PreventUpdate
-
+        res = product_import.import_product(url=url or "")
         if not res.get("ok"):
             return (no_update,) * 5 + (
-                no_update, html.Span(res.get("error", "Import failed."), className="text-warning"))
-
-        # Per-unit value for multi-packs (same rule the form's importer uses).
-        d = res.get("data") or {}
-        try:
-            import price_compare
-            pu = price_compare.per_unit_value(d.get("estimated_value", ""), d.get("name", ""),
-                                              d.get("specifications"), d.get("what_it_is", ""))
-            if pu["unit_price"] is not None and 1 < pu["qty"] <= 2000:
-                d["estimated_value"] = f"{pu['currency']}{pu['unit_price']:.2f}"
-                note = pu["formatted"]
-                specs = list(d.get("specifications") or [])
-                if note and note not in specs:
-                    specs.insert(0, note)
-                d["specifications"] = specs
-        except Exception:
-            pass
-
+                html.Span(res.get("error", "Import failed."), className="text-warning"),)
+        d = _per_unit_adjust(res.get("data") or {})
         name, category, value, extra, src = _qa_apply_parsed(
             d, cur_name, cur_cat, cur_value, cur_extra, cur_src)
         status = html.Span([html.I(className="bi bi-check-circle text-success me-1"),
                             f'Imported: "{name or "—"}" ({res.get("via", "page")}).'])
-        return name, category, value, extra, src, atts, status
+        return name, category, value, extra, src, status
 
-    # ---------- Quick Add: attach invoice / any file + auto-extract purchase ----------
+    # ---------- Quick Add: THE single "attach anything" upload ----------
+    # Saves every file and auto-parses the useful ones: a saved product page
+    # (HTML) fills name/category/value/specs; an invoice (image or HTML) fills
+    # order #/date/price/seller. Only blanks are filled, so a value you typed or
+    # a previous parse found is never overwritten.
     @app.callback(
         Output("qa-attachments", "data", allow_duplicate=True),
         Output("qa-attach-upload", "contents"),
@@ -2156,6 +2174,11 @@ def register_callbacks(app):
         Output("qa-price", "value", allow_duplicate=True),
         Output("qa-seller", "value", allow_duplicate=True),
         Output("qa-attach-status", "children", allow_duplicate=True),
+        Output("qa-name", "value", allow_duplicate=True),
+        Output("qa-category", "value", allow_duplicate=True),
+        Output("qa-value", "value", allow_duplicate=True),
+        Output("qa-extra", "data", allow_duplicate=True),
+        Output("qa-source-title", "data", allow_duplicate=True),
         Input("qa-attach-upload", "contents"),
         State("qa-attach-upload", "filename"),
         State("qa-attachments", "data"),
@@ -2163,29 +2186,57 @@ def register_callbacks(app):
         State("qa-date", "value"),
         State("qa-price", "value"),
         State("qa-seller", "value"),
+        State("qa-name", "value"),
+        State("qa-category", "value"),
+        State("qa-value", "value"),
+        State("qa-extra", "data"),
+        State("qa-source-title", "data"),
         prevent_initial_call=True,
     )
-    def qa_attach(contents, filenames, current, cur_order, cur_date, cur_price, cur_seller):
+    def qa_attach(contents, filenames, current, cur_order, cur_date, cur_price, cur_seller,
+                  cur_name, cur_cat, cur_value, cur_extra, cur_src):
         if not contents:
             raise PreventUpdate
-        import invoice_parse
+        import invoice_parse, product_import, base64
         uploads = contents if isinstance(contents, list) else [contents]
         names = filenames if isinstance(filenames, list) else [filenames]
         atts = list(current or [])
         saved = []
+        html_text = None
         for c, fn in zip(uploads, names):
             if not c:
                 continue
             try:
                 meta = save_attachment(c, fn or "attachment")
-                atts.append(meta)
-                saved.append(meta)
             except Exception:
                 continue
+            atts.append(meta)
+            saved.append(meta)
+            # Grab the first HTML file's text so we can read it as a product page.
+            if meta.get("kind") == "html" and html_text is None:
+                try:
+                    if "," in c:
+                        html_text = base64.b64decode(c.split(",", 1)[1]).decode("utf-8", "replace")
+                except Exception:
+                    html_text = None
+
         if not saved:
             return (no_update, None, no_update, no_update, no_update, no_update,
-                    html.Span("That file couldn't be read.", className="text-warning"))
+                    html.Span("That file couldn't be read.", className="text-warning"),
+                    no_update, no_update, no_update, no_update, no_update)
 
+        # ---- Product details from a saved listing page (HTML) ----
+        name_o = cat_o = val_o = extra_o = src_o = no_update
+        prod_ok = False
+        if html_text and html_text.strip():
+            res = product_import.import_product(html_text=html_text)
+            if res.get("ok"):
+                d = _per_unit_adjust(res.get("data") or {})
+                name_o, cat_o, val_o, extra_o, src_o = _qa_apply_parsed(
+                    d, cur_name, cur_cat, cur_value, cur_extra, cur_src)
+                prod_ok = True
+
+        # ---- Purchase details from the most-recent parseable doc ----
         order = (cur_order or "").strip()
         pdate = (cur_date or "").strip()
         price = (cur_price or "").strip()
@@ -2204,15 +2255,21 @@ def register_callbacks(app):
             seller = seller or found.get("seller", "")
             read_n = len(found.get("found", []))
             break
+
         nm = len(saved)
+        bits = [f"Attached {nm} file{'s' if nm != 1 else ''}"]
+        if prod_ok:
+            bits.append("read the listing")
         if read_n:
+            bits.append(f"{read_n} purchase field{'s' if read_n != 1 else ''}")
+        if prod_ok or read_n:
             status = html.Span([html.I(className="bi bi-magic text-success me-1"),
-                                f"Attached {nm}; read {read_n} purchase field"
-                                f"{'s' if read_n != 1 else ''} — check step 3."])
+                                " · ".join(bits) + " — check step 3."])
         else:
             status = html.Span(f"Attached {nm} document{'s' if nm != 1 else ''}.",
                                className="text-muted")
-        return atts, None, order, pdate, price, seller, status
+        return (atts, None, order, pdate, price, seller, status,
+                name_o, cat_o, val_o, extra_o, src_o)
 
     # ---------- Quick Add: render the attachment list ----------
     @app.callback(
@@ -2482,7 +2539,11 @@ def register_callbacks(app):
     def render_attach_list(atts):
         return _render_attachments(atts)
 
-    # ---------- Form: attach a document (any type) + auto-extract purchase info ----------
+    # ---------- Form: THE single "attach anything" upload ----------
+    # One control for every file. A saved product page (HTML) fills in
+    # name/category/value/specs/dimensions/tags/link; an invoice (image or HTML)
+    # fills order #/date/price/seller. Only blank fields are filled, so nothing
+    # you already typed is overwritten. Every file is kept as a record.
     @app.callback(
         Output("current-attachments", "data", allow_duplicate=True),
         Output("attach-upload", "contents"),
@@ -2494,6 +2555,13 @@ def register_callbacks(app):
         Output("action-toast", "header", allow_duplicate=True),
         Output("action-toast", "icon", allow_duplicate=True),
         Output("action-toast", "children", allow_duplicate=True),
+        Output("item-name", "value", allow_duplicate=True),
+        Output("item-category", "value", allow_duplicate=True),
+        Output("item-value", "value", allow_duplicate=True),
+        Output("item-specs", "value", allow_duplicate=True),
+        Output("item-dims", "value", allow_duplicate=True),
+        Output("item-tags", "value", allow_duplicate=True),
+        Output("item-producturl", "value", allow_duplicate=True),
         Input("attach-upload", "contents"),
         State("attach-upload", "filename"),
         State("current-attachments", "data"),
@@ -2501,35 +2569,80 @@ def register_callbacks(app):
         State("item-purchase-date", "value"),
         State("item-price-paid", "value"),
         State("item-seller", "value"),
+        State("item-name", "value"),
+        State("item-category", "value"),
+        State("item-value", "value"),
+        State("item-specs", "value"),
+        State("item-dims", "value"),
+        State("item-tags", "value"),
+        State("item-producturl", "value"),
         prevent_initial_call=True,
     )
-    def add_attachment(contents, filenames, current, cur_order, cur_date, cur_price, cur_seller):
+    def add_attachment(contents, filenames, current, cur_order, cur_date, cur_price, cur_seller,
+                       cur_name, cur_cat, cur_value, cur_specs, cur_dims, cur_tags, cur_url):
         if not contents:
             raise PreventUpdate
-        import invoice_parse
+        import invoice_parse, product_import, base64
 
         uploads = contents if isinstance(contents, list) else [contents]
         names = filenames if isinstance(filenames, list) else [filenames]
         atts = list(current or [])
 
         saved_meta = []
+        html_text = None
         for content, fname in zip(uploads, names):
             if not content:
                 continue
             try:
                 meta = save_attachment(content, fname or "attachment")
-                atts.append(meta)
-                saved_meta.append(meta)
             except Exception:
                 continue
+            atts.append(meta)
+            saved_meta.append(meta)
+            if meta.get("kind") == "html" and html_text is None:
+                try:
+                    if "," in content:
+                        html_text = base64.b64decode(content.split(",", 1)[1]).decode("utf-8", "replace")
+                except Exception:
+                    html_text = None
 
+        NF = no_update  # unfilled catalogue outputs
         if not saved_meta:
             return (no_update, None, no_update, no_update, no_update, no_update,
-                    True, "Couldn't attach", "warning", "That file couldn't be read.")
+                    True, "Couldn't attach", "warning", "That file couldn't be read.",
+                    NF, NF, NF, NF, NF, NF, NF)
 
-        # Auto-extract purchase details from the most recent parseable document
-        # (image → OCR, HTML → text). Only fills fields the user left blank, so a
-        # value you already typed is never overwritten.
+        # ---- Product details from a saved listing page (HTML) — blanks only ----
+        def _s(v):
+            t = "" if v is None else str(v).strip()
+            return "" if t.lower() == "unknown" else t
+        name_o = cat_o = val_o = specs_o = dims_o = tags_o = url_o = no_update
+        prod_ok = False
+        if html_text and html_text.strip():
+            res = product_import.import_product(html_text=html_text)
+            if res.get("ok"):
+                d = _per_unit_adjust(res.get("data") or {})
+                if not (cur_name or "").strip() and _s(d.get("name")):
+                    name_o = _s(d.get("name"))
+                if not (cur_cat or "").strip() and _s(d.get("category")):
+                    cat_o = _s(d.get("category"))
+                if not (cur_value or "").strip() and _s(d.get("estimated_value")):
+                    val_o = _s(d.get("estimated_value"))
+                sp = d.get("specifications")
+                sp_txt = _specs_to_text(sp) if isinstance(sp, list) else _s(sp)
+                if not (cur_specs or "").strip() and sp_txt:
+                    specs_o = sp_txt
+                if not (cur_dims or "").strip() and _s(d.get("dimensions")):
+                    dims_o = _s(d.get("dimensions"))
+                tg = d.get("tags")
+                tg_txt = _tags_to_text(tg) if isinstance(tg, list) else _s(tg)
+                if not (cur_tags or "").strip() and tg_txt:
+                    tags_o = tg_txt
+                if not (cur_url or "").strip() and _s(d.get("product_url")):
+                    url_o = _s(d.get("product_url"))
+                prod_ok = True
+
+        # ---- Purchase details from the most recent parseable document ----
         order = (cur_order or "").strip()
         pdate = (cur_date or "").strip()
         price = (cur_price or "").strip()
@@ -2542,26 +2655,23 @@ def register_callbacks(app):
             if not text.strip():
                 continue
             found = invoice_parse.extract_purchase(text)
-            if not order and found.get("order_number"):
-                order = found["order_number"]
-            if not pdate and found.get("purchase_date"):
-                pdate = found["purchase_date"]
-            if not price and found.get("price_paid"):
-                price = found["price_paid"]
-            if not seller and found.get("seller"):
-                seller = found["seller"]
+            order = order or found.get("order_number", "")
+            pdate = pdate or found.get("purchase_date", "")
+            price = price or found.get("price_paid", "")
+            seller = seller or found.get("seller", "")
             read_n = len(found.get("found", []))
             break  # only parse the single most-recent parseable doc
 
         n = len(saved_meta)
+        bits = [f"Added {n} document{'s' if n != 1 else ''}"]
+        if prod_ok:
+            bits.append("read the listing")
         if read_n:
-            header = "Attached + read invoice"
-            msg = (f"Added {n} document{'s' if n != 1 else ''}; read {read_n} purchase "
-                   f"field{'s' if read_n != 1 else ''} — review, then Save.")
-        else:
-            header = "Attached"
-            msg = f"Added {n} document{'s' if n != 1 else ''}."
-        return (atts, None, order, pdate, price, seller, True, header, "success", msg)
+            bits.append(f"{read_n} purchase field{'s' if read_n != 1 else ''}")
+        header = "Attached + auto-filled" if (prod_ok or read_n) else "Attached"
+        msg = " · ".join(bits) + (" — review, then Save." if (prod_ok or read_n) else ".")
+        return (atts, None, order, pdate, price, seller, True, header, "success", msg,
+                name_o, cat_o, val_o, specs_o, dims_o, tags_o, url_o)
 
     # ---------- Form: remove one attachment from the pending set ----------
     @app.callback(

@@ -1,6 +1,12 @@
 Tesseract-OCR/
-assets/
-!assets/*.css
+# Ignore the user-data asset subdirs (photos, previews, thumbnails, uploaded
+# documents), but keep top-level asset CODE tracked (custom.css, camera.js).
+# NB: a blanket `assets/` can't be undone by `!assets/*.css` — git won't
+# re-include a file whose parent dir is excluded — so target the subdirs.
+assets/images/
+assets/thumbnails/
+assets/previews/
+assets/documents/
 logs/
 *.csv
 *.json

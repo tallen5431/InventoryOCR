@@ -330,13 +330,17 @@ def register_operations_callbacks(app):
         Output("op-mat-images", "data"),
         Output("op-mat-gallery", "children"),
         Output("op-mat-image-upload", "contents"),
+        Output("op-mat-image-cam", "contents"),
         Input("op-mat-image-upload", "contents"),
+        Input("op-mat-image-cam", "contents"),
         Input({"type": "op-mat-img-remove", "index": ALL}, "n_clicks"),
         State("op-mat-image-upload", "filename"),
+        State("op-mat-image-cam", "filename"),
         State("op-mat-images", "data"),
         prevent_initial_call=True,
     )
-    def stage_material_photos(contents, remove_clicks, filenames, current):
+    def stage_material_photos(contents, cam_contents, remove_clicks,
+                              filenames, cam_filenames, current):
         current = list(current or [])
         trig = ctx.triggered_id
         # Remove a staged photo
@@ -347,12 +351,18 @@ def register_operations_callbacks(app):
             idx = trig.get("index")
             if isinstance(idx, int) and 0 <= idx < len(current):
                 current.pop(idx)
-            return current, _render_gallery(current), no_update
-        # New upload(s)
-        if not contents:
+            return current, _render_gallery(current), no_update, no_update
+        # New upload(s) from either the dropzone or the camera button.
+        payload = names = None
+        clear_choose = clear_cam = no_update
+        if trig == "op-mat-image-upload" and contents:
+            payload, names, clear_choose = contents, filenames, None
+        elif trig == "op-mat-image-cam" and cam_contents:
+            payload, names, clear_cam = cam_contents, cam_filenames, None
+        if payload is None:
             raise PreventUpdate
-        conts = contents if isinstance(contents, list) else [contents]
-        names = filenames if isinstance(filenames, list) else [filenames]
+        conts = payload if isinstance(payload, list) else [payload]
+        names = names if isinstance(names, list) else [names]
         for c, fn in zip(conts, names):
             if not c:
                 continue
@@ -361,8 +371,8 @@ def register_operations_callbacks(app):
                 current.append(info["filename"])
             except Exception:
                 continue
-        # Reset the upload so re-picking the same file fires again.
-        return current, _render_gallery(current), None
+        # Reset both inputs so re-picking the same file fires a fresh event.
+        return current, _render_gallery(current), clear_choose, clear_cam
 
     # ---------------- Material form: documents + invoice parse --------------
     # OWNS attachments/doc-list/doc-status/doc-upload.contents. Auto-fills

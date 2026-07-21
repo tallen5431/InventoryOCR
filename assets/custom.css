@@ -648,6 +648,33 @@ input[type="radio"] {
     }
 }
 
+/* Large-photo mode (toolbar "Large photos" switch adds body.large-thumbs) —
+   bigger table thumbnails to visually confirm a search hit without opening the
+   full image. Widens the Photo column to fit. */
+body.large-thumbs #inventory-table td[data-dash-column="image"] img {
+    width: 132px !important;
+    height: 132px !important;
+    border-radius: 10px;
+}
+body.large-thumbs #inventory-table td[data-dash-column="image"],
+body.large-thumbs #inventory-table th[data-dash-column="image"] {
+    width: 152px !important;
+    min-width: 152px !important;
+    max-width: 164px !important;
+}
+@media (max-width: 576px) {
+    body.large-thumbs #inventory-table td[data-dash-column="image"] img {
+        width: 100px !important;
+        height: 100px !important;
+    }
+    body.large-thumbs #inventory-table td[data-dash-column="image"],
+    body.large-thumbs #inventory-table th[data-dash-column="image"] {
+        width: 116px !important;
+        min-width: 116px !important;
+        max-width: 120px !important;
+    }
+}
+
 /* ============================================
    STORAGE MAP / ORGANIZE
    ============================================ */
