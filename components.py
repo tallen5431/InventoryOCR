@@ -236,6 +236,33 @@ def sidebar_form():
                                 "Local vision AI suggests what it is; the web button opens Google for the name/specs.",
                                 className="text-muted small mt-1",
                             ),
+
+                            # ----- Attach anything (prominent) — one upload for every file -----
+                            dbc.Label(
+                                [html.I(className="bi bi-paperclip me-1"), "Attach anything"],
+                                className="mt-3",
+                            ),
+                            dcc.Upload(
+                                id="attach-upload",
+                                children=html.Div(
+                                    [
+                                        html.Div("📎", className="upload-icon"),
+                                        html.Div(html.Strong(
+                                            "Product page, invoice, receipt, spec sheet, any file")),
+                                        html.Div(
+                                            "A saved product page (.html) fills in name, price & specs; an "
+                                            "invoice (image or HTML) fills order #, date & total — review "
+                                            "before you Save. Every file is kept as a record.",
+                                            className="text-muted small mt-1",
+                                        ),
+                                    ]
+                                ),
+                                multiple=True,
+                                className="upload-dropzone",
+                            ),
+                            html.Div(id="attach-list", className="mt-2"),
+                            dcc.Store(id="current-attachments", data=[]),
+
                             dbc.Button(
                                 [html.I(className="bi bi-link-45deg me-1"), "Import from a product link / page"],
                                 id="open-import",
@@ -295,9 +322,9 @@ def sidebar_form():
                                 is_open=False,
                             ),
 
-                            # ----- Documents (product pages + invoices) + purchase record -----
+                            # ----- Purchase details (auto-filled from an attached invoice) -----
                             dbc.Button(
-                                [html.I(className="bi bi-receipt me-1"), "Documents & purchase ",
+                                [html.I(className="bi bi-receipt me-1"), "Purchase details ",
                                  html.I(className="bi bi-chevron-down")],
                                 id="purchase-docs-toggle",
                                 color="link",
@@ -350,31 +377,10 @@ def sidebar_form():
                                             ],
                                             className="g-2",
                                         ),
-                                        dbc.Label(
-                                            [html.I(className="bi bi-paperclip me-1"),
-                                             "Attach anything — one upload for all files"],
-                                            className="mt-3",
+                                        html.Div(
+                                            "Tip: attach an invoice above and these fill in automatically.",
+                                            className="text-muted small mt-2",
                                         ),
-                                        dcc.Upload(
-                                            id="attach-upload",
-                                            children=html.Div(
-                                                [
-                                                    html.Div("📎", className="upload-icon"),
-                                                    html.Div(html.Strong(
-                                                        "Product page, invoice, receipt, spec sheet, any file")),
-                                                    html.Div(
-                                                        "A saved product page (.html) fills in name, price & specs; "
-                                                        "an invoice (image or HTML) fills order #, date & total — "
-                                                        "review before you Save. Every file is kept as a record.",
-                                                        className="text-muted small mt-1",
-                                                    ),
-                                                ]
-                                            ),
-                                            multiple=True,
-                                            className="upload-dropzone",
-                                        ),
-                                        html.Div(id="attach-list", className="mt-2"),
-                                        dcc.Store(id="current-attachments", data=[]),
                                     ]
                                 ),
                                 id="purchase-docs-collapse",
