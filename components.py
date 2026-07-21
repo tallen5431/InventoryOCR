@@ -240,12 +240,44 @@ def sidebar_form():
                                         [
                                             html.Div(id="ocr-auto-status",
                                                      className="small fw-semibold mb-1"),
+                                            # Editable: this is the exact text that
+                                            # gets saved onto the item and searched,
+                                            # so the user can fix a bad scan or clear
+                                            # it entirely without deleting the photo.
                                             dbc.Textarea(
                                                 id="ocr-auto-preview",
-                                                readOnly=True,
                                                 rows=4,
                                                 className="small font-monospace",
-                                                placeholder="Scanned text will appear here…",
+                                                placeholder="Scanned text will appear here — "
+                                                            "edit or clear it before saving.",
+                                            ),
+                                            html.Div(
+                                                "This trimmed text is what gets saved and "
+                                                "searched — edit or clear it, then Save. The "
+                                                "full untrimmed scan is kept separately below.",
+                                                className="text-muted mt-1",
+                                                style={"fontSize": "0.72rem"},
+                                            ),
+                                            # The full, unfiltered scan, retained on
+                                            # the item for reference / re-processing
+                                            # but kept out of the search index.
+                                            dbc.Button(
+                                                [html.I(className="bi bi-file-text me-1"),
+                                                 "Full raw scan"],
+                                                id="ocr-raw-toggle",
+                                                color="link", size="sm",
+                                                className="p-0 mt-2 text-decoration-none small",
+                                            ),
+                                            dbc.Collapse(
+                                                dbc.Textarea(
+                                                    id="ocr-raw-view",
+                                                    readOnly=True,
+                                                    rows=6,
+                                                    className="small font-monospace mt-1",
+                                                    placeholder="No raw scan stored for this item yet.",
+                                                ),
+                                                id="ocr-raw-collapse",
+                                                is_open=False,
                                             ),
                                         ],
                                         className="p-2",

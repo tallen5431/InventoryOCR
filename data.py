@@ -220,7 +220,7 @@ def _min_record(rid: Optional[int], r: Dict[str, Any]) -> Dict[str, Any]:
         "description": _safe_str(r.get("description")),
         "category": "", "type": "", "location": "", "location_code": "",
         "qty": _safe_qty(r.get("qty")), "reorder_at": None,
-        "images": [], "ocr_text": "", "thumb_url": "",
+        "images": [], "ocr_text": "", "ocr_raw": "", "thumb_url": "",
         "specifications": [], "estimated_value": "", "dimensions": "",
         "product_url": "", "tags": [], "source_title": "",
         "attachments": [], "order_number": "", "purchase_date": "",
@@ -297,6 +297,11 @@ def inventory() -> List[Dict[str, Any]]:
                 "reorder_at": _coerce_reorder(r.get("reorder_at")),
                 "images": images if isinstance(images, list) else [],
                 "ocr_text": _safe_str(r.get("ocr_text")),
+                # Full, unfiltered scan text. Retained for reference / re-processing
+                # (invoice re-parse, a future better trimmer) but deliberately kept
+                # OUT of the search haystack — that's what ``ocr_text`` (the trimmed,
+                # item-relevant copy) is for. See text_relevance.for_index.
+                "ocr_raw": _safe_str(r.get("ocr_raw")),
                 "thumb_url": _safe_str(r.get("thumb_url")),
                 # Richer catalogue fields (from vision AI / web lookup). All optional.
                 "specifications": _norm_list(r.get("specifications")),
@@ -583,6 +588,9 @@ def add_item(
         "reorder_at": _coerce_reorder(reorder_at),
         "images": _clean_images(images),
         "ocr_text": ocr_text or "",
+        # Raw scan text is filled in later by the background OCR write-back
+        # (set_ocr_text), never at create time — so default it empty here.
+        "ocr_raw": "",
         "created_at": _now_iso(),
         "specifications": _norm_list(specifications),
         "estimated_value": (estimated_value or "").strip(),
@@ -648,6 +656,7 @@ def add_photo_items(filenames: List[str], prefix: str = "Item") -> List[Dict[str
             "reorder_at": None,
             "images": [fn],
             "ocr_text": "",
+            "ocr_raw": "",
             "created_at": _now_iso(),
             "specifications": [],
             "estimated_value": "",
@@ -698,6 +707,7 @@ def update_item(
     purchase_date: Any = _KEEP,
     price_paid: Any = _KEEP,
     seller: Any = _KEEP,
+    ocr_raw: Any = _KEEP,
 ) -> Dict[str, Any]:
     rows = inventory()
     found = None
@@ -753,6 +763,11 @@ def update_item(
                 r["price_paid"] = (price_paid or "").strip()
             if seller is not _KEEP:
                 r["seller"] = (seller or "").strip()
+            # Raw scan text is normally left to the background OCR write-back
+            # (via set_ocr_text); an ordinary form save omits it so editing the
+            # trimmed ocr_text never discards the retained full scan.
+            if ocr_raw is not _KEEP:
+                r["ocr_raw"] = ocr_raw or ""
             found = r
             break
     if found is None:
@@ -910,7 +925,8 @@ def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
     return found
 
 
-def set_ocr_text(item_id: int, text: str, merge: bool = False) -> Optional[Dict[str, Any]]:
+def set_ocr_text(item_id: int, text: str, merge: bool = False,
+                 raw: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Write an item's scanned OCR text (from auto-OCR / the OCR Lab). Returns it.
 
     Kept separate from ``update_item_fields`` (whose ``_PATCHABLE`` set is short
@@ -918,11 +934,16 @@ def set_ocr_text(item_id: int, text: str, merge: bool = False) -> Optional[Dict[
     background thread after an image is scanned — it must serialize against every
     other mutator like any other write.
 
-    With ``merge=True`` the new text is appended to whatever OCR text the item
-    currently holds (deduped) *inside the write lock*, rather than replacing it.
-    That's what the background write-back uses: it reads the item's live text at
-    write time, so two scans of the same item racing (e.g. a quick second save)
-    can't clobber each other — each only adds what it found.
+    ``text`` is the trimmed, item-relevant copy that feeds the search index.
+    ``raw`` (when given) is the full unfiltered scan, stored in ``ocr_raw`` for
+    reference / re-processing and kept OUT of search. Pass ``raw=None`` (the
+    default) to leave any existing raw text untouched.
+
+    With ``merge=True`` the new text is appended to whatever the item currently
+    holds (deduped) *inside the write lock*, rather than replacing it — the same
+    applies to ``raw``. That's what the background write-back uses: it reads the
+    item's live text at write time, so two scans of the same item racing (e.g. a
+    quick second save) can't clobber each other — each only adds what it found.
     """
     rows = inventory()
     found = None
@@ -931,8 +952,12 @@ def set_ocr_text(item_id: int, text: str, merge: bool = False) -> Optional[Dict[
             if merge:
                 from ocr_auto import merge_text
                 r["ocr_text"] = merge_text(r.get("ocr_text", ""), text or "")
+                if raw is not None:
+                    r["ocr_raw"] = merge_text(r.get("ocr_raw", ""), raw or "")
             else:
                 r["ocr_text"] = text or ""
+                if raw is not None:
+                    r["ocr_raw"] = raw or ""
             found = r
             break
     if found is not None:
@@ -2184,6 +2209,12 @@ def merge_preview(items: List[Dict[str, Any]],
         if t and t not in ocr_parts:
             ocr_parts.append(t)
 
+    ocr_raw_parts: List[str] = []
+    for r in ordered:
+        t = (r.get("ocr_raw") or "").strip()
+        if t and t not in ocr_raw_parts:
+            ocr_raw_parts.append(t)
+
     total_qty = sum(max(0, int(r.get("qty") or 0)) for r in ordered)
     # Keep the tightest reorder point among the merged items (else none).
     _reorders = [_coerce_reorder(r.get("reorder_at")) for r in ordered]
@@ -2213,6 +2244,7 @@ def merge_preview(items: List[Dict[str, Any]],
         "reorder_at": merged_reorder,
         "images": _union_list(ordered, "images"),
         "ocr_text": "\n".join(ocr_parts),
+        "ocr_raw": "\n".join(ocr_raw_parts),
         "specifications": _union_list(ordered, "specifications"),
         "estimated_value": _first_nonempty(ordered, "estimated_value"),
         "dimensions": _first_nonempty(ordered, "dimensions"),
@@ -2353,7 +2385,7 @@ def merge_group(primary_id: int, merge_ids: List[int],
 
     # Write the merged fields onto the primary row (keep its id), drop the rest.
     for k in ("name", "description", "category", "type", "location", "location_code", "qty",
-              "reorder_at", "images", "ocr_text", "specifications", "estimated_value",
+              "reorder_at", "images", "ocr_text", "ocr_raw", "specifications", "estimated_value",
               "dimensions", "product_url", "tags", "created_at",
               "attachments", "order_number", "purchase_date", "price_paid", "seller"):
         primary[k] = merged.get(k, primary.get(k))

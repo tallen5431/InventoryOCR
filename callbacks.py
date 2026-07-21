@@ -52,12 +52,15 @@ def _schedule_ocr_writeback(item_id, new_refs):
 
     def _run():
         try:
-            # text_for() is the RAW scan (invoice parsing reads its own copy);
-            # index_text() keeps only the item-relevant part so the search index
-            # isn't polluted with page nav / cross-sell / reviews.
-            found = ocr_auto.index_text(ocr_auto.text_for(files, wait=True))
-            if found:
-                data.set_ocr_text(item_id, found, merge=True)
+            # text_for() is the RAW scan; index_text() keeps only the
+            # item-relevant part so the search index isn't polluted with page
+            # nav / cross-sell / reviews. We persist BOTH — the trimmed copy in
+            # ocr_text (searchable/displayed) and the full raw scan in ocr_raw
+            # (retained for reference / re-processing, kept out of search).
+            raw = ocr_auto.text_for(files, wait=True)
+            found = ocr_auto.index_text(raw)
+            if found or raw:
+                data.set_ocr_text(item_id, found, merge=True, raw=raw)
         except Exception:
             pass
 
@@ -1211,6 +1214,7 @@ def register_callbacks(app):
             State("item-seller", "value"),
             State("current-attachments", "data"),
             State("auto-ocr", "value"),
+            State("ocr-auto-preview", "value"),
         ],
         prevent_initial_call=False,
     )
@@ -1220,7 +1224,7 @@ def register_callbacks(app):
                      specs, value, dims, tags, producturl, img_contents,
                      current_images, editing_id, current_rows,
                      order_number, purchase_date, price_paid, seller, current_attachments,
-                     auto_ocr):
+                     auto_ocr, ocr_preview_text):
         triggered = (ctx.triggered_id or "")
         # Default toast outputs to no_update: 'inventory-table.selected_rows' is both
         # an Output and an Input here, so resetting the selection after a Save/Delete
@@ -1288,13 +1292,20 @@ def register_callbacks(app):
                 ocr_target = None
                 try:
                     if editing_id:
-                        # preserve existing ocr_text if not part of this form
                         existing_row = next((r for r in items if r.get("id") == editing_id), {})
                         existing_ocr = existing_row.get("ocr_text", "")
+                        # The OCR panel is editable and is loaded with the item's
+                        # stored text on select, so its current value IS the text
+                        # to save — this is how an edit or a clear takes effect.
+                        # A literal None means the panel was never populated (it's
+                        # not on this form path), so fall back to the stored text
+                        # rather than wiping it; an empty string is a real clear.
+                        ocr_to_save = (existing_ocr if ocr_preview_text is None
+                                       else ocr_preview_text)
                         prior_imgs = existing_row.get("images", []) or []
                         prior_att_files = {a.get("filename") for a in
                                            (existing_row.get("attachments") or [])}
-                        data.update_item(editing_id, nm, ds, nqty, img_filenames, existing_ocr,
+                        data.update_item(editing_id, nm, ds, nqty, img_filenames, ocr_to_save,
                                          category=cat, location=loc, location_code=code,
                                          specifications=specs, estimated_value=value,
                                          dimensions=dims, tags=tags, product_url=producturl,
@@ -1308,7 +1319,12 @@ def register_callbacks(app):
                         new_refs = new_photos + ocr_auto.doc_refs(new_atts)
                         ocr_target = (editing_id, new_refs)
                     else:
-                        created = data.add_item(nm, ds, nqty, img_filenames, "", category=cat, location=loc,
+                        # A new item keeps whatever the (editable) OCR panel holds
+                        # at save time — live-scanned text or the user's edits. The
+                        # background write-back then merges in anything that was
+                        # still scanning (deduped), and stores the raw scan too.
+                        new_ocr = ocr_preview_text or ""
+                        created = data.add_item(nm, ds, nqty, img_filenames, new_ocr, category=cat, location=loc,
                                       location_code=code, specifications=specs, estimated_value=value,
                                       dimensions=dims, tags=tags, product_url=producturl,
                                       item_type=typ, reorder_at=reorder,
@@ -1663,20 +1679,34 @@ def register_callbacks(app):
         Output("ocr-auto-preview", "value"),
         Output("ocr-auto-status", "children"),
         Output("ocr-auto-collapse", "is_open"),
+        Output("ocr-raw-view", "value"),
         Input("editing-id", "data"),
         prevent_initial_call=True,
     )
     def load_ocr_baseline(editing_id):
         if not editing_id:
             # New item / form cleared — nothing scanned yet.
-            return "", "", "", False
+            return "", "", "", False, ""
         row = next((r for r in data.inventory() if r.get("id") == editing_id), None)
         stored = (row or {}).get("ocr_text", "") if row else ""
-        if stored:
-            return (stored, stored,
-                    "Saved text from earlier scans — new photos & documents add to this.",
-                    True)
-        return "", "", "", False
+        raw = (row or {}).get("ocr_raw", "") if row else ""
+        if stored or raw:
+            status = ("Saved text from earlier scans — edit or clear it; new photos "
+                      "& documents add to it."
+                      if stored else
+                      "Trimmed text is empty — the full raw scan is kept below.")
+            return stored, stored, status, True, raw
+        return "", "", "", False, ""
+
+    # Show / hide the full untrimmed scan (retained on the item, not searched).
+    @app.callback(
+        Output("ocr-raw-collapse", "is_open"),
+        Input("ocr-raw-toggle", "n_clicks"),
+        State("ocr-raw-collapse", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_raw_scan(_n, is_open):
+        return not is_open
 
     # Poll: streams background-OCR results into the preview while a scan runs,
     # then disables its own Interval. update_image_gallery re-enables it on the
