@@ -25,6 +25,7 @@ from ui_helpers import doc_viewer_modal, doc_viewer_body, doc_url
 from components import (
     sidebar_form,
     inventory_table,
+    gallery_view,
     detail_panel,
     kpi_bar,
     breakdown_card,
@@ -389,6 +390,10 @@ def dashboard_layout():
             dbc.Collapse(filter_card(), id="collapse-filter", is_open=False),
             # The inventory table is the hero — always visible, full width.
             inventory_table(),
+            # Gallery (tile) view — swapped in by the toolbar "Gallery" switch.
+            gallery_view(),
+            # Sink for the clientside table/gallery visibility toggle.
+            html.Div(id="gallery-mode-sink", style={"display": "none"}),
             # Overview + Storage map — collapsed by default.
             dbc.Collapse(breakdown_card(), id="collapse-overview", is_open=False),
             dbc.Collapse(organize_card(), id="collapse-storage", is_open=False),

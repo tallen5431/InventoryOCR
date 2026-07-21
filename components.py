@@ -501,6 +501,17 @@ def dashboard_toolbar():
             dbc.Col(search_box(), xs=12, sm=True),
             dbc.Col(
                 dbc.Switch(
+                    id="gallery-view",
+                    label=[html.I(className="bi bi-grid-3x3-gap-fill me-1"), "Gallery"],
+                    value=False,
+                    className="mb-0 text-nowrap",
+                    persistence=True,
+                ),
+                xs="auto",
+                className="d-flex align-items-center",
+            ),
+            dbc.Col(
+                dbc.Switch(
                     id="large-thumbs",
                     label=[html.I(className="bi bi-image me-1"), "Large photos"],
                     value=False,
@@ -720,7 +731,26 @@ def inventory_table():
             ),
             _bulk_bar(),
             html.Div([table], className="table-responsive"),
-        ]
+        ],
+        id="inventory-table-wrap",
+    )
+
+
+def gallery_view():
+    """Tile/gallery view of the inventory — a grid of large photos, tap a tile to
+    expand its details in place. Toggled by the toolbar "Gallery" switch; shares
+    the same search/filter as the table. Its tiles are built by render_gallery."""
+    return html.Div(
+        [
+            dcc.Store(id="gallery-open-id"),   # id of the currently expanded tile
+            html.Div(
+                html.Span(["Tap a tile to expand its details · tap a photo to view it full-size"],
+                          className="text-muted small"),
+                className="mb-2",
+            ),
+            dcc.Loading(html.Div(id="inventory-gallery"), type="default"),
+        ],
+        id="inventory-gallery-wrap",
     )
 
 

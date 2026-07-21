@@ -905,6 +905,104 @@ def _per_unit_adjust(d):
     return d
 
 
+def _tile_details(r):
+    """Expanded detail panel for a gallery tile: photos (tap to enlarge), the
+    catalogue fields, specs, documents (in-app viewable), and an Edit button."""
+    iid = r.get("id")
+    imgs = r.get("images") or []
+    photo_strip = html.Div(
+        [html.Img(src=get_thumbnail_url(f), className="gallery-detail-thumb",
+                  id={"type": "gallery-photo", "item": iid, "idx": j}, n_clicks=0,
+                  title="View full-size")
+         for j, f in enumerate(imgs) if get_thumbnail_url(f)],
+        className="d-flex flex-wrap gap-2 mb-2",
+    ) if imgs else None
+
+    fields = []
+
+    def _fld(label, val):
+        val = ("" if val is None else str(val)).strip()
+        if val:
+            fields.append(html.Div([html.Span(f"{label}: ", className="text-muted"),
+                                    html.Span(val)], className="small"))
+    _fld("Type", r.get("type"))
+    _fld("Category", r.get("category"))
+    _fld("Location", r.get("location"))
+    _fld("Bin", r.get("location_code"))
+    _fld("Value", r.get("estimated_value"))
+    _fld("Reorder at", r.get("reorder_at"))
+    _fld("Tags", ", ".join(r.get("tags") or []))
+
+    body = [
+        html.Div(
+            [html.Strong(r.get("name", "") or "(unnamed)"),
+             dbc.Button([html.I(className="bi bi-pencil me-1"), "Edit"],
+                        id={"type": "gallery-edit", "index": iid}, color="primary",
+                        size="sm", className="ms-auto", n_clicks=0)],
+            className="d-flex align-items-center mb-2",
+        ),
+    ]
+    if photo_strip is not None:
+        body.append(photo_strip)
+    desc = (r.get("description") or "").strip()
+    if desc:
+        body.append(html.Div(desc, className="mb-2"))
+    if fields:
+        body.append(html.Div(fields, className="mb-2"))
+    specs = r.get("specifications") or []
+    if specs:
+        body.append(html.Div(
+            [html.Div("Specs", className="text-muted small")]
+            + [html.Div(f"• {s}", className="small") for s in specs], className="mb-2"))
+    atts = r.get("attachments") or []
+    if atts:
+        body.append(html.Div([html.Div("Documents", className="text-muted small mb-1"),
+                              _render_attachments(atts, remove_type=None)]))
+    return dbc.Card(dbc.CardBody(body), className="gallery-detail")
+
+
+def _build_gallery(items, open_id):
+    """Responsive grid of photo tiles; the one whose id == open_id renders an
+    expanded, full-width detail panel right after it (tap-to-expand-in-place)."""
+    if not items:
+        return html.Div([html.I(className="bi bi-search me-2"),
+                         "No items match your search / filters."],
+                        className="text-muted p-4 text-center")
+    cols = []
+    for r in items:
+        iid = r.get("id")
+        imgs = r.get("images") or []
+        thumb = get_preview_url(imgs[0]) if imgs else ""
+        expanded = iid is not None and iid == open_id
+        img_el = (html.Img(src=thumb, className="gallery-tile-img")
+                  if thumb else html.Div("📦", className="gallery-tile-noimg"))
+        meta = [html.Span(f"×{r.get('qty', 0)}", className="badge bg-secondary me-1")]
+        loc = (r.get("location") or "").strip() or (r.get("location_code") or "").strip()
+        if loc:
+            meta.append(html.Span([html.I(className="bi bi-geo-alt me-1"), loc],
+                                  className="text-muted"))
+        head = [img_el]
+        if len(imgs) > 1:
+            head.append(html.Span([str(len(imgs)), html.I(className="bi bi-images ms-1")],
+                                  className="gallery-tile-photocount"))
+        tile = dbc.Button(
+            dbc.Card(
+                [html.Div(head, className="position-relative"),
+                 dbc.CardBody(
+                     [html.Div(r.get("name", "") or "(unnamed)", className="gallery-tile-name"),
+                      html.Div(meta, className="gallery-tile-meta mt-1")],
+                     className="p-2")],
+                className="gallery-tile h-100" + (" expanded" if expanded else ""),
+            ),
+            id={"type": "gallery-tile", "index": iid}, n_clicks=0,
+            color="link", className="p-0 w-100 text-decoration-none text-start",
+        )
+        cols.append(dbc.Col(tile, xs=6, sm=4, md=3, lg=2, className="mb-2"))
+        if expanded:
+            cols.append(dbc.Col(_tile_details(r), xs=12, className="mb-2"))
+    return dbc.Row(cols, className="g-2")
+
+
 def register_callbacks(app):
     # ---------- Large-photo mode: toggle a body class (clientside, no round-trip) ----------
     # Bigger table thumbnails so you can visually confirm a search hit without
@@ -921,6 +1019,101 @@ def register_callbacks(app):
         Output("large-thumbs-sink", "children"),
         Input("large-thumbs", "value"),
     )
+
+    # ---------- Gallery view: swap table <-> tile grid (clientside body class) ----------
+    app.clientside_callback(
+        """
+        function(on) {
+            try { document.body.classList.toggle('gallery-mode', !!on); } catch (e) {}
+            return '';
+        }
+        """,
+        Output("gallery-mode-sink", "children"),
+        Input("gallery-view", "value"),
+    )
+
+    # ---------- Gallery: build the tiles (shares the table's search/filter/sort) ----------
+    @app.callback(
+        Output("inventory-gallery", "children"),
+        Input("gallery-view", "value"),
+        Input("search-bar", "value"),
+        Input("filter-type", "value"),
+        Input("filter-category", "value"),
+        Input("filter-location", "value"),
+        Input("filter-bin", "value"),
+        Input("sort-by", "value"),
+        Input("refresh-seq", "data"),
+        Input("gallery-open-id", "data"),
+        prevent_initial_call=False,
+    )
+    def render_gallery(is_gallery, search, ftype, fcat, floc, fbin, sort_by, _refresh, open_id):
+        # Only build tiles while the gallery is showing — no wasted work in table
+        # mode. prevent_initial_call=False so a persisted "Gallery on" builds on load.
+        if not is_gallery:
+            raise PreventUpdate
+        filtered = _apply_filters(data.inventory(), search, fcat, floc, ftype, fbin)
+        filtered = _apply_sort(filtered, sort_by)
+        return _build_gallery(filtered, open_id)
+
+    # ---------- Gallery: tap a tile to expand its details in place ----------
+    @app.callback(
+        Output("gallery-open-id", "data"),
+        Input({"type": "gallery-tile", "index": ALL}, "n_clicks"),
+        State("gallery-open-id", "data"),
+        prevent_initial_call=True,
+    )
+    def gallery_toggle_tile(clicks, open_id):
+        if not any(clicks or []):
+            raise PreventUpdate
+        iid = (ctx.triggered_id or {}).get("index")
+        return None if iid == open_id else iid   # tap the open tile again to collapse
+
+    # ---------- Gallery: "Edit" loads the item into the form (via row selection) ----------
+    @app.callback(
+        Output("inventory-table", "selected_rows", allow_duplicate=True),
+        Input({"type": "gallery-edit", "index": ALL}, "n_clicks"),
+        State("search-bar", "value"),
+        State("filter-type", "value"),
+        State("filter-category", "value"),
+        State("filter-location", "value"),
+        State("filter-bin", "value"),
+        State("sort-by", "value"),
+        prevent_initial_call=True,
+    )
+    def gallery_edit(clicks, search, ftype, fcat, floc, fbin, sort_by):
+        if not any(clicks or []):
+            raise PreventUpdate
+        iid = (ctx.triggered_id or {}).get("index")
+        # Same filter+sort order as the table, so the item's position == its
+        # selected_rows index; selecting it makes manage_table load the form.
+        filtered = _apply_sort(_apply_filters(data.inventory(), search, fcat, floc, ftype, fbin),
+                               sort_by)
+        idx = next((i for i, r in enumerate(filtered) if r.get("id") == iid), None)
+        if idx is None:
+            raise PreventUpdate
+        return [idx]
+
+    # ---------- Gallery: tap a photo → open the full-image modal ----------
+    @app.callback(
+        Output("image-modal", "is_open", allow_duplicate=True),
+        Output("image-modal-title", "children", allow_duplicate=True),
+        Output("image-carousel", "items", allow_duplicate=True),
+        Output("image-modal-fullres", "children", allow_duplicate=True),
+        Input({"type": "gallery-photo", "item": ALL, "idx": ALL}, "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def gallery_open_photos(clicks):
+        if not any(clicks or []):
+            raise PreventUpdate
+        iid = (ctx.triggered_id or {}).get("item")
+        row = next((r for r in data.inventory() if r.get("id") == iid), None)
+        imgs = (row or {}).get("images") or []
+        if not imgs:
+            raise PreventUpdate
+        items = [{"key": str(i), "src": get_preview_url(f),
+                  "img_style": {"maxHeight": "70vh", "objectFit": "contain"}}
+                 for i, f in enumerate(imgs)]
+        return True, row.get("name", ""), items, _fullres_links([get_image_url(f) for f in imgs])
 
     # ---------- Table & form (single source of truth for table + toast) ----------
     @app.callback(
