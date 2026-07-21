@@ -349,7 +349,9 @@ def preview(filenames: List[str]) -> Dict[str, object]:
     session were never queued, so they're ignored here). Returns:
         scanned  – how many of these have a cached result
         pending  – how many are still being OCR'd
-        text     – combined text of the ready ones (in the given order)
+        text     – combined *item-relevant* text of the ready ones, filtered the
+                   same way it will be when saved, so the panel shows exactly
+                   what ends up searchable (not the raw page chrome/cross-sell)
     """
     files = [f for f in (filenames or []) if f]
     scanned = 0
@@ -363,7 +365,8 @@ def preview(filenames: List[str]) -> Dict[str, object]:
                     texts.append(_RESULTS[f])
             elif f in _FUTURES:
                 pending += 1
-    return {"scanned": scanned, "pending": pending, "text": "\n".join(texts).strip()}
+    return {"scanned": scanned, "pending": pending,
+            "text": index_text("\n".join(texts))}
 
 
 def text_for(filenames: List[str], *, wait: bool = False) -> str:
@@ -389,6 +392,25 @@ def text_for(filenames: List[str], *, wait: bool = False) -> str:
         if t:
             texts.append(t)
     return "\n".join(texts).strip()
+
+
+def index_text(raw: str) -> str:
+    """The item-relevant subset of raw scan text — for the search index / display.
+
+    A screenshot of a retailer page OCRs into mostly noise: site nav, the buy
+    box, cross-sell carousels of OTHER products, the whole review section, footer
+    boilerplate. Indexing all of that makes searches match unrelated items, so
+    the copy we save/show is passed through this relevance filter.
+
+    The RAW text is still what ``text_for()`` returns — invoice parsing needs the
+    buy-box / order details this strips — so only the searchable/displayed copy
+    is filtered, never the copy used to read purchase fields.
+    """
+    try:
+        from text_relevance import for_index
+        return for_index(raw or "")
+    except Exception:
+        return (raw or "").strip()
 
 
 def merge_text(base: str, addition: str) -> str:

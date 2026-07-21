@@ -52,7 +52,10 @@ def _schedule_ocr_writeback(item_id, new_refs):
 
     def _run():
         try:
-            found = ocr_auto.text_for(files, wait=True)
+            # text_for() is the RAW scan (invoice parsing reads its own copy);
+            # index_text() keeps only the item-relevant part so the search index
+            # isn't polluted with page nav / cross-sell / reviews.
+            found = ocr_auto.index_text(ocr_auto.text_for(files, wait=True))
             if found:
                 data.set_ocr_text(item_id, found, merge=True)
         except Exception:
@@ -1700,10 +1703,11 @@ def register_callbacks(app):
             return combined, status, True, False
         # Nothing left to scan — stop the Interval.
         if pv["text"]:
-            status = "✓ Found text — saved with the item and now searchable."
+            status = ("✓ Found text — saved with the item and searchable "
+                      "(trimmed to what describes this item).")
             return combined, status, True, True
         if pv["scanned"]:
-            return combined, "No readable text found in these files.", True, True
+            return combined, "No item text found in these files.", True, True
         # Nothing was actually queued this session; just switch the poll off.
         return no_update, no_update, no_update, True
 
