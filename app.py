@@ -18,6 +18,7 @@ from config import (
 )
 from flask import send_from_directory, request, Response
 import authz
+from version_info import VERSION_INFO, version_label, version_tooltip
 
 # UI components
 from components import (
@@ -248,9 +249,20 @@ def _healthz():
     return "ok", 200
 
 
-# Register /healthz (and the prefixed variant when served under /inventory).
+def _version():
+    # Machine-readable counterpart to the navbar badge — handy for confirming
+    # which branch/commit a *specific* deployment is running via curl, without
+    # opening a browser (e.g. two HTTP_Server instances pointed at different
+    # branches for A/B testing a change).
+    return {**VERSION_INFO}, 200
+
+
+# Register /healthz + /version (and the prefixed variants when served under
+# e.g. /inventory).
 for _i, _rule in enumerate(["/healthz"] + ([f"{URL_PREFIX}/healthz"] if URL_PREFIX else [])):
     server.add_url_rule(_rule, f"_healthz_{_i}", _healthz)
+for _i, _rule in enumerate(["/version"] + ([f"{URL_PREFIX}/version"] if URL_PREFIX else [])):
+    server.add_url_rule(_rule, f"_version_{_i}", _version)
 
 # ---- Static asset routes for images, previews & thumbnails -----------------
 # Browser URLs look like:
@@ -317,6 +329,17 @@ navbar = dbc.Navbar(
             ),
             html.Div(
                 [
+                    # Which branch/commit this instance is running — lets you confirm
+                    # you're testing the build you think you are, especially useful
+                    # when the HTTP_Server manager has several clones/instances around.
+                    # Hidden on the smallest phones (crowds the Connect/theme controls
+                    # there); the /version JSON endpoint covers that case instead.
+                    html.Small(
+                        [html.I(className="bi bi-git me-1"), version_label()],
+                        id="version-badge",
+                        className="text-muted me-3 d-none d-md-inline-block",
+                        title=version_tooltip(),
+                    ),
                     dbc.Button(
                         [html.I(className="bi bi-phone me-1"), "Connect"],
                         id="open-connect",
