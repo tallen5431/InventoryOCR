@@ -35,24 +35,26 @@ def _parse_qty(q):
         return 0
 
 
-def _schedule_ocr_writeback(item_id, new_files, base_ocr):
-    """Background-scan ``new_files`` for text and merge onto the saved item.
+def _schedule_ocr_writeback(item_id, new_refs):
+    """Background-scan the newly-added photos/documents (``new_refs``) and merge
+    whatever text they yield onto the saved item.
 
-    Runs on a daemon thread so a slow scan (e.g. a very long screenshot) never
-    blocks the Save. ``text_for(wait=True)`` reuses whatever the live preview
-    already OCR'd, so this is usually instant. Failures are swallowed — a scan
-    that doesn't pan out simply leaves the existing text untouched.
+    Runs on a daemon thread so a slow scan (e.g. a very long screenshot or a
+    multi-page PDF) never blocks the Save. ``text_for(wait=True)`` reuses
+    whatever the live preview already OCR'd, so this is usually instant. The
+    merge happens inside data's write lock against the item's *current* text, so
+    a racing second save can't clobber it. Failures are swallowed — a scan that
+    doesn't pan out simply leaves the existing text untouched.
     """
-    files = [f for f in (new_files or []) if f]
+    files = [f for f in (new_refs or []) if f]
     if not item_id or not files:
         return
 
     def _run():
         try:
             found = ocr_auto.text_for(files, wait=True)
-            combined = ocr_auto.merge_text(base_ocr or "", found)
-            if combined and combined != (base_ocr or ""):
-                data.set_ocr_text(item_id, combined)
+            if found:
+                data.set_ocr_text(item_id, found, merge=True)
         except Exception:
             pass
 
@@ -1287,6 +1289,8 @@ def register_callbacks(app):
                         existing_row = next((r for r in items if r.get("id") == editing_id), {})
                         existing_ocr = existing_row.get("ocr_text", "")
                         prior_imgs = existing_row.get("images", []) or []
+                        prior_att_files = {a.get("filename") for a in
+                                           (existing_row.get("attachments") or [])}
                         data.update_item(editing_id, nm, ds, nqty, img_filenames, existing_ocr,
                                          category=cat, location=loc, location_code=code,
                                          specifications=specs, estimated_value=value,
@@ -1295,8 +1299,11 @@ def register_callbacks(app):
                                          attachments=atts, order_number=p_order,
                                          purchase_date=p_date, price_paid=p_price, seller=p_seller)
                         toast_header, toast_icon, toast_msg = "Item Updated", "success", f'"{nm}" updated.'
+                        # Scan only the newly-added photos and documents.
                         new_photos = [f for f in img_filenames if f not in prior_imgs]
-                        ocr_target = (editing_id, new_photos, existing_ocr)
+                        new_atts = [a for a in atts if a.get("filename") not in prior_att_files]
+                        new_refs = new_photos + ocr_auto.doc_refs(new_atts)
+                        ocr_target = (editing_id, new_refs)
                     else:
                         created = data.add_item(nm, ds, nqty, img_filenames, "", category=cat, location=loc,
                                       location_code=code, specifications=specs, estimated_value=value,
@@ -1305,7 +1312,8 @@ def register_callbacks(app):
                                       attachments=atts, order_number=p_order,
                                       purchase_date=p_date, price_paid=p_price, seller=p_seller)
                         toast_header, toast_icon, toast_msg = "Item Added", "success", f'"{nm}" added.'
-                        ocr_target = (created.get("id"), list(img_filenames), "")
+                        new_refs = list(img_filenames) + ocr_auto.doc_refs(atts)
+                        ocr_target = (created.get("id"), new_refs)
                 except ValueError as e:
                     # Save failed (duplicate name, or the edited item vanished).
                     # Keep the form and any staged photos/attachments intact so the
@@ -1663,7 +1671,8 @@ def register_callbacks(app):
         stored = (row or {}).get("ocr_text", "") if row else ""
         if stored:
             return (stored, stored,
-                    "Saved text from earlier scans — new photos add to this.", True)
+                    "Saved text from earlier scans — new photos & documents add to this.",
+                    True)
         return "", "", "", False
 
     # Poll: streams background-OCR results into the preview while a scan runs,
@@ -1676,22 +1685,25 @@ def register_callbacks(app):
         Output("ocr-auto-poll", "disabled"),
         Input("ocr-auto-poll", "n_intervals"),
         State("current-images", "data"),
+        State("current-attachments", "data"),
         State("ocr-base", "data"),
         prevent_initial_call=True,
     )
-    def poll_ocr_auto(_n, current_images, ocr_base):
-        pv = ocr_auto.preview(current_images or [])
+    def poll_ocr_auto(_n, current_images, current_attachments, ocr_base):
+        # Scan refs = item photos + any attached screenshots / PDFs.
+        refs = list(current_images or []) + ocr_auto.doc_refs(current_attachments)
+        pv = ocr_auto.preview(refs)
         combined = ocr_auto.merge_text(ocr_base or "", pv["text"])
         if pv["pending"] > 0:
             n = pv["pending"]
-            status = f"⏳ Scanning {n} photo{'s' if n != 1 else ''} for text…"
+            status = f"⏳ Scanning {n} file{'s' if n != 1 else ''} for text…"
             return combined, status, True, False
         # Nothing left to scan — stop the Interval.
         if pv["text"]:
             status = "✓ Found text — saved with the item and now searchable."
             return combined, status, True, True
         if pv["scanned"]:
-            return combined, "No readable text found in the photo(s).", True, True
+            return combined, "No readable text found in these files.", True, True
         # Nothing was actually queued this session; just switch the poll off.
         return no_update, no_update, no_update, True
 
@@ -2190,26 +2202,6 @@ def register_callbacks(app):
             raise PreventUpdate
         return not is_open
 
-    # ---------- Import: open the lookup hub from the form ----------
-    @app.callback(
-        Output("identify-modal", "is_open", allow_duplicate=True),
-        Output("identify-body", "children", allow_duplicate=True),
-        Input("open-import", "n_clicks"),
-        prevent_initial_call=True,
-    )
-    def open_import(n):
-        if not n:
-            raise PreventUpdate
-        hint = html.Div(
-            [
-                html.I(className="bi bi-arrow-up-circle me-2"),
-                "Paste a product link (or the page's HTML) above and Fetch / Extract — "
-                "or take a photo and use Identify.",
-            ],
-            className="text-muted",
-        )
-        return True, hint
-
     # ---------- Import: fetch a URL or parse pasted/uploaded HTML ----------
     @app.callback(
         Output("identify-body", "children", allow_duplicate=True),
@@ -2627,10 +2619,11 @@ def register_callbacks(app):
         State("qa-source-title", "data"),
         State("qa-photos", "data"),
         State("qa-attachments", "data"),
+        State("auto-ocr", "value"),
         prevent_initial_call=True,
     )
     def qa_save(n, name, qty, category, location, code, value, price, order, seller, pdate,
-                extra, src, photos, atts):
+                extra, src, photos, atts, auto_ocr):
         if not n:
             raise PreventUpdate
         photos = list(photos or [])
@@ -2642,8 +2635,9 @@ def register_callbacks(app):
             return (no_update, no_update, True, "Add a photo or name", "warning",
                     "Take a photo (it'll auto-number) or type a name first.")
         extra = extra or {}
+        atts = list(atts or [])
         try:
-            data.add_item(
+            created = data.add_item(
                 nm, extra.get("description", ""), _parse_qty(qty), photos, "",
                 category=(category or "").strip(), location=(location or "").strip(),
                 location_code=(code or "").strip(),
@@ -2653,7 +2647,7 @@ def register_callbacks(app):
                 tags=extra.get("tags", ""),
                 product_url=extra.get("product_url", ""),
                 source_title=(src or "").strip(),
-                attachments=list(atts or []),
+                attachments=atts,
                 order_number=(order or "").strip(),
                 purchase_date=(pdate or "").strip(),
                 price_paid=(price or "").strip(),
@@ -2661,6 +2655,12 @@ def register_callbacks(app):
             )
         except ValueError as e:
             return (no_update, no_update, True, "Duplicate Name", "danger", str(e))
+        # Quick Add has no live OCR panel, but it should still scan photos and
+        # attached screenshots/PDFs into the searchable text (auto-OCR gated).
+        if auto_ocr:
+            refs = list(photos) + ocr_auto.doc_refs(atts)
+            if refs:
+                _schedule_ocr_writeback(created.get("id"), refs)
         return (False, time.time(), True, "Item Added", "success",
                 f'"{nm}" added from Quick Add.')
 
@@ -2867,6 +2867,8 @@ def register_callbacks(app):
         Output("item-dims", "value", allow_duplicate=True),
         Output("item-tags", "value", allow_duplicate=True),
         Output("item-producturl", "value", allow_duplicate=True),
+        Output("ocr-auto-poll", "disabled", allow_duplicate=True),
+        Output("ocr-auto-collapse", "is_open", allow_duplicate=True),
         Input("attach-upload", "contents"),
         State("attach-upload", "filename"),
         State("current-attachments", "data"),
@@ -2881,10 +2883,12 @@ def register_callbacks(app):
         State("item-dims", "value"),
         State("item-tags", "value"),
         State("item-producturl", "value"),
+        State("auto-ocr", "value"),
         prevent_initial_call=True,
     )
     def add_attachment(contents, filenames, current, cur_order, cur_date, cur_price, cur_seller,
-                       cur_name, cur_cat, cur_value, cur_specs, cur_dims, cur_tags, cur_url):
+                       cur_name, cur_cat, cur_value, cur_specs, cur_dims, cur_tags, cur_url,
+                       auto_ocr):
         if not contents:
             raise PreventUpdate
         import invoice_parse, product_import, base64
@@ -2915,7 +2919,19 @@ def register_callbacks(app):
         if not saved_meta:
             return (no_update, None, no_update, no_update, no_update, no_update,
                     True, "Couldn't attach", "warning", "That file couldn't be read.",
-                    NF, NF, NF, NF, NF, NF, NF)
+                    NF, NF, NF, NF, NF, NF, NF, no_update, no_update)
+
+        # ---- Scan attached screenshots & PDFs for text (background) ----
+        # A PDF/receipt/screenshot dropped here is exactly what the user wants
+        # searchable, so — when auto-OCR is on — queue the image/PDF documents
+        # and reveal the same live panel the item photos use. The save-time
+        # write-back persists whatever's found onto the item.
+        ocr_poll = no_update
+        ocr_show = no_update
+        if auto_ocr and ocr_auto.doc_refs(saved_meta):
+            for meta in saved_meta:
+                ocr_auto.queue_document(meta)
+            ocr_poll, ocr_show = False, True
 
         # ---- Product details from a saved listing page (HTML) — blanks only ----
         def _s(v):
@@ -2976,7 +2992,7 @@ def register_callbacks(app):
         header = "Attached + auto-filled" if (prod_ok or read_n) else "Attached"
         msg = " · ".join(bits) + (" — review, then Save." if (prod_ok or read_n) else ".")
         return (atts, None, order, pdate, price, seller, True, header, "success", msg,
-                name_o, cat_o, val_o, specs_o, dims_o, tags_o, url_o)
+                name_o, cat_o, val_o, specs_o, dims_o, tags_o, url_o, ocr_poll, ocr_show)
 
     # ---------- Form: remove one attachment from the pending set ----------
     @app.callback(

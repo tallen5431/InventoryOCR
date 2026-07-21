@@ -25,6 +25,7 @@ Reliability choices for screenshots / long images (extract_document_text):
 """
 from __future__ import annotations
 
+import io
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -32,7 +33,7 @@ from typing import Dict, List, Optional
 
 from PIL import Image, ImageOps
 
-from config import ASSET_IMAGE_PATH
+from config import ASSET_IMAGE_PATH, ASSET_DOCS_PATH
 
 # --------------------------------------------------------------------
 # Tunables
@@ -53,6 +54,16 @@ _TILE_OVERLAP = 160
 _OCR_TIMEOUT = 45
 # Cap stored text so a pathological screenshot can't bloat inventory.json.
 _MAX_CHARS = 20000
+# PDFs: how many pages to read at most, and the render DPI used only when a page
+# has no text layer and must be OCR'd. 200 dpi is the accuracy/speed sweet spot.
+_PDF_MAX_PAGES = 40
+_PDF_RENDER_DPI = 200
+# A page with fewer than this many characters of embedded text is treated as
+# "no real text layer" (i.e. a scan) and rendered + OCR'd instead.
+_PDF_TEXT_MIN = 20
+# Attachment kinds worth scanning. HTML product pages are parsed elsewhere
+# (product_import); other/unknown types carry no reliable text.
+_OCRABLE_DOC_KINDS = ("image", "pdf")
 
 # --------------------------------------------------------------------
 # Background cache: filename -> extracted text ("" means "scanned, no text")
@@ -162,47 +173,148 @@ def extract_document_text(source) -> str:
                 break
             top += step
 
-    text = "\n".join(_dedupe_lines(lines)).strip()
+    return _cap("\n".join(_dedupe_lines(lines)))
+
+
+def _cap(text: str) -> str:
+    text = (text or "").strip()
     if len(text) > _MAX_CHARS:
         cut = text.rfind(" ", 0, _MAX_CHARS)
         text = text[: cut if cut != -1 else _MAX_CHARS].rstrip()
     return text
 
 
-# --------------------------------------------------------------------
-# Background queue keyed by filename
-# --------------------------------------------------------------------
+def extract_pdf_text(source) -> str:
+    """Best-effort text from a PDF path, tuned for invoices / saved pages.
 
-def _worker(filename: str) -> str:
+    Digital PDFs (most invoices, saved web pages) carry a real text layer, which
+    we read directly — fast and exact. A scanned PDF has little/no text layer, so
+    each such page is rendered to an image and run through the same tuned OCR as
+    a screenshot. Needs PyMuPDF (``fitz``); returns "" if it isn't installed or
+    anything goes wrong — the PDF is still kept as an attachment either way.
+    """
+    try:
+        import fitz  # PyMuPDF
+    except Exception:
+        return ""
+    parts: List[str] = []
+    try:
+        with fitz.open(source) as doc:
+            for i, page in enumerate(doc):
+                if i >= _PDF_MAX_PAGES:
+                    break
+                try:
+                    t = (page.get_text("text") or "").strip()
+                    if len(t) < _PDF_TEXT_MIN:
+                        # No usable text layer — render the page and OCR it.
+                        pix = page.get_pixmap(dpi=_PDF_RENDER_DPI)
+                        img = Image.open(io.BytesIO(pix.tobytes("png")))
+                        t = extract_document_text(img)
+                except Exception:
+                    t = ""
+                if t.strip():
+                    parts.append(t.strip())
+    except Exception:
+        return ""
+    return _cap("\n".join(parts))
+
+
+# --------------------------------------------------------------------
+# Background queue keyed by an opaque "ref"
+# --------------------------------------------------------------------
+# A ref is a plain filename for an item photo (lives in assets/images — this is
+# the historical case, kept as-is so callers pass bare filenames), or
+# "doc:<filename>" for an attached document (assets/documents). Documents may be
+# a screenshot (OCR'd like a photo) or a PDF (text-layer or render+OCR).
+
+_DOC_PREFIX = "doc:"
+
+
+def _resolve(ref: str):
+    """(path, kind) for a ref. kind is 'image' | 'pdf' | 'html' | 'other'."""
+    if ref.startswith(_DOC_PREFIX):
+        fn = ref[len(_DOC_PREFIX):]
+        try:
+            from utils import attachment_kind
+            kind = attachment_kind(fn)
+        except Exception:
+            kind = "other"
+        return Path(ASSET_DOCS_PATH) / fn, kind
+    return Path(ASSET_IMAGE_PATH) / ref, "image"
+
+
+def _worker(ref: str) -> str:
     text = ""
     try:
-        path = Path(ASSET_IMAGE_PATH) / filename
+        path, kind = _resolve(ref)
         if path.exists():
-            text = extract_document_text(path)
+            if kind == "pdf":
+                text = extract_pdf_text(path)
+            elif kind == "image":
+                text = extract_document_text(path)
+            # html/other: nothing to OCR (html is parsed by product_import).
     except Exception:
         text = ""
     with _LOCK:
-        _RESULTS[filename] = text
-        _FUTURES.pop(filename, None)
+        _RESULTS[ref] = text
+        _FUTURES.pop(ref, None)
     return text
 
 
-def queue_image(filename: str) -> None:
-    """Start background OCR for a saved image. Idempotent and non-blocking."""
-    filename = (filename or "").strip()
-    if not filename:
+def _enqueue(ref: str) -> None:
+    """Start background OCR for a ref. Idempotent and non-blocking."""
+    ref = (ref or "").strip()
+    if not ref:
         return
     with _LOCK:
-        if filename in _RESULTS or filename in _FUTURES:
+        if ref in _RESULTS or ref in _FUTURES:
             return
-        self_pool = _pool()
-        self_pool_submit = self_pool.submit
+        submit = _pool().submit
     # Submit outside the lock; record the future under the lock.
-    fut = self_pool_submit(_worker, filename)
+    fut = submit(_worker, ref)
     with _LOCK:
-        # A concurrent queue_image may have already recorded/finished it.
-        if filename not in _RESULTS and filename not in _FUTURES:
-            _FUTURES[filename] = fut
+        # A concurrent call may have already recorded/finished it.
+        if ref not in _RESULTS and ref not in _FUTURES:
+            _FUTURES[ref] = fut
+
+
+def queue_image(filename: str) -> None:
+    """Start background OCR for a saved item photo (assets/images)."""
+    _enqueue((filename or "").strip())
+
+
+def doc_refs(attachments) -> List[str]:
+    """Scan refs for the OCR-worthy documents (images & PDFs) in an attachment
+    list. HTML/other are skipped — they carry no OCR text worth indexing."""
+    out: List[str] = []
+    for a in attachments or []:
+        if isinstance(a, dict):
+            fn = (a.get("filename") or "").strip()
+            kind = a.get("kind") or ""
+        else:
+            fn = str(a).strip()
+            kind = ""
+        if not fn:
+            continue
+        if not kind:
+            try:
+                from utils import attachment_kind
+                kind = attachment_kind(fn)
+            except Exception:
+                kind = "other"
+        if kind in _OCRABLE_DOC_KINDS:
+            out.append(f"{_DOC_PREFIX}{fn}")
+    return out
+
+
+def queue_document(attachment) -> Optional[str]:
+    """Start background OCR for one attachment (a meta dict or filename) if it's
+    an image or PDF. Returns its ref, or None if it isn't OCR-worthy."""
+    refs = doc_refs([attachment])
+    if not refs:
+        return None
+    _enqueue(refs[0])
+    return refs[0]
 
 
 def result(filename: str) -> Optional[str]:
@@ -252,7 +364,7 @@ def text_for(filenames: List[str], *, wait: bool = False) -> str:
     texts: List[str] = []
     for f in files:
         if wait:
-            queue_image(f)  # no-op if already queued/done
+            _enqueue(f)  # no-op if already queued/done (f may be a doc: ref)
             with _LOCK:
                 fut = _FUTURES.get(f)
             if fut is not None:

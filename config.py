@@ -30,28 +30,53 @@ for _f in (DATA_FILE, MATERIALS_FILE, BATCHES_FILE):
         _f.write_text("[]", encoding="utf-8")
 
 # ---------- Tesseract wiring ----------
+# OCR needs the Tesseract *binary* (pytesseract is only the Python wrapper).
+# Windows: the app ships a bundled Tesseract-OCR/ folder next to the code, so it
+#   works with no install.
+# Linux / macOS: there is no bundled binary — the app uses the system Tesseract,
+#   which you install once with your package manager, e.g.
+#       Debian/Ubuntu:  sudo apt install tesseract-ocr
+#       Fedora:         sudo dnf install tesseract
+#       macOS (brew):   brew install tesseract
+#   If it isn't installed, the app still runs fine; images/PDFs are just saved
+#   without their text being scanned for search.
+import shutil
+
 TESSERACT_DIR = BASE_DIR / "Tesseract-OCR"
-TESSERACT_EXE = TESSERACT_DIR / "tesseract.exe"
+TESSERACT_EXE = TESSERACT_DIR / "tesseract.exe"   # bundled Windows build
 TESSDATA_DIR = TESSERACT_DIR / "tessdata"
 
-# Help child processes/libraries find Tesseract & tessdata
+# Resolve which tesseract we'll use: the bundled Windows exe if present, else
+# whatever's on PATH (the system package on Linux/macOS).
+_TESS_CMD: "str | None" = None
 if TESSERACT_EXE.exists():
     os.environ["PATH"] = f"{str(TESSERACT_DIR)}{os.pathsep}{os.environ.get('PATH','')}"
     if TESSDATA_DIR.exists():
         os.environ.setdefault("TESSDATA_PREFIX", str(TESSDATA_DIR))
-    print(f"[Config] Using bundled Tesseract at {TESSERACT_EXE}")
+    _TESS_CMD = str(TESSERACT_EXE)
+    print(f"[Config] OCR: using bundled Tesseract at {TESSERACT_EXE}")
 else:
-    print("[Config] Warning: tesseract.exe not found at", TESSERACT_EXE)
+    _sys_tess = shutil.which("tesseract")
+    if _sys_tess:
+        _TESS_CMD = _sys_tess
+        print(f"[Config] OCR: using system Tesseract at {_sys_tess}")
+    else:
+        print("[Config] OCR: Tesseract not found — image/PDF text scanning is "
+              "disabled. Install it (Ubuntu/Debian: 'sudo apt install "
+              "tesseract-ocr') to enable OCR. The app runs fine without it.")
 
 # Make pytesseract import resilient to user-site package issues
 try:
     import pytesseract  # type: ignore
-    if TESSERACT_EXE.exists():
-        pytesseract.pytesseract.tesseract_cmd = str(TESSERACT_EXE)
+    if _TESS_CMD:
+        pytesseract.pytesseract.tesseract_cmd = _TESS_CMD
 except Exception as e:
     # Do not crash app import if user-level pandas/pyarrow are broken
     print("[Config] Warning: pytesseract import failed:", e)
     pytesseract = None  # pylint: disable=invalid-name
+
+# True when OCR is actually usable, so the UI can tell the user if it isn't.
+OCR_AVAILABLE = bool(_TESS_CMD) and pytesseract is not None
 
 # ---------- UI / Theme ----------
 THEME_LIGHT = "https://cdn.jsdelivr.net/npm/bootswatch@5.3.3/dist/flatly/bootstrap.min.css"

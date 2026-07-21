@@ -7,8 +7,14 @@ Pillow~=10.4
 numpy>=1.26,<3.0
 opencv-python~=4.10
 
-# OCR (Python bindings; needs Tesseract-OCR installed separately)
+# OCR (Python bindings; needs Tesseract-OCR installed separately — bundled on
+# Windows, `apt install tesseract-ocr` on Linux, `brew install tesseract` on Mac)
 pytesseract~=0.3.13
+
+# Reading text from attached PDFs (invoices, saved product pages). Extracts an
+# embedded text layer directly, and renders + OCRs pages that are scans. Optional
+# — PDFs are still saved as attachments without it, just not text-scanned.
+PyMuPDF~=1.24
 
 # Prod server (optional; your StartApp.bat supports it)
 waitress~=2.1

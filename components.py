@@ -314,15 +314,6 @@ def sidebar_form():
                             html.Div(id="attach-list", className="mt-2"),
                             dcc.Store(id="current-attachments", data=[]),
 
-                            dbc.Button(
-                                [html.I(className="bi bi-link-45deg me-1"), "Import from a product link / page"],
-                                id="open-import",
-                                color="link",
-                                size="sm",
-                                n_clicks=0,
-                                className="px-0 mt-1 text-decoration-none",
-                            ),
-
                             # ----- Collapsible catalogue details -----
                             dbc.Button(
                                 [html.I(className="bi bi-sliders me-1"), "More details ", html.I(className="bi bi-chevron-down")],

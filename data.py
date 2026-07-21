@@ -910,19 +910,29 @@ def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
     return found
 
 
-def set_ocr_text(item_id: int, text: str) -> Optional[Dict[str, Any]]:
+def set_ocr_text(item_id: int, text: str, merge: bool = False) -> Optional[Dict[str, Any]]:
     """Write an item's scanned OCR text (from auto-OCR / the OCR Lab). Returns it.
 
     Kept separate from ``update_item_fields`` (whose ``_PATCHABLE`` set is short
     single-line fields) because this is a bulk free-text field written by a
     background thread after an image is scanned — it must serialize against every
     other mutator like any other write.
+
+    With ``merge=True`` the new text is appended to whatever OCR text the item
+    currently holds (deduped) *inside the write lock*, rather than replacing it.
+    That's what the background write-back uses: it reads the item's live text at
+    write time, so two scans of the same item racing (e.g. a quick second save)
+    can't clobber each other — each only adds what it found.
     """
     rows = inventory()
     found = None
     for r in rows:
         if int(r.get("id") or 0) == int(item_id):
-            r["ocr_text"] = text or ""
+            if merge:
+                from ocr_auto import merge_text
+                r["ocr_text"] = merge_text(r.get("ocr_text", ""), text or "")
+            else:
+                r["ocr_text"] = text or ""
             found = r
             break
     if found is not None:
