@@ -26,6 +26,7 @@ Reliability choices for screenshots / long images (extract_document_text):
 from __future__ import annotations
 
 import io
+import os
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -38,9 +39,21 @@ from config import ASSET_IMAGE_PATH, ASSET_DOCS_PATH
 # --------------------------------------------------------------------
 # Tunables
 # --------------------------------------------------------------------
-# Two workers: enough that a couple of photos scan in parallel without pegging
-# every core on the box that also serves the web app.
-_MAX_WORKERS = 2
+# How many images/PDFs to OCR at once in the background. This is the real cap on
+# OCR's CPU footprint (each Tesseract process is pinned to one thread via
+# OMP_THREAD_LIMIT in config), so keep it small: background scanning is a
+# convenience, not something that should ever make the machine sluggish. Default
+# 1 (fully serial — the safest choice on the small boxes this tends to run on);
+# raise INVENTORY_OCR_WORKERS on a beefier host if you want photos to scan in
+# parallel.
+def _default_workers() -> int:
+    try:
+        n = int(os.getenv("INVENTORY_OCR_WORKERS", "1"))
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, n)
+
+_MAX_WORKERS = _default_workers()
 # Target working width. Below this we upscale (small text OCRs poorly); above
 # _MAX_WIDTH we downscale (huge screenshots waste time for no accuracy gain).
 _TARGET_WIDTH = 1600

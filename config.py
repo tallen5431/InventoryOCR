@@ -42,6 +42,17 @@ for _f in (DATA_FILE, MATERIALS_FILE, BATCHES_FILE):
 #   without their text being scanned for search.
 import shutil
 
+# Cap Tesseract's internal parallelism. Tesseract is built with OpenMP and, left
+# alone, each `tesseract` process spawns one worker thread PER CPU CORE. Run a
+# few scans at once (as background auto-OCR does) and you get
+# processes × cores threads all fighting for the same cores — on a 4-core mini
+# PC that's a load average of ~12 with the machine pinned at 100%. Forcing one
+# thread per process keeps each scan on a single core, so the box stays
+# responsive; total OCR concurrency is then governed by the worker pool in
+# ocr_auto instead. setdefault so an explicit OMP_THREAD_LIMIT from the
+# environment still wins. (Read by the tesseract child process at run time.)
+os.environ.setdefault("OMP_THREAD_LIMIT", os.getenv("INVENTORY_OCR_OMP_THREADS", "1"))
+
 TESSERACT_DIR = BASE_DIR / "Tesseract-OCR"
 TESSERACT_EXE = TESSERACT_DIR / "tesseract.exe"   # bundled Windows build
 TESSDATA_DIR = TESSERACT_DIR / "tessdata"

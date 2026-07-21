@@ -205,8 +205,8 @@ def save_attachment(contents: str, original_name: str,
 def read_attachment_text(filename: str) -> str:
     """Best-effort text for a stored attachment, for (re)parsing.
 
-    HTML is decoded as text; images are OCR'd. Other types return "" (kept as a
-    record but not parsed). Never raises — returns "" on any failure.
+    HTML is decoded as text; images and PDFs are OCR'd. Other types return ""
+    (kept as a record but not parsed). Never raises — returns "" on any failure.
     """
     path = ASSET_DOCS_PATH / filename
     if not path.exists():
@@ -215,9 +215,13 @@ def read_attachment_text(filename: str) -> str:
     try:
         if kind == "html":
             return path.read_text(encoding="utf-8", errors="replace")
-        if kind == "image":
-            from ocr_engine import run_ocr_with_cache
-            return (run_ocr_with_cache(str(path)) or {}).get("text", "") or ""
+        if kind in ("image", "pdf"):
+            # Go through the shared background scanner so an attached invoice is
+            # OCR'd ONCE — this call reuses the same result the searchable-text
+            # scan produces (and vice-versa) instead of running a second, whole
+            # separate OCR pass. It also gets PDFs parsed for purchase fields.
+            import ocr_auto
+            return ocr_auto.text_for([f"doc:{filename}"], wait=True)
     except Exception:
         return ""
     return ""
