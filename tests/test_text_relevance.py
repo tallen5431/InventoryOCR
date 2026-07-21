@@ -103,6 +103,94 @@ def main():
     ok &= _check("filtered is smaller than raw",
                  len(out) < 0.6 * len(raw))
 
+    print("\n----- regression cases from adversarial review -----")
+
+    def case(name, text):
+        r = tr.for_index(text)
+        return r, r.lower()
+
+    # #1/#2 eBay: "Item specifics" is the anchor; cross-sell must drop, specs stay.
+    _o, l = case("ebay", """Fluke 117 Electricians True RMS Multimeter
+Item specifics
+Condition: New
+Brand: Fluke
+Model: 117
+MPN: FLUKE-117
+Type: Digital Multimeter
+People who viewed this item also viewed
+Fluke 115 Compact True RMS Multimeter
+Klein Tools MM600 Auto Ranging Multimeter
+Fluke 101 Basic Digital Multimeter""")
+    ok &= _check("eBay keeps item specifics (mpn)", "mpn" in l and "fluke-117" in l)
+    ok &= _check("eBay keeps spec (digital multimeter)", "digital multimeter" in l)
+    ok &= _check("eBay drops cross-sell (klein tools)", "klein tools" not in l)
+    ok &= _check("eBay drops cross-sell (fluke 115)", "fluke 115" not in l)
+
+    # #6 Walmart: "Customer ratings & reviews" header must switch to drop.
+    _o, l = case("walmart", """BLACK+DECKER LDX120C 20V MAX Cordless Drill
+About this item
+20V MAX lithium-ion battery for long run time
+11 position clutch prevents stripping
+Specifications
+Chuck Size: 3/8 in
+Battery Type: Lithium Ion
+Customer ratings & reviews
+4.5 out of 5 stars 1203 reviews
+Write a review
+Works great for hanging pictures and furniture
+Similar items you might like
+DEWALT 20V MAX Cordless Drill
+CRAFTSMAN V20 Cordless Drill""")
+    ok &= _check("Walmart keeps spec (chuck size)", "chuck size" in l)
+    ok &= _check("Walmart drops reviews (works great)", "works great" not in l)
+    ok &= _check("Walmart drops similar item (dewalt)", "dewalt" not in l)
+    ok &= _check("Walmart drops similar item (craftsman)", "craftsman" not in l)
+
+    # #3 A leading DROP header must NOT empty a legit item's text.
+    _o, l = case("lead-sponsored", """Sponsored
+Anker 737 Power Bank (PowerCore 24K)
+24000mAh 3-Port Portable Charger with 140W Output
+Compatible with iPhone 15, MacBook, Dell XPS
+Model A1289, black""")
+    ok &= _check("leading 'Sponsored' keeps item (24000mah)", "24000mah" in l)
+    ok &= _check("leading 'Sponsored' keeps model", "a1289" in l)
+
+    _o, l = case("lead-important", """IMPORTANT INFORMATION
+Contains natural rubber latex which may cause allergic reactions.
+Nitrile examination gloves, powder-free, box of 100.
+Model RX-40, size large.
+Manufactured by MediGlove, lot 22981.""")
+    ok &= _check("leading 'IMPORTANT INFORMATION' keeps item (nitrile)", "nitrile" in l)
+    ok &= _check("leading 'IMPORTANT INFORMATION' keeps model (rx-40)", "rx-40" in l)
+
+    # #7 A mid-page shelf label must not truncate the specs below it (fallback).
+    _o, l = case("mid-sponsored", """Sponsored
+Model AX55 v2
+Processor 1.5GHz triple-core CPU
+Memory 256MB RAM
+Dimensions 260 x 135 x 38 mm
+Weight 0.5 kg""")
+    ok &= _check("mid-page shelf label keeps specs (triple-core)", "triple-core" in l)
+    ok &= _check("mid-page shelf label keeps specs (256mb ram)", "256mb ram" in l)
+
+    # #5 A short line merely containing a drop marker must not flip to drop.
+    _o, l = case("contained-marker", """About this item
+Great value from the brand
+Torque 300 in-lbs adjustable metal chuck
+Includes lithium battery and charger""")
+    ok &= _check("contained 'from the brand' keeps following specs (torque)",
+                 "torque 300" in l)
+    ok &= _check("contained 'from the brand' keeps following specs (lithium)",
+                 "lithium battery" in l)
+
+    # #8 Accented spec lines must survive (NFKD fold + apostrophe intra-word).
+    o8, l8 = case("accents", """Caractéristiques
+Référence: XT-4021
+Numéro de série imprimé sous l'appareil
+Réglé à l'usine""")
+    ok &= _check("accented line survives (réglé à l'usine)", "réglé à l" in l8)
+    ok &= _check("accented ref survives (xt-4021)", "xt-4021" in l8)
+
     print("\nRESULT:", "ALL PASS" if ok else "SOME FAILED")
     print(f"(raw {len(raw)} chars -> filtered {len(out)} chars)")
     return 0 if ok else 1
