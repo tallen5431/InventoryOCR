@@ -205,6 +205,57 @@ def sidebar_form():
                             html.Div(id="image-gallery", className="mt-2"),
                             dcc.Store(id="current-images", data=[]),
 
+                            # ----- Auto text scan (OCR) -----
+                            # Screenshots of product pages / invoices are full of
+                            # text worth searching; a plain item photo usually
+                            # isn't — so scanning is a toggle. When on, each photo
+                            # is OCR'd in the background and the text below shows
+                            # what was found (and is saved onto the item, making
+                            # it searchable). Persisted so the choice sticks.
+                            dbc.Switch(
+                                id="auto-ocr",
+                                label=[html.I(className="bi bi-body-text me-1"),
+                                       "Scan photos for text (OCR)"],
+                                value=True,
+                                persistence=True,
+                                className="mt-2 mb-0",
+                            ),
+                            html.Div(
+                                "Great for screenshots of product pages, invoices "
+                                "and labels. Turn off for plain item photos with no "
+                                "text.",
+                                className="text-muted small",
+                            ),
+                            # Poll drives the live status while a scan runs; it
+                            # disables itself once every queued image is done.
+                            dcc.Interval(id="ocr-auto-poll", interval=1500,
+                                         disabled=True),
+                            # Baseline OCR text of the item being edited, captured
+                            # on select so newly-scanned text is appended, not
+                            # duplicated.
+                            dcc.Store(id="ocr-base", data=""),
+                            dbc.Collapse(
+                                dbc.Card(
+                                    dbc.CardBody(
+                                        [
+                                            html.Div(id="ocr-auto-status",
+                                                     className="small fw-semibold mb-1"),
+                                            dbc.Textarea(
+                                                id="ocr-auto-preview",
+                                                readOnly=True,
+                                                rows=4,
+                                                className="small font-monospace",
+                                                placeholder="Scanned text will appear here…",
+                                            ),
+                                        ],
+                                        className="p-2",
+                                    ),
+                                    className="mt-2 border-info",
+                                ),
+                                id="ocr-auto-collapse",
+                                is_open=False,
+                            ),
+
                             # ----- Identify + web search (fast lookup) -----
                             dbc.Row(
                                 [

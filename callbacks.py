@@ -1,9 +1,10 @@
 from __future__ import annotations
-import os, time
+import os, time, threading
 from dash import Input, Output, State, ctx, no_update, ALL, MATCH, html, dcc
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 import data
+import ocr_auto
 from utils import (
     save_image, get_thumbnail_url, get_image_url, get_preview_url,
     save_attachment, read_attachment_text,
@@ -32,6 +33,31 @@ def _parse_qty(q):
         return n if n >= 0 else 0
     except Exception:
         return 0
+
+
+def _schedule_ocr_writeback(item_id, new_files, base_ocr):
+    """Background-scan ``new_files`` for text and merge onto the saved item.
+
+    Runs on a daemon thread so a slow scan (e.g. a very long screenshot) never
+    blocks the Save. ``text_for(wait=True)`` reuses whatever the live preview
+    already OCR'd, so this is usually instant. Failures are swallowed — a scan
+    that doesn't pan out simply leaves the existing text untouched.
+    """
+    files = [f for f in (new_files or []) if f]
+    if not item_id or not files:
+        return
+
+    def _run():
+        try:
+            found = ocr_auto.text_for(files, wait=True)
+            combined = ocr_auto.merge_text(base_ocr or "", found)
+            if combined and combined != (base_ocr or ""):
+                data.set_ocr_text(item_id, combined)
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, name=f"ocr-writeback-{item_id}",
+                     daemon=True).start()
 
 def _build_rows(filtered):
     out_rows = []
@@ -1179,6 +1205,7 @@ def register_callbacks(app):
             State("item-price-paid", "value"),
             State("item-seller", "value"),
             State("current-attachments", "data"),
+            State("auto-ocr", "value"),
         ],
         prevent_initial_call=False,
     )
@@ -1187,7 +1214,8 @@ def register_callbacks(app):
                      name, desc, qty, reorder, item_type, category, location, location_code,
                      specs, value, dims, tags, producturl, img_contents,
                      current_images, editing_id, current_rows,
-                     order_number, purchase_date, price_paid, seller, current_attachments):
+                     order_number, purchase_date, price_paid, seller, current_attachments,
+                     auto_ocr):
         triggered = (ctx.triggered_id or "")
         # Default toast outputs to no_update: 'inventory-table.selected_rows' is both
         # an Output and an Input here, so resetting the selection after a Save/Delete
@@ -1250,11 +1278,15 @@ def register_callbacks(app):
                 atts = list(current_attachments or [])
 
                 saved_ok = True
+                # (item_id, newly-added photos, baseline OCR) for the background
+                # text scan scheduled after a successful save.
+                ocr_target = None
                 try:
                     if editing_id:
                         # preserve existing ocr_text if not part of this form
                         existing_row = next((r for r in items if r.get("id") == editing_id), {})
                         existing_ocr = existing_row.get("ocr_text", "")
+                        prior_imgs = existing_row.get("images", []) or []
                         data.update_item(editing_id, nm, ds, nqty, img_filenames, existing_ocr,
                                          category=cat, location=loc, location_code=code,
                                          specifications=specs, estimated_value=value,
@@ -1263,14 +1295,17 @@ def register_callbacks(app):
                                          attachments=atts, order_number=p_order,
                                          purchase_date=p_date, price_paid=p_price, seller=p_seller)
                         toast_header, toast_icon, toast_msg = "Item Updated", "success", f'"{nm}" updated.'
+                        new_photos = [f for f in img_filenames if f not in prior_imgs]
+                        ocr_target = (editing_id, new_photos, existing_ocr)
                     else:
-                        data.add_item(nm, ds, nqty, img_filenames, "", category=cat, location=loc,
+                        created = data.add_item(nm, ds, nqty, img_filenames, "", category=cat, location=loc,
                                       location_code=code, specifications=specs, estimated_value=value,
                                       dimensions=dims, tags=tags, product_url=producturl,
                                       item_type=typ, reorder_at=reorder,
                                       attachments=atts, order_number=p_order,
                                       purchase_date=p_date, price_paid=p_price, seller=p_seller)
                         toast_header, toast_icon, toast_msg = "Item Added", "success", f'"{nm}" added.'
+                        ocr_target = (created.get("id"), list(img_filenames), "")
                 except ValueError as e:
                     # Save failed (duplicate name, or the edited item vanished).
                     # Keep the form and any staged photos/attachments intact so the
@@ -1281,6 +1316,14 @@ def register_callbacks(app):
 
                 toast_open = True
                 if saved_ok:
+                    # Scan any newly-added photos for text in the background and
+                    # write the combined result onto the saved item. Runs off the
+                    # request thread so a long screenshot never blocks the Save,
+                    # and uses the cache the live preview already populated (so it
+                    # usually finishes instantly). Skipped when auto-OCR is off or
+                    # no new photos were added.
+                    if auto_ocr and ocr_target and ocr_target[0] and ocr_target[1]:
+                        _schedule_ocr_writeback(*ocr_target)
                     # Save & Next keeps where-it-lives sticky for rapid batch scanning.
                     _clear_form(keep_location=(triggered == "save-next-button"))
                     # refresh items for table build
@@ -1541,6 +1584,8 @@ def register_callbacks(app):
         Output("current-images", "data", allow_duplicate=True),
         Output("image-upload", "contents", allow_duplicate=True),
         Output("image-upload-cam", "contents", allow_duplicate=True),
+        Output("ocr-auto-poll", "disabled", allow_duplicate=True),
+        Output("ocr-auto-collapse", "is_open", allow_duplicate=True),
         Input("current-images", "data"),
         Input("image-upload", "contents"),
         Input("image-upload-cam", "contents"),
@@ -1548,10 +1593,12 @@ def register_callbacks(app):
         State("image-upload-cam", "filename"),
         State("current-images", "data"),
         State("item-name", "value"),
+        State("auto-ocr", "value"),
         prevent_initial_call='initial_duplicate',
     )
     def update_image_gallery(current_imgs, upload_contents, cam_contents,
-                             upload_filenames, cam_filenames, existing_imgs, item_name):
+                             upload_filenames, cam_filenames, existing_imgs, item_name,
+                             auto_ocr):
         # Two sibling uploads feed this: the dropzone ("Choose photos") and the
         # camera button ("Take a photo"). Whichever fired, save & append its
         # shots so repeated snaps and picks accumulate, then clear that input.
@@ -1559,6 +1606,8 @@ def register_callbacks(app):
         out_imgs = no_update       # only rewrite the store when we actually add photos
         clear_choose = no_update
         clear_cam = no_update
+        poll_disabled = no_update   # only wake the OCR poll when we add photos
+        show_ocr = no_update
 
         trig = ctx.triggered_id
         contents = None
@@ -1570,18 +1619,81 @@ def register_callbacks(app):
         if contents is not None:
             uploads = contents if isinstance(contents, list) else [contents]
             base = (item_name or "").strip() or "photo"
+            new_files = []
             for content in uploads:
                 if not content:
                     continue
                 try:
                     saved = save_image(content, ASSET_IMAGE_PATH, base_name=base)
                     img_list.append(saved["filename"])
+                    new_files.append(saved["filename"])
                 except Exception:
                     # Skip anything that isn't a decodable image rather than break the form.
                     continue
             out_imgs = img_list
+            # Kick off background OCR for the just-added photos and reveal the
+            # live status panel. The poll callback below streams the result in
+            # and switches the Interval off once every scan is done.
+            if auto_ocr and new_files:
+                for fn in new_files:
+                    ocr_auto.queue_image(fn)
+                poll_disabled = False
+                show_ocr = True
 
-        return _render_gallery(img_list), out_imgs, clear_choose, clear_cam
+        return (_render_gallery(img_list), out_imgs, clear_choose, clear_cam,
+                poll_disabled, show_ocr)
+
+    # ---------- Auto-OCR: baseline on select, live status while scanning ----------
+    # Owner of the OCR panel's display outputs. Fires whenever the edited item
+    # changes: loads that item's already-scanned text as the baseline (so new
+    # photos ADD to it), or resets the panel when the form clears.
+    @app.callback(
+        Output("ocr-base", "data"),
+        Output("ocr-auto-preview", "value"),
+        Output("ocr-auto-status", "children"),
+        Output("ocr-auto-collapse", "is_open"),
+        Input("editing-id", "data"),
+        prevent_initial_call=True,
+    )
+    def load_ocr_baseline(editing_id):
+        if not editing_id:
+            # New item / form cleared — nothing scanned yet.
+            return "", "", "", False
+        row = next((r for r in data.inventory() if r.get("id") == editing_id), None)
+        stored = (row or {}).get("ocr_text", "") if row else ""
+        if stored:
+            return (stored, stored,
+                    "Saved text from earlier scans — new photos add to this.", True)
+        return "", "", "", False
+
+    # Poll: streams background-OCR results into the preview while a scan runs,
+    # then disables its own Interval. update_image_gallery re-enables it on the
+    # next upload. (It's the owner of ocr-auto-poll.disabled.)
+    @app.callback(
+        Output("ocr-auto-preview", "value", allow_duplicate=True),
+        Output("ocr-auto-status", "children", allow_duplicate=True),
+        Output("ocr-auto-collapse", "is_open", allow_duplicate=True),
+        Output("ocr-auto-poll", "disabled"),
+        Input("ocr-auto-poll", "n_intervals"),
+        State("current-images", "data"),
+        State("ocr-base", "data"),
+        prevent_initial_call=True,
+    )
+    def poll_ocr_auto(_n, current_images, ocr_base):
+        pv = ocr_auto.preview(current_images or [])
+        combined = ocr_auto.merge_text(ocr_base or "", pv["text"])
+        if pv["pending"] > 0:
+            n = pv["pending"]
+            status = f"⏳ Scanning {n} photo{'s' if n != 1 else ''} for text…"
+            return combined, status, True, False
+        # Nothing left to scan — stop the Interval.
+        if pv["text"]:
+            status = "✓ Found text — saved with the item and now searchable."
+            return combined, status, True, True
+        if pv["scanned"]:
+            return combined, "No readable text found in the photo(s).", True, True
+        # Nothing was actually queued this session; just switch the poll off.
+        return no_update, no_update, no_update, True
 
     # ---------- Remove image from gallery ----------
     # Only updates the store; the gallery re-renders from its current-images Input.

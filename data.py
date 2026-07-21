@@ -910,6 +910,26 @@ def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
     return found
 
 
+def set_ocr_text(item_id: int, text: str) -> Optional[Dict[str, Any]]:
+    """Write an item's scanned OCR text (from auto-OCR / the OCR Lab). Returns it.
+
+    Kept separate from ``update_item_fields`` (whose ``_PATCHABLE`` set is short
+    single-line fields) because this is a bulk free-text field written by a
+    background thread after an image is scanned — it must serialize against every
+    other mutator like any other write.
+    """
+    rows = inventory()
+    found = None
+    for r in rows:
+        if int(r.get("id") or 0) == int(item_id):
+            r["ocr_text"] = text or ""
+            found = r
+            break
+    if found is not None:
+        _save(rows)
+    return found
+
+
 def bulk_set_fields(ids: List[int], category: Optional[str] = None,
                     location: Optional[str] = None,
                     location_code: Optional[str] = None,
@@ -2355,7 +2375,7 @@ for _name in (
     "add_item", "add_photo_items", "update_item", "update_item_fields",
     "adjust_qty", "remove_item", "bulk_set_fields", "bulk_remove",
     "add_image_to_item", "remove_image_from_item", "assign_types",
-    "set_location", "apply_organization", "apply_fit", "merge_group",
+    "set_ocr_text", "set_location", "apply_organization", "apply_fit", "merge_group",
     "merge_groups", "prune_unreferenced_images", "prune_unreferenced_documents",
     "snapshot_inventory", "commit_undo", "restore_inventory",
 ):
