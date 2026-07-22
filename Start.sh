@@ -53,6 +53,7 @@ export FLASK_RUN_PORT="$PORT"
 export FLASK_RUN_HOST="$HOST"
 
 # --- Vision model (default to llava:13b; override with OLLAMA_VISION_MODEL env var) ---
+export OLLAMA_HOST="${OLLAMA_HOST:-http://100.98.112.1:11434}"
 export OLLAMA_VISION_MODEL="${OLLAMA_VISION_MODEL:-llava:13b}"
 
 # --- URL prefix: serve at the site root by default. The HTTP_Server manager
