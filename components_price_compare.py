@@ -13,8 +13,9 @@ def price_compare_layout():
 
             html.H2("💲 Price Compare", className="mt-2 mb-1 text-center"),
             html.P(
-                "Download a few product pages for the same thing, drop the .html files here, "
-                "and see the best price per unit — packs of many are priced fairly against singles.",
+                "Drop the .html for a few product pages — or a whole search-results page — "
+                "and see the best price per unit. Packs of many are priced fairly against "
+                "singles, and a results page is split into every listing it holds.",
                 className="text-center text-muted mb-3",
             ),
 
@@ -31,8 +32,9 @@ def price_compare_layout():
                                         className="mb-1",
                                     ),
                                     html.Div(
-                                        "Open each listing in your browser, Save Page As "
-                                        "(.html), then drop them all here.",
+                                        "Open each listing — or a search-results page — in your "
+                                        "browser, Save Page As (.html), then drop them all here. "
+                                        "A results page is expanded into every listing on it.",
                                         className="text-muted small mb-2",
                                     ),
                                     dcc.Upload(

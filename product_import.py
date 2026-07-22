@@ -557,6 +557,136 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Multi-listing pages (search / results) → many products at once
+# ---------------------------------------------------------------------------
+# ``extract_from_html`` assumes ONE product per page. A saved *search results*
+# page (Amazon "USB-C cables", eBay search) holds dozens of listings, and the
+# single-product path grabs only the page's og:title + the first price on the
+# page — missing every real listing and its pack size. ``extract_listings_from_html``
+# reads each result card instead, so Price Compare can rank a whole page of
+# options and still see "5 Pack" / "10-Pack" in each card's title.
+
+_AMAZON_ASIN_RE = re.compile(r"/(?:dp|gp/product|gp/aw/d|gp/aw/d)/([A-Z0-9]{10})")
+_SPONSORED_RE = re.compile(r"(?i)^\s*sponsored(?:\s+ad)?\s*[-:•]?\s*")
+
+
+def _listing_title_amazon(card) -> str:
+    h2 = card.select_one("h2")
+    txt = h2.get_text(" ", strip=True) if h2 else ""
+    if not txt:
+        for sel in ("[data-cy='title-recipe'] a span",
+                    ".a-size-medium.a-color-base.a-text-normal",
+                    ".a-size-base-plus.a-color-base.a-text-normal", "h2 a span"):
+            el = card.select_one(sel)
+            if el:
+                txt = el.get_text(" ", strip=True)
+                break
+    return _SPONSORED_RE.sub("", txt).strip()
+
+
+def _listing_price_amazon(card) -> str:
+    # Prefer the live price over a struck-through list price (.a-text-price).
+    pe = (card.select_one(".a-price:not(.a-text-price) .a-offscreen")
+          or card.select_one(".a-price .a-offscreen"))
+    return _clean_price_text(pe.get_text(strip=True)) if pe else ""
+
+
+def _amazon_url(asin: str, card, source_url: str) -> str:
+    if not asin:
+        link = card.select_one("a.a-link-normal[href]")
+        if link:
+            m = _AMAZON_ASIN_RE.search(link.get("href") or "")
+            if m:
+                asin = m.group(1)
+    if not asin:
+        return ""
+    # Keep the user's marketplace TLD when we know it, else default to .com.
+    host = "www.amazon.com"
+    try:
+        h = (urlparse(source_url).hostname or "")
+        if "amazon." in h:
+            host = h
+    except Exception:
+        pass
+    return f"https://{host}/dp/{asin}"
+
+
+def _amazon_listings(soup, source_url: str) -> List[Dict[str, str]]:
+    cards = soup.select('div[data-component-type="s-search-result"]')
+    if not cards:
+        cards = soup.select("div.s-result-item[data-asin]")
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for c in cards:
+        asin = (c.get("data-asin") or "").strip()
+        title = _listing_title_amazon(c)
+        if not title:
+            continue
+        key = asin or re.sub(r"\s+", " ", title.lower())
+        if key in seen:
+            continue  # Amazon repeats an ASIN (sponsored + organic) — keep one
+        seen.add(key)
+        img = c.select_one("img.s-image")
+        out.append({
+            "name": title,
+            "price": _listing_price_amazon(c),
+            "url": _amazon_url(asin, c, source_url),
+            "image_url": (img.get("src") if img else "") or "",
+            "asin": asin,
+        })
+    return out
+
+
+def _ebay_listings(soup, source_url: str) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for it in soup.select("li.s-item, li.srp-results__item"):
+        t = it.select_one(".s-item__title")
+        title = t.get_text(" ", strip=True) if t else ""
+        title = re.sub(r"(?i)^\s*new listing\s*", "", title).strip()
+        if not title or title.lower() in ("shop on ebay", "results matching fewer words"):
+            continue  # eBay's first card is a hidden "Shop on eBay" placeholder
+        key = re.sub(r"\s+", " ", title.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        pe = it.select_one(".s-item__price")
+        link = it.select_one("a.s-item__link[href]")
+        img = it.select_one(".s-item__image img, .s-item__image-img")
+        out.append({
+            "name": title,
+            "price": _clean_price_text(pe.get_text(" ", strip=True)) if pe else "",
+            "url": (link.get("href") if link else "") or "",
+            "image_url": (img.get("src") or img.get("data-src") if img else "") or "",
+            "asin": "",
+        })
+    return out
+
+
+def extract_listings_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
+    """Extract MANY product listings from a saved search / results page.
+
+    Returns ``{"ok": bool, "products": [{name, price, url, image_url, asin}]}``.
+    ``ok`` is True only when the page genuinely looks like a multi-listing page
+    (≥2 result cards and NOT a single product-detail page); callers should fall
+    back to single-product ``extract_from_html`` otherwise. Needs BeautifulSoup;
+    returns ``ok=False`` without it. Never raises.
+    """
+    if not html_text or not html_text.strip() or not _HAS_BS4:
+        return {"ok": False, "products": []}
+    try:
+        soup = BeautifulSoup(html_text, "html.parser")
+    except Exception:
+        return {"ok": False, "products": []}
+    # A real product-detail page can carry sponsored carousels; its #productTitle
+    # is the tell that it's ONE product, so never treat it as a results page.
+    if soup.select_one("#productTitle"):
+        return {"ok": False, "products": []}
+    products = _amazon_listings(soup, source_url) or _ebay_listings(soup, source_url)
+    return {"ok": len(products) >= 2, "products": products}
+
+
+# ---------------------------------------------------------------------------
 # URL fetch (best-effort; blocked by some big stores)
 # ---------------------------------------------------------------------------
 

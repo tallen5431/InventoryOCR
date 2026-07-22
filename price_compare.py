@@ -211,8 +211,42 @@ def match_inventory(name: str, tags: Optional[List[str]] = None,
 # Analyse a batch of uploaded HTML files
 # --------------------------------------------------------------------
 
+def _make_product(source: str, name: str, price_text: str, url: str = "",
+                  image_url: str = "", category: str = "",
+                  tags: Optional[List[str]] = None,
+                  specs: Optional[List[str]] = None, description: str = "",
+                  rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Build one ranked-product entry: parse price, detect pack size, tie back to
+    inventory. Shared by the single-page and multi-listing paths."""
+    price_text = (price_text or "").strip()
+    pv = _parse_price(price_text)
+    qty, unit = detect_quantity(name, specs, description)
+    unit_price = round(pv / qty, 4) if (pv is not None and qty) else None
+    mid, mname = match_inventory(name, tags, rows)
+    return {
+        "source": source,
+        "name": name,
+        "price_text": price_text,
+        "price_value": pv,
+        "currency": _currency(price_text),
+        "quantity": qty,
+        "unit": unit,
+        "unit_price": unit_price,
+        "url": url or "",
+        "image_url": image_url or "",
+        "category": category or "",
+        "tags": tags or [],
+        "matched_item_id": mid,
+        "matched_item_name": mname,
+    }
+
+
 def analyze_htmls(files: List[Tuple[str, str]]) -> Dict[str, Any]:
     """Scrape each (filename, html) pair, compute unit prices, and rank them.
+
+    Each file is handled as either a single product page OR a search / results
+    page: a results page is expanded so every listing (with its own price and
+    pack size) becomes a comparable row, instead of collapsing to just the first.
 
     Returns ``{products:[...ranked...], errors:[{source,error}], best}``.
     """
@@ -221,6 +255,24 @@ def analyze_htmls(files: List[Tuple[str, str]]) -> Dict[str, Any]:
     errors: List[Dict[str, str]] = []
 
     for fname, html_text in files or []:
+        # A results page holds many listings — expand each into its own product
+        # so a pack-of-5 in a result card is caught, not missed.
+        try:
+            listing = _pi.extract_listings_from_html(html_text or "")
+        except Exception:
+            listing = None
+        lp = (listing or {}).get("products", []) if (listing or {}).get("ok") else []
+        if len(lp) >= 2:
+            for item in lp:
+                nm = (item.get("name") or "").strip()
+                if not nm:
+                    continue
+                products.append(_make_product(
+                    fname, nm, item.get("price", ""), url=item.get("url", ""),
+                    image_url=item.get("image_url", ""), rows=rows))
+            continue
+
+        # Otherwise, one product for the whole page (the original path).
         try:
             res = _pi.extract_from_html(html_text or "", "")
         except Exception as e:  # pragma: no cover - defensive
@@ -232,26 +284,11 @@ def analyze_htmls(files: List[Tuple[str, str]]) -> Dict[str, Any]:
         d = res.get("data", {})
         name = d.get("name", "").strip() or fname
         price_text = (res.get("price") or d.get("estimated_value") or "").strip()
-        pv = _parse_price(price_text)
-        qty, unit = detect_quantity(name, d.get("specifications", []), d.get("what_it_is", ""))
-        unit_price = round(pv / qty, 4) if (pv is not None and qty) else None
-        mid, mname = match_inventory(name, d.get("tags"), rows)
-        products.append({
-            "source": fname,
-            "name": name,
-            "price_text": price_text,
-            "price_value": pv,
-            "currency": _currency(price_text),
-            "quantity": qty,
-            "unit": unit,
-            "unit_price": unit_price,
-            "url": d.get("product_url", ""),
-            "image_url": d.get("image_url", ""),
-            "category": d.get("category", ""),
-            "tags": d.get("tags", []),
-            "matched_item_id": mid,
-            "matched_item_name": mname,
-        })
+        products.append(_make_product(
+            fname, name, price_text, url=d.get("product_url", ""),
+            image_url=d.get("image_url", ""), category=d.get("category", ""),
+            tags=d.get("tags", []), specs=d.get("specifications", []),
+            description=d.get("what_it_is", ""), rows=rows))
 
     ranked = _rank(products)
     best = next((p for p in ranked if p.get("best")), None)
