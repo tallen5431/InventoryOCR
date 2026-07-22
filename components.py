@@ -258,6 +258,19 @@ def sidebar_form():
                                                 className="text-muted mt-1",
                                                 style={"fontSize": "0.72rem"},
                                             ),
+                                            # Structured fields detected in the scan
+                                            # (UPC/EAN, brand, model, measurements).
+                                            # Searchable; populated by the write-back.
+                                            html.Div(id="ocr-fields-view", className="mt-2"),
+                                            # Remove the whole scan (trimmed + raw +
+                                            # detected fields) without deleting the photo.
+                                            dbc.Button(
+                                                [html.I(className="bi bi-x-circle me-1"),
+                                                 "Clear scan"],
+                                                id="ocr-clear-btn",
+                                                color="link", size="sm",
+                                                className="p-0 mt-2 me-3 text-decoration-none small text-danger",
+                                            ),
                                             # The full, unfiltered scan, retained on
                                             # the item for reference / re-processing
                                             # but kept out of the search index.

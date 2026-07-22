@@ -68,13 +68,16 @@ def main():
     _check("clear empties trimmed ocr_text", r["ocr_text"] == "")
     _check("clear preserves ocr_raw", r["ocr_raw"].startswith("RAWTOKEN"))
 
-    # 6) A second scan merges new raw onto the existing raw (deduped).
+    # 6) A re-scan REPLACES the raw scan rather than stacking onto it — the raw
+    # always mirrors the current image set, so it can never pile scan on scan.
     data.set_ocr_text(iid, "second trimmed", merge=True, raw="SECONDRAW extra scan")
     r = _get(iid)
-    _check("raw merge keeps first raw", "RAWTOKEN" in r["ocr_raw"])
-    _check("raw merge adds second raw", "SECONDRAW" in r["ocr_raw"])
+    _check("re-scan drops the old raw (no stacking)", "RAWTOKEN" not in r["ocr_raw"])
+    _check("re-scan stores the new raw", r["ocr_raw"] == "SECONDRAW extra scan")
+    _check("trimmed still merges alongside a raw replace",
+           "second trimmed" in r["ocr_text"])
 
-    # 7) raw=None leaves the stored raw untouched.
+    # 7) raw=None leaves the stored raw untouched; raw="" clears it.
     before = r["ocr_raw"]
     data.set_ocr_text(iid, "third trimmed", merge=True, raw=None)
     _check("raw=None leaves raw untouched", _get(iid)["ocr_raw"] == before)
@@ -84,12 +87,46 @@ def main():
     data.set_ocr_text(row2["id"], "b trimmed", merge=False, raw="BRAW only-on-b")
     preview = data.merge_preview([_get(iid), _get(row2["id"])])
     _check("merge_preview includes both raws",
-           "RAWTOKEN" in preview["ocr_raw"] and "BRAW" in preview["ocr_raw"])
+           "SECONDRAW" in preview["ocr_raw"] and "BRAW" in preview["ocr_raw"])
     merged = data.merge_group(iid, [row2["id"]])
     _check("merge_group carries raw onto survivor",
-           "RAWTOKEN" in merged["ocr_raw"] and "BRAW" in merged["ocr_raw"])
+           "SECONDRAW" in merged["ocr_raw"] and "BRAW" in merged["ocr_raw"])
     _check("merge_group raw still not searchable",
            all(h["id"] != iid for h in data.search("BRAW")))
+
+    # 9) Detected fields REPLACE ocr_fields, are searchable, and stay separate
+    # from the raw scan (which is never searched).
+    row3 = data.add_item("Widget C", "", 1, [], "")
+    c = row3["id"]
+    data.set_ocr_text(c, "", merge=False,
+                      raw="Brand: Acme\nUPC 885911475013 buried in raw noise",
+                      fields=["Brand: Acme", "UPC: 885911475013"])
+    r = _get(c)
+    _check("detected fields stored", "Brand: Acme" in r.get("ocr_fields", []))
+    _check("detected fields are searchable",
+           any(h["id"] == c for h in data.search("885911475013")))
+    data.set_ocr_text(c, "", merge=False, fields=["Model: X100"])
+    _check("fields replace (not merge)", _get(c)["ocr_fields"] == ["Model: X100"])
+    data.set_ocr_text(c, "", merge=False, fields=None)
+    _check("fields=None leaves fields untouched", _get(c)["ocr_fields"] == ["Model: X100"])
+
+    # 10) clear_ocr wipes trimmed + raw + fields in one shot, and the item drops
+    # out of search for text that only lived in the scan.
+    row4 = data.add_item("Widget D", "", 1, [], "")
+    d = row4["id"]
+    data.set_ocr_text(d, "DTRIM only-in-trim", merge=False,
+                      raw="DRAW only-in-raw", fields=["SKU: DSKU-1"])
+    _check("pre-clear trimmed searchable",
+           any(h["id"] == d for h in data.search("DTRIM")))
+    data.clear_ocr(d)
+    r = _get(d)
+    _check("clear empties trimmed", r["ocr_text"] == "")
+    _check("clear empties raw", r["ocr_raw"] == "")
+    _check("clear empties fields", r["ocr_fields"] == [])
+    _check("cleared trimmed no longer searchable",
+           all(h["id"] != d for h in data.search("DTRIM")))
+    _check("cleared fields no longer searchable",
+           all(h["id"] != d for h in data.search("DSKU")))
 
     print("\nRESULT:", "ALL PASS" if _ok else "SOME FAILED")
     return 0 if _ok else 1

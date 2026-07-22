@@ -30,7 +30,7 @@ import os
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from PIL import Image, ImageOps
 
@@ -78,6 +78,33 @@ _PDF_TEXT_MIN = 20
 # (product_import); other/unknown types carry no reliable text.
 _OCRABLE_DOC_KINDS = ("image", "pdf")
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# Accuracy tunables (all safe defaults; opt-in for the slower/riskier passes):
+#   * Drop OCR words below this confidence at the source — this is what removes
+#     the garbled-graphics "soup" ("3c ce)", "OBooVoeZoo") before it ever reaches
+#     the text, sharpening both the stored text and the relevance filter. 0
+#     disables the filter (keep every word, old behaviour).
+_MIN_CONF = _env_int("INVENTORY_OCR_MIN_CONF", 35)
+#   * Multi-pass: also try PSM 4 (single uniform column — how most retailer /
+#     invoice pages are laid out) on whole images and keep whichever pass reads
+#     with higher mean confidence. Costs a second Tesseract call, so opt-in.
+_MULTIPASS = _env_flag("INVENTORY_OCR_MULTIPASS")
+#   * Auto-rotate via Tesseract OSD before OCR. A real win for sideways photos of
+#     labels, but it can misjudge sparse screenshots, so it's opt-in and only
+#     ever applies a clean 90/180/270 turn.
+_DESKEW = _env_flag("INVENTORY_OCR_DESKEW")
+
 # --------------------------------------------------------------------
 # Background cache: filename -> extracted text ("" means "scanned, no text")
 # --------------------------------------------------------------------
@@ -99,20 +126,105 @@ def _pool() -> ThreadPoolExecutor:
 # The OCR routine (screenshot / document tuned)
 # --------------------------------------------------------------------
 
-def _tesseract_string(img: Image.Image, psm: int) -> str:
-    """One Tesseract call, or "" if OCR is unavailable / times out / errors."""
+def _ocr_pass(img: Image.Image, psm: int) -> Tuple[str, float]:
+    """One Tesseract pass → (text, mean_confidence).
+
+    Uses ``image_to_data`` so we can drop low-confidence words at the source
+    (the garbled-graphics soup) and rebuild clean lines, and so multi-pass can
+    compare passes by confidence. Falls back to plain ``image_to_string`` if the
+    data call isn't available, and to "" on any timeout / binary problem.
+    """
     try:
         import pytesseract
+        from pytesseract import Output
     except Exception:
-        return ""
+        return "", 0.0
+    # oem 1 = LSTM engine; no char whitelist so punctuation/symbols survive.
+    cfg = f"--oem 1 --psm {int(psm)}"
     try:
-        # oem 1 = LSTM engine; no char whitelist so punctuation/symbols survive.
-        cfg = f"--oem 1 --psm {int(psm)}"
-        return pytesseract.image_to_string(img, lang="eng", config=cfg,
-                                           timeout=_OCR_TIMEOUT) or ""
+        data = pytesseract.image_to_data(img, lang="eng", config=cfg,
+                                         timeout=_OCR_TIMEOUT,
+                                         output_type=Output.DICT)
     except Exception:
-        # RuntimeError on timeout, or any Tesseract/binary problem — fail soft.
-        return ""
+        # image_to_data unsupported / timed out — fall back to the plain call.
+        try:
+            txt = pytesseract.image_to_string(img, lang="eng", config=cfg,
+                                              timeout=_OCR_TIMEOUT) or ""
+            return txt, 0.0
+        except Exception:
+            return "", 0.0
+
+    words = data.get("text", []) or []
+    confs = data.get("conf", []) or []
+    # Group words back into their source lines, keeping only confident ones.
+    lines: Dict[Tuple[int, int, int], List[str]] = {}
+    order: List[Tuple[int, int, int]] = []
+    kept_confs: List[float] = []
+    for i, word in enumerate(words):
+        w = (word or "").strip()
+        if not w:
+            continue
+        try:
+            c = float(confs[i])
+        except (TypeError, ValueError, IndexError):
+            c = -1.0
+        if c >= 0 and _MIN_CONF > 0 and c < _MIN_CONF:
+            continue
+        # Group by (block, paragraph, line) to rebuild the source line. Fall back
+        # to the running index if a key column is absent (non-standard result).
+        def _at(col: str) -> int:
+            try:
+                return int(data[col][i])
+            except (KeyError, IndexError, TypeError, ValueError):
+                return i
+        key = (_at("block_num"), _at("par_num"), _at("line_num"))
+        if key not in lines:
+            lines[key] = []
+            order.append(key)
+        lines[key].append(w)
+        if c >= 0:
+            kept_confs.append(c)
+    text = "\n".join(" ".join(lines[k]) for k in order)
+    mean_conf = (sum(kept_confs) / len(kept_confs)) if kept_confs else 0.0
+    return text, mean_conf
+
+
+def _tesseract_string(img: Image.Image, psm: int) -> str:
+    """Confident OCR text for an image/tile, or "" if OCR is unavailable.
+
+    With ``INVENTORY_OCR_MULTIPASS`` and a whole-page segmentation (PSM 3) it
+    also tries PSM 4 (single column) and keeps the higher-confidence read; every
+    other case is a single pass. Never raises."""
+    text, conf = _ocr_pass(img, psm)
+    if _MULTIPASS and int(psm) == 3:
+        alt_text, alt_conf = _ocr_pass(img, 4)
+        # Prefer the more confident pass; on a tie prefer the one that read more.
+        if (alt_conf, len(alt_text)) > (conf, len(text)):
+            return alt_text
+    return text
+
+
+def _deskew(img: Image.Image) -> Image.Image:
+    """Rotate a sideways image upright using Tesseract OSD (opt-in, best-effort).
+
+    Only a clean 90/180/270 turn with a non-trivial orientation confidence is
+    applied; anything else (or any failure) leaves the image untouched, so a
+    normal screenshot is never rotated on a bad guess."""
+    if not _DESKEW:
+        return img
+    try:
+        import pytesseract
+        from pytesseract import Output
+        osd = pytesseract.image_to_osd(img, output_type=Output.DICT)
+        rotate = int(osd.get("rotate", 0) or 0)
+        conf = float(osd.get("orientation_conf", 0) or 0)
+        if rotate in (90, 180, 270) and conf >= 1.0:
+            # PIL rotates counter-clockwise; OSD 'rotate' is the clockwise turn
+            # needed to upright the page, so negate it. expand keeps all pixels.
+            return img.rotate(-rotate, expand=True)
+    except Exception:
+        pass
+    return img
 
 
 def _prep(img: Image.Image) -> Image.Image:
@@ -167,6 +279,9 @@ def extract_document_text(source) -> str:
     except Exception:
         return ""
 
+    # Deskew (opt-in) before prep so a sideways label photo reads at all; a no-op
+    # for the common upright screenshot.
+    img = _deskew(img)
     img = _prep(img)
     w, h = img.size
 
@@ -274,12 +389,18 @@ def _worker(ref: str) -> str:
     return text
 
 
-def _enqueue(ref: str) -> None:
-    """Start background OCR for a ref. Idempotent and non-blocking."""
+def _enqueue(ref: str, force: bool = False) -> None:
+    """Start background OCR for a ref. Idempotent and non-blocking.
+
+    With ``force`` a previously-cached result for this ref is discarded first, so
+    the file is scanned again (used by an explicit "re-scan" that must replace a
+    stale or low-quality read rather than reuse it)."""
     ref = (ref or "").strip()
     if not ref:
         return
     with _LOCK:
+        if force:
+            _RESULTS.pop(ref, None)  # drop the stale read; a live scan re-runs it
         if ref in _RESULTS or ref in _FUTURES:
             return
         submit = _pool().submit
@@ -289,6 +410,13 @@ def _enqueue(ref: str) -> None:
         # A concurrent call may have already recorded/finished it.
         if ref not in _RESULTS and ref not in _FUTURES:
             _FUTURES[ref] = fut
+
+
+def rescan(refs: List[str]) -> None:
+    """Force a fresh OCR of each ref, discarding any cached read. Non-blocking —
+    callers that need the text wait via ``text_for``/``raw_for_refs``."""
+    for r in refs or []:
+        _enqueue((r or "").strip(), force=True)
 
 
 def queue_image(filename: str) -> None:
@@ -369,16 +497,17 @@ def preview(filenames: List[str]) -> Dict[str, object]:
             "text": index_text("\n".join(texts))}
 
 
-def text_for(filenames: List[str], *, wait: bool = False) -> str:
-    """Combined OCR text for the given images.
+def raw_for_refs(filenames: List[str], *, wait: bool = False) -> Dict[str, str]:
+    """Per-ref raw OCR text: ``{ref: text}`` for every ref that yielded any.
 
-    With ``wait`` (used by the save-time write-back, which runs off the request
-    thread) this blocks up to the OCR timeout for any still-running scans, so a
-    save that happens before the preview finished still captures the text.
+    The building block behind ``text_for``. Keeping the text keyed by its source
+    file lets the caller store one scan per image, so re-scanning one image
+    replaces only its entry and removing an image drops only its entry — no
+    stacking, no orphaned text. ``wait`` blocks for still-running scans, as in
+    ``text_for``.
     """
-    files = [f for f in (filenames or []) if f]
-    texts: List[str] = []
-    for f in files:
+    out: Dict[str, str] = {}
+    for f in [f for f in (filenames or []) if f]:
         if wait:
             _enqueue(f)  # no-op if already queued/done (f may be a doc: ref)
             with _LOCK:
@@ -390,8 +519,20 @@ def text_for(filenames: List[str], *, wait: bool = False) -> str:
                     pass
         t = result(f)
         if t:
-            texts.append(t)
-    return "\n".join(texts).strip()
+            out[f] = t
+    return out
+
+
+def text_for(filenames: List[str], *, wait: bool = False) -> str:
+    """Combined OCR text for the given images.
+
+    With ``wait`` (used by the save-time write-back, which runs off the request
+    thread) this blocks up to the OCR timeout for any still-running scans, so a
+    save that happens before the preview finished still captures the text.
+    """
+    per = raw_for_refs(filenames, wait=wait)
+    # Preserve caller order (raw_for_refs iterates the given list in order).
+    return "\n".join(per.values()).strip()
 
 
 def index_text(raw: str) -> str:

@@ -220,7 +220,8 @@ def _min_record(rid: Optional[int], r: Dict[str, Any]) -> Dict[str, Any]:
         "description": _safe_str(r.get("description")),
         "category": "", "type": "", "location": "", "location_code": "",
         "qty": _safe_qty(r.get("qty")), "reorder_at": None,
-        "images": [], "ocr_text": "", "ocr_raw": "", "thumb_url": "",
+        "images": [], "ocr_text": "", "ocr_raw": "", "ocr_fields": [],
+        "thumb_url": "",
         "specifications": [], "estimated_value": "", "dimensions": "",
         "product_url": "", "tags": [], "source_title": "",
         "attachments": [], "order_number": "", "purchase_date": "",
@@ -302,6 +303,11 @@ def inventory() -> List[Dict[str, Any]]:
                 # OUT of the search haystack — that's what ``ocr_text`` (the trimmed,
                 # item-relevant copy) is for. See text_relevance.for_index.
                 "ocr_raw": _safe_str(r.get("ocr_raw")),
+                # Structured fields detected in the scan (UPC/EAN, brand, model,
+                # measurements…). Searchable and shown in the form, but kept apart
+                # from the user-curated ``specifications`` so auto-detection never
+                # overwrites what a person typed. See text_extract.extract.
+                "ocr_fields": _norm_list(r.get("ocr_fields")),
                 "thumb_url": _safe_str(r.get("thumb_url")),
                 # Richer catalogue fields (from vision AI / web lookup). All optional.
                 "specifications": _norm_list(r.get("specifications")),
@@ -588,9 +594,10 @@ def add_item(
         "reorder_at": _coerce_reorder(reorder_at),
         "images": _clean_images(images),
         "ocr_text": ocr_text or "",
-        # Raw scan text is filled in later by the background OCR write-back
-        # (set_ocr_text), never at create time — so default it empty here.
+        # Raw scan text and detected fields are filled in later by the background
+        # OCR write-back (set_ocr_text), never at create time — default empty.
         "ocr_raw": "",
+        "ocr_fields": [],
         "created_at": _now_iso(),
         "specifications": _norm_list(specifications),
         "estimated_value": (estimated_value or "").strip(),
@@ -657,6 +664,7 @@ def add_photo_items(filenames: List[str], prefix: str = "Item") -> List[Dict[str
             "images": [fn],
             "ocr_text": "",
             "ocr_raw": "",
+            "ocr_fields": [],
             "created_at": _now_iso(),
             "specifications": [],
             "estimated_value": "",
@@ -708,6 +716,7 @@ def update_item(
     price_paid: Any = _KEEP,
     seller: Any = _KEEP,
     ocr_raw: Any = _KEEP,
+    ocr_fields: Any = _KEEP,
 ) -> Dict[str, Any]:
     rows = inventory()
     found = None
@@ -763,11 +772,14 @@ def update_item(
                 r["price_paid"] = (price_paid or "").strip()
             if seller is not _KEEP:
                 r["seller"] = (seller or "").strip()
-            # Raw scan text is normally left to the background OCR write-back
-            # (via set_ocr_text); an ordinary form save omits it so editing the
-            # trimmed ocr_text never discards the retained full scan.
+            # Raw scan text and detected fields are normally left to the
+            # background OCR write-back (via set_ocr_text); an ordinary form save
+            # omits them so editing the trimmed ocr_text never discards the
+            # retained full scan or the detected fields.
             if ocr_raw is not _KEEP:
                 r["ocr_raw"] = ocr_raw or ""
+            if ocr_fields is not _KEEP:
+                r["ocr_fields"] = _norm_list(ocr_fields)
             found = r
             break
     if found is None:
@@ -926,7 +938,8 @@ def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
 
 
 def set_ocr_text(item_id: int, text: str, merge: bool = False,
-                 raw: Optional[str] = None) -> Optional[Dict[str, Any]]:
+                 raw: Optional[str] = None,
+                 fields: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
     """Write an item's scanned OCR text (from auto-OCR / the OCR Lab). Returns it.
 
     Kept separate from ``update_item_fields`` (whose ``_PATCHABLE`` set is short
@@ -935,15 +948,20 @@ def set_ocr_text(item_id: int, text: str, merge: bool = False,
     other mutator like any other write.
 
     ``text`` is the trimmed, item-relevant copy that feeds the search index.
-    ``raw`` (when given) is the full unfiltered scan, stored in ``ocr_raw`` for
-    reference / re-processing and kept OUT of search. Pass ``raw=None`` (the
-    default) to leave any existing raw text untouched.
+      * ``merge=True`` appends it to the item's current text (deduped) inside the
+        write lock — used when a newly-added photo should ADD to prior scans
+        without clobbering an edit; two racing saves each only add what they found.
+      * ``merge=False`` replaces it outright — used by an explicit re-scan.
 
-    With ``merge=True`` the new text is appended to whatever the item currently
-    holds (deduped) *inside the write lock*, rather than replacing it — the same
-    applies to ``raw``. That's what the background write-back uses: it reads the
-    item's live text at write time, so two scans of the same item racing (e.g. a
-    quick second save) can't clobber each other — each only adds what it found.
+    ``raw`` is the full unfiltered scan. It always REPLACES ``ocr_raw`` (never
+    stacks): the caller passes the scan of the item's *current* image set, so the
+    stored raw mirrors those images — re-scanning replaces it and removing an
+    image prunes it, instead of piling scan on scan. Pass ``raw=None`` to leave
+    the stored raw untouched; ``raw=""`` to clear it.
+
+    ``fields`` (from text_extract) likewise REPLACES ``ocr_fields``; ``None``
+    leaves them untouched, ``[]`` clears them. Raw is kept OUT of search; the
+    trimmed text and the detected fields are what's searchable.
     """
     rows = inventory()
     found = None
@@ -952,12 +970,32 @@ def set_ocr_text(item_id: int, text: str, merge: bool = False,
             if merge:
                 from ocr_auto import merge_text
                 r["ocr_text"] = merge_text(r.get("ocr_text", ""), text or "")
-                if raw is not None:
-                    r["ocr_raw"] = merge_text(r.get("ocr_raw", ""), raw or "")
             else:
                 r["ocr_text"] = text or ""
-                if raw is not None:
-                    r["ocr_raw"] = raw or ""
+            # Raw and detected fields are derived from the current image set, so
+            # they replace rather than accumulate.
+            if raw is not None:
+                r["ocr_raw"] = raw or ""
+            if fields is not None:
+                r["ocr_fields"] = _norm_list(fields)
+            found = r
+            break
+    if found is not None:
+        _save(rows)
+    return found
+
+
+def clear_ocr(item_id: int) -> Optional[Dict[str, Any]]:
+    """Wipe all scanned text for an item — the trimmed copy, the full raw scan
+    and the detected fields. Backs the form's "Clear scan" action so a bad or
+    unwanted scan can be removed without deleting the photo. Returns the row."""
+    rows = inventory()
+    found = None
+    for r in rows:
+        if int(r.get("id") or 0) == int(item_id):
+            r["ocr_text"] = ""
+            r["ocr_raw"] = ""
+            r["ocr_fields"] = []
             found = r
             break
     if found is not None:
@@ -1142,6 +1180,9 @@ def _haystack(r: Dict[str, Any]) -> str:
         str(r.get("location", "")),
         str(r.get("location_code", "")),
         str(r.get("ocr_text", "")),
+        # Detected fields (UPC/EAN, brand, model, measurements) are high-signal
+        # exact-match search anchors — kept searchable, unlike raw ocr_raw.
+        " ".join(r.get("ocr_fields", []) or []),
         " ".join(r.get("specifications", []) or []),
         " ".join(r.get("tags", []) or []),
         str(r.get("dimensions", "")),
@@ -2215,6 +2256,15 @@ def merge_preview(items: List[Dict[str, Any]],
         if t and t not in ocr_raw_parts:
             ocr_raw_parts.append(t)
 
+    # Detected fields carry across the merged items too (deduped), staying
+    # searchable — so combining two photos of one item keeps every UPC/model.
+    ocr_fields_parts: List[str] = []
+    for r in ordered:
+        for f in (r.get("ocr_fields") or []):
+            f = str(f).strip()
+            if f and f not in ocr_fields_parts:
+                ocr_fields_parts.append(f)
+
     total_qty = sum(max(0, int(r.get("qty") or 0)) for r in ordered)
     # Keep the tightest reorder point among the merged items (else none).
     _reorders = [_coerce_reorder(r.get("reorder_at")) for r in ordered]
@@ -2245,6 +2295,7 @@ def merge_preview(items: List[Dict[str, Any]],
         "images": _union_list(ordered, "images"),
         "ocr_text": "\n".join(ocr_parts),
         "ocr_raw": "\n".join(ocr_raw_parts),
+        "ocr_fields": ocr_fields_parts,
         "specifications": _union_list(ordered, "specifications"),
         "estimated_value": _first_nonempty(ordered, "estimated_value"),
         "dimensions": _first_nonempty(ordered, "dimensions"),
@@ -2385,7 +2436,8 @@ def merge_group(primary_id: int, merge_ids: List[int],
 
     # Write the merged fields onto the primary row (keep its id), drop the rest.
     for k in ("name", "description", "category", "type", "location", "location_code", "qty",
-              "reorder_at", "images", "ocr_text", "ocr_raw", "specifications", "estimated_value",
+              "reorder_at", "images", "ocr_text", "ocr_raw", "ocr_fields",
+              "specifications", "estimated_value",
               "dimensions", "product_url", "tags", "created_at",
               "attachments", "order_number", "purchase_date", "price_paid", "seller"):
         primary[k] = merged.get(k, primary.get(k))
@@ -2417,7 +2469,7 @@ for _name in (
     "add_item", "add_photo_items", "update_item", "update_item_fields",
     "adjust_qty", "remove_item", "bulk_set_fields", "bulk_remove",
     "add_image_to_item", "remove_image_from_item", "assign_types",
-    "set_ocr_text", "set_location", "apply_organization", "apply_fit", "merge_group",
+    "set_ocr_text", "clear_ocr", "set_location", "apply_organization", "apply_fit", "merge_group",
     "merge_groups", "prune_unreferenced_images", "prune_unreferenced_documents",
     "snapshot_inventory", "commit_undo", "restore_inventory",
 ):

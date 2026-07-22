@@ -5,6 +5,7 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 import data
 import ocr_auto
+import text_extract
 from utils import (
     save_image, get_thumbnail_url, get_image_url, get_preview_url,
     save_attachment, read_attachment_text,
@@ -35,32 +36,67 @@ def _parse_qty(q):
         return 0
 
 
-def _schedule_ocr_writeback(item_id, new_refs):
-    """Background-scan the newly-added photos/documents (``new_refs``) and merge
-    whatever text they yield onto the saved item.
+def _render_ocr_fields(fields):
+    """Detected OCR fields (``"Label: value"``) as small badges for the form.
 
-    Runs on a daemon thread so a slow scan (e.g. a very long screenshot or a
-    multi-page PDF) never blocks the Save. ``text_for(wait=True)`` reuses
-    whatever the live preview already OCR'd, so this is usually instant. The
-    merge happens inside data's write lock against the item's *current* text, so
-    a racing second save can't clobber it. Failures are swallowed — a scan that
-    doesn't pan out simply leaves the existing text untouched.
+    Returns a subtle placeholder when nothing was detected, so the panel doesn't
+    look broken on items whose scan had no structured data."""
+    fields = [str(f).strip() for f in (fields or []) if str(f).strip()]
+    if not fields:
+        return html.Span("No item details detected yet.",
+                         className="text-muted", style={"fontSize": "0.72rem"})
+    return html.Div([
+        html.Div("Detected details (searchable):",
+                 className="text-muted", style={"fontSize": "0.72rem"}),
+        html.Div([dbc.Badge(f, color="info", className="me-1 mb-1")
+                  for f in fields], className="mt-1"),
+    ])
+
+
+def _schedule_ocr_writeback(item_id, new_refs, current_refs):
+    """Background-scan an item's photos/documents and update its stored OCR.
+
+    ``current_refs`` is the item's *whole* current image + document set;
+    ``new_refs`` are the ones just added. The stored text is refreshed so it
+    always reflects the current set, without stacking:
+
+      * ``ocr_raw`` (full unfiltered scan, retained, not searched) and
+        ``ocr_fields`` (detected UPC/brand/model/…, searchable) are REBUILT from
+        the current set — so re-scanning replaces and removing an image prunes,
+        instead of piling scan on scan.
+      * ``ocr_text`` (trimmed, searchable) MERGES only what the newly-added files
+        found, so a manual edit to the trimmed copy is never clobbered by a save.
+
+    Runs on a daemon thread so a slow scan never blocks the Save. Re-scans are
+    served from the live-preview cache, so this is usually instant. Everything
+    fails soft — a scan that doesn't pan out leaves the stored text untouched.
     """
-    files = [f for f in (new_refs or []) if f]
-    if not item_id or not files:
+    if not item_id:
         return
+    current = [f for f in (current_refs or []) if f]
+    added = [f for f in (new_refs or []) if f]
 
     def _run():
         try:
-            # text_for() is the RAW scan; index_text() keeps only the
-            # item-relevant part so the search index isn't polluted with page
-            # nav / cross-sell / reviews. We persist BOTH — the trimmed copy in
-            # ocr_text (searchable/displayed) and the full raw scan in ocr_raw
-            # (retained for reference / re-processing, kept out of search).
-            raw = ocr_auto.text_for(files, wait=True)
-            found = ocr_auto.index_text(raw)
-            if found or raw:
-                data.set_ocr_text(item_id, found, merge=True, raw=raw)
+            # One scan pass over the current set; new_refs are a subset, so this
+            # also covers them (served from cache).
+            per = ocr_auto.raw_for_refs(current, wait=True) if current else {}
+            raw_all = "\n".join(per[f] for f in current if f in per).strip()
+
+            if not current:
+                # Every scannable source was removed — clear the derived scan.
+                data.set_ocr_text(item_id, "", merge=True, raw="", fields=[])
+                return
+            if not raw_all:
+                # OCR produced nothing (unavailable / still failing) — don't wipe
+                # what's already stored on a transient miss.
+                return
+
+            new_text = "\n".join(per[f] for f in added if f in per).strip()
+            trimmed_add = ocr_auto.index_text(new_text) if new_text else ""
+            fields = text_extract.extract(raw_all)
+            data.set_ocr_text(item_id, trimmed_add, merge=True,
+                              raw=raw_all, fields=fields)
         except Exception:
             pass
 
@@ -1303,8 +1339,8 @@ def register_callbacks(app):
                         ocr_to_save = (existing_ocr if ocr_preview_text is None
                                        else ocr_preview_text)
                         prior_imgs = existing_row.get("images", []) or []
-                        prior_att_files = {a.get("filename") for a in
-                                           (existing_row.get("attachments") or [])}
+                        prior_atts = existing_row.get("attachments") or []
+                        prior_att_files = {a.get("filename") for a in prior_atts}
                         data.update_item(editing_id, nm, ds, nqty, img_filenames, ocr_to_save,
                                          category=cat, location=loc, location_code=code,
                                          specifications=specs, estimated_value=value,
@@ -1313,11 +1349,18 @@ def register_callbacks(app):
                                          attachments=atts, order_number=p_order,
                                          purchase_date=p_date, price_paid=p_price, seller=p_seller)
                         toast_header, toast_icon, toast_msg = "Item Updated", "success", f'"{nm}" updated.'
-                        # Scan only the newly-added photos and documents.
+                        # Newly-added files add to the trimmed text; the whole
+                        # current set rebuilds the raw scan + detected fields.
                         new_photos = [f for f in img_filenames if f not in prior_imgs]
                         new_atts = [a for a in atts if a.get("filename") not in prior_att_files]
                         new_refs = new_photos + ocr_auto.doc_refs(new_atts)
-                        ocr_target = (editing_id, new_refs)
+                        current_refs = list(img_filenames) + ocr_auto.doc_refs(atts)
+                        prior_refs = list(prior_imgs) + ocr_auto.doc_refs(prior_atts)
+                        # Fire whenever the image/document set changed at all — an
+                        # add extends the scan, a removal prunes it — so the stored
+                        # raw / detected fields never drift from the current photos.
+                        fire = set(current_refs) != set(prior_refs)
+                        ocr_target = (editing_id, new_refs, current_refs, fire)
                     else:
                         # A new item keeps whatever the (editable) OCR panel holds
                         # at save time — live-scanned text or the user's edits. The
@@ -1332,7 +1375,7 @@ def register_callbacks(app):
                                       purchase_date=p_date, price_paid=p_price, seller=p_seller)
                         toast_header, toast_icon, toast_msg = "Item Added", "success", f'"{nm}" added.'
                         new_refs = list(img_filenames) + ocr_auto.doc_refs(atts)
-                        ocr_target = (created.get("id"), new_refs)
+                        ocr_target = (created.get("id"), new_refs, new_refs, bool(new_refs))
                 except ValueError as e:
                     # Save failed (duplicate name, or the edited item vanished).
                     # Keep the form and any staged photos/attachments intact so the
@@ -1343,14 +1386,13 @@ def register_callbacks(app):
 
                 toast_open = True
                 if saved_ok:
-                    # Scan any newly-added photos for text in the background and
-                    # write the combined result onto the saved item. Runs off the
-                    # request thread so a long screenshot never blocks the Save,
-                    # and uses the cache the live preview already populated (so it
-                    # usually finishes instantly). Skipped when auto-OCR is off or
-                    # no new photos were added.
-                    if auto_ocr and ocr_target and ocr_target[0] and ocr_target[1]:
-                        _schedule_ocr_writeback(*ocr_target)
+                    # Refresh the item's stored OCR in the background whenever its
+                    # photo/document set changed. Runs off the request thread so a
+                    # long screenshot never blocks the Save, and uses the cache the
+                    # live preview already populated (so it usually finishes
+                    # instantly). Skipped when auto-OCR is off or nothing changed.
+                    if auto_ocr and ocr_target and ocr_target[0] and ocr_target[3]:
+                        _schedule_ocr_writeback(ocr_target[0], ocr_target[1], ocr_target[2])
                     # Save & Next keeps where-it-lives sticky for rapid batch scanning.
                     _clear_form(keep_location=(triggered == "save-next-button"))
                     # refresh items for table build
@@ -1680,23 +1722,45 @@ def register_callbacks(app):
         Output("ocr-auto-status", "children"),
         Output("ocr-auto-collapse", "is_open"),
         Output("ocr-raw-view", "value"),
+        Output("ocr-fields-view", "children"),
         Input("editing-id", "data"),
         prevent_initial_call=True,
     )
     def load_ocr_baseline(editing_id):
         if not editing_id:
             # New item / form cleared — nothing scanned yet.
-            return "", "", "", False, ""
+            return "", "", "", False, "", _render_ocr_fields([])
         row = next((r for r in data.inventory() if r.get("id") == editing_id), None)
         stored = (row or {}).get("ocr_text", "") if row else ""
         raw = (row or {}).get("ocr_raw", "") if row else ""
-        if stored or raw:
+        fields = (row or {}).get("ocr_fields", []) if row else []
+        if stored or raw or fields:
             status = ("Saved text from earlier scans — edit or clear it; new photos "
                       "& documents add to it."
                       if stored else
                       "Trimmed text is empty — the full raw scan is kept below.")
-            return stored, stored, status, True, raw
-        return "", "", "", False, ""
+            return stored, stored, status, True, raw, _render_ocr_fields(fields)
+        return "", "", "", False, "", _render_ocr_fields([])
+
+    # Clear the whole scan (trimmed + raw + detected fields) for the edited item
+    # without deleting the photo. Writes immediately (a deliberate destructive
+    # click) and blanks the panel; the trimmed box is left empty so a Save keeps
+    # it cleared. On a not-yet-saved new item it just blanks the panel.
+    @app.callback(
+        Output("ocr-auto-preview", "value", allow_duplicate=True),
+        Output("ocr-raw-view", "value", allow_duplicate=True),
+        Output("ocr-fields-view", "children", allow_duplicate=True),
+        Output("ocr-auto-status", "children", allow_duplicate=True),
+        Input("ocr-clear-btn", "n_clicks"),
+        State("editing-id", "data"),
+        prevent_initial_call=True,
+    )
+    def clear_ocr_scan(n_clicks, editing_id):
+        if not n_clicks:
+            raise PreventUpdate
+        if editing_id:
+            data.clear_ocr(editing_id)
+        return "", "", _render_ocr_fields([]), "Scan cleared."
 
     # Show / hide the full untrimmed scan (retained on the item, not searched).
     @app.callback(
@@ -2694,7 +2758,8 @@ def register_callbacks(app):
         if auto_ocr:
             refs = list(photos) + ocr_auto.doc_refs(atts)
             if refs:
-                _schedule_ocr_writeback(created.get("id"), refs)
+                # New item: the whole set is both "new" and "current".
+                _schedule_ocr_writeback(created.get("id"), refs, refs)
         return (False, time.time(), True, "Item Added", "success",
                 f'"{nm}" added from Quick Add.')
 
