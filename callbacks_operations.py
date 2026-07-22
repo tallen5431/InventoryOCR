@@ -23,6 +23,8 @@ from dash.exceptions import PreventUpdate
 
 import operations_data as od
 import invoice_parse
+import product_import          # reuse the dashboard's product-page parser
+import price_compare as pc     # reuse pack-size / per-unit pricing (no new parsers)
 import data  # for the shared, now materials-aware asset pruners
 from utils import (
     save_image, save_attachment, read_attachment_text,
@@ -77,6 +79,12 @@ def _build_mat_rows(mats, name_map):
         thumb = get_thumbnail_url(images[0]) if images else ""
         badge = f" ({len(images)})" if len(images) > 1 else ""
         cost = od.material_cost(m)
+        # Show the per-unit cost even when the user only entered a total + qty —
+        # the material derives its own unit cost. Keep a typed string as-is.
+        unit_disp = m.get("unit_cost", "")
+        if not unit_disp:
+            u = od.material_unit_cost(m)
+            unit_disp = money(u) if u is not None else "—"
         bid = m.get("batch_id")
         out.append({
             "id": m.get("id"),
@@ -87,7 +95,7 @@ def _build_mat_rows(mats, name_map):
             "material_type": m.get("material_type", ""),
             "batch": name_map.get(bid, "") if bid is not None else "",
             "qty": m.get("qty", 0),
-            "unit_cost": m.get("unit_cost", "") or "—",
+            "unit_cost": unit_disp,
             "total_display": money(cost),
             "vendor": m.get("vendor", ""),
             "purchase_date": m.get("purchase_date", ""),
@@ -382,25 +390,39 @@ def register_operations_callbacks(app):
         Output("op-mat-doc-list", "children"),
         Output("op-mat-doc-status", "children"),
         Output("op-mat-doc-upload", "contents"),
+        Output("op-mat-name", "value", allow_duplicate=True),
         Output("op-mat-vendor", "value", allow_duplicate=True),
         Output("op-mat-date", "value", allow_duplicate=True),
         Output("op-mat-total-cost", "value", allow_duplicate=True),
         Output("op-mat-order", "value", allow_duplicate=True),
+        Output("op-mat-qty", "value", allow_duplicate=True),
+        Output("op-mat-unit-cost", "value", allow_duplicate=True),
+        Output("op-mat-specs", "value", allow_duplicate=True),
+        Output("op-mat-desc", "value", allow_duplicate=True),
+        Output("op-mat-tags", "value", allow_duplicate=True),
         Input("op-mat-doc-upload", "contents"),
         Input({"type": "op-mat-doc-remove", "index": ALL}, "n_clicks"),
         State("op-mat-doc-upload", "filename"),
         State("op-mat-attachments", "data"),
+        State("op-mat-name", "value"),
         State("op-mat-vendor", "value"),
         State("op-mat-date", "value"),
         State("op-mat-total-cost", "value"),
         State("op-mat-order", "value"),
+        State("op-mat-qty", "value"),
+        State("op-mat-unit-cost", "value"),
+        State("op-mat-specs", "value"),
+        State("op-mat-desc", "value"),
+        State("op-mat-tags", "value"),
         prevent_initial_call=True,
     )
     def stage_material_docs(contents, remove_clicks, filenames, current,
-                            cur_vendor, cur_date, cur_total, cur_order):
+                            cur_name, cur_vendor, cur_date, cur_total, cur_order,
+                            cur_qty, cur_unit, cur_specs, cur_desc, cur_tags):
         current = list(current or [])
         trig = ctx.triggered_id
-        NOFILL = (no_update, no_update, no_update, no_update)
+        # 10 no-fills: name, vendor, date, total, order, qty, unit, specs, desc, tags
+        NOFILL = (no_update,) * 10
 
         if isinstance(trig, dict) and trig.get("type") == "op-mat-doc-remove":
             if not any(remove_clicks or []):
@@ -415,7 +437,8 @@ def register_operations_callbacks(app):
         conts = contents if isinstance(contents, list) else [contents]
         names = filenames if isinstance(filenames, list) else [filenames]
 
-        parsed_all = {}
+        parsed_all = {}   # invoice/receipt purchase fields
+        prod = {}         # product-page fields (first single product page wins)
         added = 0
         for c, fn in zip(conts, names):
             if not c:
@@ -426,36 +449,119 @@ def register_operations_callbacks(app):
                 continue
             current.append(meta)
             added += 1
-            # Best-effort: read the invoice/receipt text and pull purchase fields.
             try:
                 text = read_attachment_text(meta["filename"])
-                if text:
-                    got = invoice_parse.extract_purchase(text)
-                    for k, v in got.items():
-                        if k != "found" and v and not parsed_all.get(k):
-                            parsed_all[k] = v
+            except Exception:
+                text = ""
+            if not text:
+                continue
+            # Invoice/receipt purchase fields (vendor / date / total / order).
+            try:
+                got = invoice_parse.extract_purchase(text)
+                for k, v in got.items():
+                    if k != "found" and v and not parsed_all.get(k):
+                        parsed_all[k] = v
             except Exception:
                 pass
+            # Product page → name / specs / pack size / unit price, exactly like
+            # the inventory importer. Skip a multi-listing search page (ambiguous
+            # for one material) and only take the first real product page.
+            if meta.get("kind") == "html" and not prod:
+                try:
+                    if not product_import.extract_listings_from_html(text).get("ok"):
+                        r = product_import.extract_from_html(text, "")
+                        if r.get("ok"):
+                            d = r.get("data", {})
+                            # Detect the pack size from the FULL marketplace title
+                            # (a "5 Pack" often sits past the comma that the short
+                            # display name trims off), plus specs / description.
+                            qty_src = (d.get("source_title") or d.get("name") or "")
+                            prod = {
+                                "name": (d.get("name") or "").strip(),
+                                "brand": (r.get("brand") or "").strip(),
+                                "specs": d.get("specifications") or [],
+                                "desc": (d.get("what_it_is") or "").strip(),
+                                "tags": d.get("tags") or [],
+                                "pv": pc.per_unit_value(
+                                    r.get("price") or d.get("estimated_value") or "",
+                                    qty_src, d.get("specifications"),
+                                    d.get("what_it_is") or ""),
+                            }
+                except Exception:
+                    pass
+
+        pv = prod.get("pv") or {}
+        cur_sym = pv.get("currency", "$")
 
         # Only fill fields the user left blank — never clobber typed values.
-        def _fill(cur, key):
-            return parsed_all.get(key) if (not (cur or "").strip() and parsed_all.get(key)) else no_update
+        def _fill(cur, val):
+            return val if (not str(cur or "").strip() and val) else no_update
 
-        new_vendor = _fill(cur_vendor, "seller")
-        new_date = _fill(cur_date, "purchase_date")
-        new_total = _fill(cur_total, "price_paid")
-        new_order = _fill(cur_order, "order_number")
+        prod_total = (f"{cur_sym}{pv['list_price']:.2f}"
+                      if pv.get("list_price") is not None else None)
+        prod_unit = (f"{cur_sym}{pv['unit_price']:.2f}"
+                     if pv.get("unit_price") is not None else None)
+        specs_text = "\n".join(prod.get("specs") or []) or None
+        tags_text = ", ".join(prod.get("tags") or []) or None
 
-        filled = [k for k, val in (("vendor", new_vendor), ("date", new_date),
-                                   ("total", new_total), ("order#", new_order))
-                  if val is not no_update]
+        new_name = _fill(cur_name, prod.get("name"))
+        new_vendor = _fill(cur_vendor, parsed_all.get("seller") or prod.get("brand"))
+        new_date = _fill(cur_date, parsed_all.get("purchase_date"))
+        new_total = _fill(cur_total, parsed_all.get("price_paid") or prod_total)
+        new_order = _fill(cur_order, parsed_all.get("order_number"))
+        new_unit = _fill(cur_unit, prod_unit)
+        new_desc = _fill(cur_desc, prod.get("desc"))
+        new_specs = _fill(cur_specs, specs_text)
+        new_tags = _fill(cur_tags, tags_text)
+        # Pack size: fill only when a multi-pack was detected and the user hasn't
+        # moved qty off its default of 1.
+        det_qty = pv.get("qty")
+        new_qty = (det_qty if (det_qty and det_qty > 1
+                               and str(cur_qty or "").strip() in ("", "1"))
+                   else no_update)
+
+        filled = [lbl for lbl, val in (
+            ("name", new_name), ("vendor", new_vendor), ("date", new_date),
+            ("total", new_total), ("order#", new_order), ("pack qty", new_qty),
+            ("unit cost", new_unit), ("specs", new_specs))
+            if val is not no_update]
         status = html.Span(
             [html.I(className="bi bi-check-circle me-1"),
-             f"Attached {added} file(s)." + (f" Read: {', '.join(filled)}." if filled else "")],
+             f"Attached {added} file(s)." + (f" Auto-filled: {', '.join(filled)}." if filled else "")],
             className="text-success",
         )
         return (current, _render_doc_list(current), status, None,
-                new_vendor, new_date, new_total, new_order)
+                new_name, new_vendor, new_date, new_total, new_order,
+                new_qty, new_unit, new_specs, new_desc, new_tags)
+
+    # ---------------- Live unit/total auto-calc ----------------------------
+    # A material knows its own unit cost from the quantity and price: fill the
+    # blank one of {unit cost, total} from the other × / ÷ qty. Fill-blank-only,
+    # so a typed value is never overwritten and the write can't loop (once a
+    # field is filled it's no longer blank on the re-fire). manage_material owns
+    # both fields; this is an allow_duplicate writer.
+    @app.callback(
+        Output("op-mat-unit-cost", "value", allow_duplicate=True),
+        Output("op-mat-total-cost", "value", allow_duplicate=True),
+        Input("op-mat-qty", "value"),
+        Input("op-mat-unit-cost", "value"),
+        Input("op-mat-total-cost", "value"),
+        prevent_initial_call=True,
+    )
+    def op_autocalc_cost(qty, unit, total):
+        q = od._safe_qty(qty)
+        if q <= 0:
+            raise PreventUpdate
+        uv = od.parse_value(unit)
+        tv = od.parse_value(total)
+        sym = pc._currency(str(total or "") or str(unit or "")) or "$"
+        unit_blank = not str(unit or "").strip()
+        total_blank = not str(total or "").strip()
+        if total_blank and uv is not None:
+            return no_update, f"{sym}{round(uv * q, 2):.2f}"
+        if unit_blank and tv is not None:
+            return f"{sym}{round(tv / q, 2):.2f}", no_update
+        raise PreventUpdate
 
     # ---------------- Material form + table lifecycle (BIG owner) -----------
     @app.callback(
@@ -782,16 +888,19 @@ def register_operations_callbacks(app):
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["id", "name", "type", "batch", "vendor", "qty", "unit_cost",
-                    "total_cost", "computed_cost", "order_number", "purchase_date",
+                    "total_cost", "computed_cost", "computed_unit_cost",
+                    "order_number", "purchase_date",
                     "description", "specifications", "tags", "created_at"])
         for m in mats:
             bid = m.get("batch_id")
             cost = od.material_cost(m)
+            unit = od.material_unit_cost(m)
             w.writerow([
                 m.get("id"), m.get("name", ""), m.get("material_type", ""),
                 name_map.get(bid, "") if bid is not None else "", m.get("vendor", ""),
                 m.get("qty", 0), m.get("unit_cost", ""), m.get("total_cost", ""),
                 cost if cost is not None else "",
+                unit if unit is not None else "",
                 m.get("order_number", ""), m.get("purchase_date", ""),
                 m.get("description", ""), "; ".join(m.get("specifications") or []),
                 ", ".join(m.get("tags") or []), m.get("created_at", ""),

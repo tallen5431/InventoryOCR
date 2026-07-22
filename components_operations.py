@@ -165,7 +165,7 @@ def _material_form():
                             className="g-2",
                         ),
                         html.Div(
-                            "Leave Total blank to compute Quantity × Unit cost.",
+                            "Enter any two — the third fills itself. Unit cost = Total ÷ Quantity.",
                             className="text-muted small mt-1",
                         ),
 
@@ -233,8 +233,9 @@ def _material_form():
                                     html.Div("🧾", className="upload-icon"),
                                     html.Div([html.Strong("Attach a file"), " or ",
                                               html.A("choose files")]),
-                                    html.Div("PDF, image, HTML or spec sheet. An invoice is read "
-                                             "to auto-fill vendor / date / total.",
+                                    html.Div("PDF, image, HTML or spec sheet. An invoice fills "
+                                             "vendor / date / total; a saved product page fills "
+                                             "name, pack size, unit cost & specs.",
                                              className="text-muted small mt-1"),
                                 ]
                             ),

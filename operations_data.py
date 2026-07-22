@@ -508,6 +508,23 @@ def material_cost(m: Dict[str, Any]) -> Optional[float]:
     return None
 
 
+def material_unit_cost(m: Dict[str, Any]) -> Optional[float]:
+    """Best estimate of what ONE unit of a material cost.
+
+    Prefers an explicit ``unit_cost``; otherwise divides the total by the
+    quantity — so a material bought as a pack (qty 5 for $7.59) knows its own
+    per-unit cost without the user typing it. ``None`` when neither is derivable
+    (e.g. no price, or qty 0)."""
+    unit = parse_value(m.get("unit_cost"))
+    if unit is not None:
+        return unit
+    total = parse_value(m.get("total_cost"))
+    qty = int(m.get("qty") or 0)
+    if total is not None and qty > 0:
+        return round(total / qty, 4)
+    return None
+
+
 def materials_spend(rows: Optional[List[Dict[str, Any]]] = None) -> float:
     rows = rows if rows is not None else materials()
     return round(sum((material_cost(m) or 0.0) for m in rows), 2)
