@@ -125,33 +125,49 @@ def _mat_tooltips(mats):
 def _batch_card(rollup, mat_options):
     b = rollup["batch"]
     bid = b.get("id")
-    total = rollup["total_cost"]
+    cpu = rollup["cost_per_unit"]
     units = rollup["units_produced"]
-    per_unit = rollup["cost_per_unit"]
+    run_cost = rollup["run_cost"]
+    purchased = rollup["purchased_cost"]
 
-    # Cost headline
+    # Cost headline — the bill-of-materials view: what one unit costs, and the
+    # whole run (cost/unit × units made).
     metrics = dbc.Row(
         [
-            dbc.Col(html.Div([html.Div(money(total), className="fw-bold fs-5 text-success"),
-                              html.Div("materials cost", className="text-muted small")]), xs=4),
-            dbc.Col(html.Div([html.Div(str(units) if units else "—", className="fw-bold fs-5"),
-                              html.Div("units made", className="text-muted small")]), xs=4),
-            dbc.Col(html.Div([html.Div(money(per_unit) if per_unit is not None else "—",
+            dbc.Col(html.Div([html.Div(money(cpu) if cpu is not None else "—",
                                        className="fw-bold fs-5 text-warning"),
                               html.Div("cost / unit", className="text-muted small")]), xs=4),
+            dbc.Col(html.Div([html.Div(str(units) if units else "—", className="fw-bold fs-5"),
+                              html.Div("units made", className="text-muted small")]), xs=4),
+            dbc.Col(html.Div([html.Div(money(run_cost) if run_cost is not None else "—",
+                                       className="fw-bold fs-5 text-success"),
+                              html.Div("run cost", className="text-muted small")]), xs=4),
         ],
         className="text-center g-2 my-2",
     )
+    footnote = (html.Div([html.I(className="bi bi-bag me-1"),
+                          f"Materials purchased for this batch: {money(purchased)}"],
+                         className="text-muted small text-center mb-2")
+                if purchased else html.Div())
 
-    # Assigned materials
+    # Assigned materials — each row sets how many that material a single unit
+    # uses; cost/unit = unit cost × qty per unit, and the headline sums them.
     mats = rollup["materials"]
     if mats:
         mat_rows = [
             html.Tr([
                 html.Td(m.get("name", "")),
-                html.Td(m.get("material_type", ""), className="text-muted small"),
-                html.Td(str(m.get("qty", 0)), className="text-center"),
-                html.Td(money(od.material_cost(m)), className="text-end"),
+                html.Td(money(od.material_unit_cost(m)), className="text-end text-nowrap"),
+                html.Td(
+                    dbc.Input(id={"type": "op-bom-qty", "index": m.get("id")},
+                              type="number", min=0, step="any",
+                              value=od.material_qty_per_unit(m), debounce=True, size="sm",
+                              style={"width": "78px", "display": "inline-block"},
+                              className="text-end"),
+                    className="text-center",
+                ),
+                html.Td(html.Strong(money(od.material_per_build_cost(m))),
+                        className="text-end text-nowrap"),
                 html.Td(
                     dbc.Button(html.I(className="bi bi-x-lg"),
                                id={"type": "op-batch-remove-mat", "index": m.get("id")},
@@ -163,12 +179,18 @@ def _batch_card(rollup, mat_options):
             for m in mats
         ]
         mat_table = dbc.Table(
-            [html.Thead(html.Tr([html.Th("Material"), html.Th("Type"),
-                                 html.Th("Qty", className="text-center"),
-                                 html.Th("Cost", className="text-end"), html.Th("")])),
+            [html.Thead(html.Tr([html.Th("Material"),
+                                 html.Th("Unit cost", className="text-end"),
+                                 html.Th("Qty/unit", className="text-center"),
+                                 html.Th("Cost/unit", className="text-end"), html.Th("")])),
              html.Tbody(mat_rows)],
-            size="sm", striped=True, hover=True, responsive=True, className="align-middle mb-2",
+            size="sm", striped=True, hover=True, responsive=True, className="align-middle mb-1",
         )
+        mat_table = html.Div([
+            mat_table,
+            html.Div("Set how many of each material one unit uses — the cost/unit "
+                     "updates as you type.", className="text-muted small mb-2"),
+        ])
     else:
         mat_table = html.Div("No materials assigned yet — add some below.",
                              className="text-muted small mb-2")
@@ -219,7 +241,7 @@ def _batch_card(rollup, mat_options):
         className="d-flex align-items-center justify-content-between",
     )
 
-    body = [metrics, mat_table, adder]
+    body = [metrics, footnote, mat_table, adder]
     if b.get("notes"):
         body.insert(0, html.Div(b["notes"], className="text-muted small mb-2"))
 
@@ -235,8 +257,9 @@ def _render_batch_list():
     if not bats:
         return dbc.Alert(
             [html.I(className="bi bi-info-circle me-2"),
-             "No batches yet. Create one above, then assign the materials you ordered "
-             "for it — here you'll see its total cost and cost per unit."],
+             "No batches yet. Create one above, then assign the materials it uses "
+             "and set how many of each a unit needs — you'll see the cost per unit "
+             "and the whole run's cost."],
             color="secondary", className="py-2",
         )
     # Options for the per-card "add materials" dropdown: every material, labelled
@@ -246,8 +269,8 @@ def _render_batch_list():
     def _opt_label(m):
         bid = m.get("batch_id")
         where = f"in: {name_map.get(bid)}" if bid is not None else "unassigned"
-        cost = od.material_cost(m)
-        cost_s = f" · {money(cost)}" if cost is not None else ""
+        unit = od.material_unit_cost(m)
+        cost_s = f" · {money(unit)}/unit" if unit is not None else ""
         return f"{m.get('name','')} ({where}{cost_s})"
 
     mat_options = [{"label": _opt_label(m), "value": m.get("id")} for m in mats]
@@ -889,18 +912,22 @@ def register_operations_callbacks(app):
         w = csv.writer(buf)
         w.writerow(["id", "name", "type", "batch", "vendor", "qty", "unit_cost",
                     "total_cost", "computed_cost", "computed_unit_cost",
+                    "qty_per_unit", "per_unit_build_cost",
                     "order_number", "purchase_date",
                     "description", "specifications", "tags", "created_at"])
         for m in mats:
             bid = m.get("batch_id")
             cost = od.material_cost(m)
             unit = od.material_unit_cost(m)
+            per_build = od.material_per_build_cost(m)
             w.writerow([
                 m.get("id"), m.get("name", ""), m.get("material_type", ""),
                 name_map.get(bid, "") if bid is not None else "", m.get("vendor", ""),
                 m.get("qty", 0), m.get("unit_cost", ""), m.get("total_cost", ""),
                 cost if cost is not None else "",
                 unit if unit is not None else "",
+                od.material_qty_per_unit(m),
+                per_build if per_build is not None else "",
                 m.get("order_number", ""), m.get("purchase_date", ""),
                 m.get("description", ""), "; ".join(m.get("specifications") or []),
                 ", ".join(m.get("tags") or []), m.get("created_at", ""),
@@ -1021,6 +1048,37 @@ def register_operations_callbacks(app):
             raise PreventUpdate
         token = _token()
         return token, True, "Removed", "secondary", "Material removed from batch."
+
+    # ---------------- Set a material's per-unit usage (bill of materials) ----
+    # Each assigned material's "Qty/unit" input writes qty_per_unit, so the
+    # batch's cost/unit recomputes. Compares against the STORED value and only
+    # writes a genuine change, so re-rendering the cards (which recreates these
+    # inputs) can't loop. (op-refresh has one owner; this is allow_duplicate.)
+    @app.callback(
+        Output("op-refresh", "data", allow_duplicate=True),
+        Input({"type": "op-bom-qty", "index": ALL}, "value"),
+        State({"type": "op-bom-qty", "index": ALL}, "id"),
+        prevent_initial_call=True,
+    )
+    def set_bom_qty(values, ids):
+        changed = False
+        for v, i in zip(values or [], ids or []):
+            if not isinstance(i, dict):
+                continue
+            m = od.get_material(i.get("index"))
+            if m is None:
+                continue
+            try:
+                newv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if newv < 0 or abs(newv - od.material_qty_per_unit(m)) < 1e-9:
+                continue  # unchanged (or a re-render echo) — don't rewrite or loop
+            od.update_material(i.get("index"), qty_per_unit=newv)
+            changed = True
+        if not changed:
+            raise PreventUpdate
+        return _token()
 
     # ---------------- Add materials to a batch -----------------------------
     @app.callback(

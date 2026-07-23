@@ -121,6 +121,17 @@ def _safe_qty(v: Any) -> int:
     return n if n >= 0 else 0
 
 
+def _safe_float(v: Any, default: float = 0.0) -> float:
+    """Non-negative float, or ``default`` on anything unparseable. Used for the
+    per-build quantity (how many of a material one produced unit consumes), which
+    is often fractional — one board yields four coasters → 0.25 per coaster."""
+    try:
+        f = float(str(v).strip())
+    except (TypeError, ValueError):
+        return default
+    return f if f >= 0 else default
+
+
 def _safe_id(v: Any) -> Optional[int]:
     try:
         return int(v)
@@ -237,6 +248,7 @@ def _min_material(rid: Optional[int], r: Dict[str, Any]) -> Dict[str, Any]:
         "name": _safe_str(r.get("name")) or (f"Material {rid}" if rid is not None else "Material"),
         "material_type": "", "batch_id": None, "vendor": "",
         "qty": _safe_qty(r.get("qty")), "unit_cost": "", "total_cost": "",
+        "qty_per_unit": 1.0,
         "order_number": "", "purchase_date": "", "description": "",
         "specifications": [], "images": [], "thumb_url": "", "ocr_text": "",
         "attachments": [], "tags": [], "created_at": "",
@@ -263,6 +275,10 @@ def materials() -> List[Dict[str, Any]]:
                 "qty": _safe_qty(r.get("qty")),
                 "unit_cost": _safe_str(r.get("unit_cost")),
                 "total_cost": _safe_str(r.get("total_cost")),
+                # How many of this material one produced unit of its batch
+                # consumes (the bill-of-materials quantity). Defaults to 1 so a
+                # legacy record behaves as "one per unit".
+                "qty_per_unit": _safe_float(r.get("qty_per_unit", 1), 1.0),
                 "order_number": _safe_str(r.get("order_number")),
                 "purchase_date": _safe_str(r.get("purchase_date")),
                 "description": _safe_str(r.get("description")),
@@ -298,6 +314,7 @@ def add_material(
     qty: Any = 1,
     unit_cost: str = "",
     total_cost: str = "",
+    qty_per_unit: Any = 1,
     order_number: str = "",
     purchase_date: str = "",
     description: str = "",
@@ -321,6 +338,7 @@ def add_material(
         "qty": _safe_qty(qty),
         "unit_cost": (unit_cost or "").strip(),
         "total_cost": (total_cost or "").strip(),
+        "qty_per_unit": _safe_float(qty_per_unit, 1.0),
         "order_number": (order_number or "").strip(),
         "purchase_date": (purchase_date or "").strip(),
         "description": (description or "").strip(),
@@ -352,6 +370,7 @@ def update_material(
     qty: Any = _KEEP,
     unit_cost: Any = _KEEP,
     total_cost: Any = _KEEP,
+    qty_per_unit: Any = _KEEP,
     order_number: Any = _KEEP,
     purchase_date: Any = _KEEP,
     description: Any = _KEEP,
@@ -382,6 +401,8 @@ def update_material(
             r["unit_cost"] = (unit_cost or "").strip()
         if total_cost is not _KEEP:
             r["total_cost"] = (total_cost or "").strip()
+        if qty_per_unit is not _KEEP:
+            r["qty_per_unit"] = _safe_float(qty_per_unit, 1.0)
         if order_number is not _KEEP:
             r["order_number"] = (order_number or "").strip()
         if purchase_date is not _KEEP:
@@ -523,6 +544,22 @@ def material_unit_cost(m: Dict[str, Any]) -> Optional[float]:
     if total is not None and qty > 0:
         return round(total / qty, 4)
     return None
+
+
+def material_qty_per_unit(m: Dict[str, Any]) -> float:
+    """How many of this material one produced unit consumes (default 1)."""
+    v = _safe_float(m.get("qty_per_unit", 1), 1.0)
+    return v
+
+
+def material_per_build_cost(m: Dict[str, Any]) -> Optional[float]:
+    """What this material contributes to the cost of ONE produced unit:
+    per-unit cost × how many are consumed per build. ``None`` when the material
+    has no derivable unit cost."""
+    unit = material_unit_cost(m)
+    if unit is None:
+        return None
+    return round(unit * material_qty_per_unit(m), 4)
 
 
 def materials_spend(rows: Optional[List[Dict[str, Any]]] = None) -> float:
@@ -703,20 +740,37 @@ def materials_for_batch(batch_id: int,
 
 def batch_rollup(batch: Dict[str, Any],
                  mats: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-    """Cost summary for one batch: its materials, their total cost, and — when
-    the batch records how many units it produced — the cost per unit."""
+    """Cost summary for one batch as a bill of materials.
+
+    ``cost_per_unit`` is what one produced unit costs in materials — the sum of
+    each assigned material's per-unit cost × how many that unit consumes
+    (``qty_per_unit``). ``run_cost`` scales that by ``units_produced``. This is
+    the model that lets a single purchased pack (20 cables for $12.99) feed many
+    produced units without duplicating the order — you record "1 cable per unit",
+    not one material line per unit.
+
+    ``purchased_cost`` is what the assigned material packs actually cost (kept for
+    reference / the spend view).
+    """
     mats = mats if mats is not None else materials()
     assigned = materials_for_batch(batch.get("id"), mats)
-    total = round(sum((material_cost(m) or 0.0) for m in assigned), 2)
+    per_build = [material_per_build_cost(m) for m in assigned]
+    known = [c for c in per_build if c is not None]
+    cost_per_unit = round(sum(known), 4) if known else None
     units = int(batch.get("units_produced") or 0)
-    per_unit = round(total / units, 2) if units > 0 else None
+    run_cost = (round(cost_per_unit * units, 2)
+                if (cost_per_unit is not None and units > 0) else None)
+    purchased = round(sum((material_cost(m) or 0.0) for m in assigned), 2)
     return {
         "batch": batch,
         "materials": assigned,
         "material_count": len(assigned),
-        "total_cost": total,
+        "cost_per_unit": cost_per_unit,
         "units_produced": units,
-        "cost_per_unit": per_unit,
+        "run_cost": run_cost,
+        "purchased_cost": purchased,
+        # Back-compat alias for any external reader of the old key.
+        "total_cost": purchased,
     }
 
 

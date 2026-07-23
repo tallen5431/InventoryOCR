@@ -537,8 +537,10 @@ def _batches_tab():
         [
             _batch_form(),
             html.Div(
-                html.Span("Each batch adds up the cost of the materials assigned to it. "
-                          "Record how many units it produced to see your cost per unit.",
+                html.Span("Assign the materials a batch uses and set how many of each one "
+                          "unit needs — the cost per unit is each material's per-unit price × "
+                          "how many it uses. One purchased pack can feed many units, so there's "
+                          "no need to re-enter an order per unit.",
                           className="text-muted small"),
                 className="mb-2",
             ),
