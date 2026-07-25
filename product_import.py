@@ -646,17 +646,24 @@ def _ebay_listings(soup, source_url: str) -> List[Dict[str, str]]:
         title = re.sub(r"(?i)^\s*new listing\s*", "", title).strip()
         if not title or title.lower() in ("shop on ebay", "results matching fewer words"):
             continue  # eBay's first card is a hidden "Shop on eBay" placeholder
-        key = re.sub(r"\s+", " ", title.lower())
-        if key in seen:
-            continue
-        seen.add(key)
         pe = it.select_one(".s-item__price")
         link = it.select_one("a.s-item__link[href]")
         img = it.select_one(".s-item__image img, .s-item__image-img")
+        price = _clean_price_text(pe.get_text(" ", strip=True)) if pe else ""
+        url = (link.get("href") if link else "") or ""
+        # Dedupe by the listing URL (each eBay offer has a unique /itm/<id>),
+        # falling back to title+price. Deduping by title ALONE would wrongly drop
+        # different sellers' offers of the same product at different prices —
+        # which is exactly the price data this comparison exists to surface.
+        title_norm = re.sub(r"\s+", " ", title.lower())
+        key = url or f"{title_norm}|{price}"
+        if key in seen:
+            continue
+        seen.add(key)
         out.append({
             "name": title,
-            "price": _clean_price_text(pe.get_text(" ", strip=True)) if pe else "",
-            "url": (link.get("href") if link else "") or "",
+            "price": price,
+            "url": url,
             "image_url": (img.get("src") or img.get("data-src") if img else "") or "",
             "asin": "",
         })

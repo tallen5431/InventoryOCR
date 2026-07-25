@@ -165,7 +165,8 @@ def _material_form():
                             className="g-2",
                         ),
                         html.Div(
-                            "Enter any two — the third fills itself. Unit cost = Total ÷ Quantity.",
+                            "Enter any two — the third is worked out. Unit cost = Total ÷ Quantity; "
+                            "leave Total blank to use Quantity × Unit cost.",
                             className="text-muted small mt-1",
                         ),
 

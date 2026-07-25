@@ -88,6 +88,40 @@ def main():
     _check("single product keeps its own 3-pack size",
            single["products"][0]["quantity"] == 3)
 
+    # 3) detect_quantity must not read a capital-X MODEL number as a pack size
+    #    (common in electronics — the reverse regex used to divide the price).
+    _check("capital-X model not a pack (X100)",
+           pc.detect_quantity("Fujifilm X100 Camera")[0] == 1)
+    _check("capital-X model not a pack (X570)",
+           pc.detect_quantity("MSI X570 Motherboard")[0] == 1)
+    _check("lowercase xNNN bundle still detected",
+           pc.detect_quantity("Cable Ties x100")[0] == 100)
+    _check("unit-word pack still detected",
+           pc.detect_quantity("USB Cable 5 Pack")[0] == 5)
+
+    # 4) An eBay results page keeps different-priced offers of the SAME title —
+    #    deduping by title alone would hide the cheaper seller.
+    ebay = ('<html><body>'
+            '<li class="s-item"><div class="s-item__title">Shop on eBay</div></li>'
+            '<li class="s-item"><a class="s-item__link" href="https://ebay.com/itm/111">x</a>'
+            '<div class="s-item__title">AA Battery 4 Pack</div>'
+            '<span class="s-item__price">$15.00</span></li>'
+            '<li class="s-item"><a class="s-item__link" href="https://ebay.com/itm/222">x</a>'
+            '<div class="s-item__title">AA Battery 4 Pack</div>'
+            '<span class="s-item__price">$9.00</span></li>'
+            '<li class="s-item"><a class="s-item__link" href="https://ebay.com/itm/333">x</a>'
+            '<div class="s-item__title">AA Battery 4 Pack</div>'
+            '<span class="s-item__price">$12.00</span></li>'
+            '</body></html>')
+    if pi._HAS_BS4:
+        elist = pi.extract_listings_from_html(ebay)
+        _check("eBay same-title different-price offers all kept",
+               elist["ok"] and len(elist["products"]) == 3)
+        eres = pc.analyze_htmls([("ebay.html", ebay)])
+        best = eres["best"]
+        _check("cheapest eBay offer wins (not the first)",
+               best is not None and best["price_value"] == 9.0)
+
     print("\nRESULT:", "ALL PASS" if _ok else "SOME FAILED")
     return 0 if _ok else 1
 

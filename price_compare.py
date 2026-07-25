@@ -114,12 +114,16 @@ def detect_quantity(name: str, specs: Optional[List[str]] = None,
     # ("16 x 24", "M8 x 100mm" — a size, not a pack) or when a measurement unit
     # immediately follows the count. Without these, "16 x 24 inch Poster Frame"
     # was read as a 24-pack and divided the price by 24.
+    # Match a LOWERCASE 'x' only (no re.I): retailers write bundles lowercase
+    # ("cable ties x100"), while a capital 'X' is almost always a model number
+    # ("Fujifilm X100", "MSI X570", "X299") — case is what tells them apart, so
+    # this must not read those camera/board models as a 100/570/299-pack.
     # NOTE: the reverse "100x" form is deliberately NOT matched — it can't be told
     # apart from a magnification ("40X-1000X microscope", "10X loupe"). Real packs
     # written that way almost always carry a unit word ("100 pcs", "6-pack") caught
     # above, so nothing useful is lost.
     _dim_units = ("mm", "cm", "in", "ft", "inch", '"', "'")
-    for m in re.finditer(r"(?<![A-Za-z0-9])x\s*(\d{2,})(?!\s*[x\d])", text, re.I):
+    for m in re.finditer(r"(?<![A-Za-z0-9])x\s*(\d{2,})(?!\s*[x\d])", text):
         prefix = text[:m.start()].rstrip()
         if prefix and prefix[-1].isdigit():
             continue  # a number before the 'x' → dimension, not a bundle

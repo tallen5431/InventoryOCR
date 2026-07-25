@@ -557,34 +557,14 @@ def register_operations_callbacks(app):
                 new_name, new_vendor, new_date, new_total, new_order,
                 new_qty, new_unit, new_specs, new_desc, new_tags)
 
-    # ---------------- Live unit/total auto-calc ----------------------------
-    # A material knows its own unit cost from the quantity and price: fill the
-    # blank one of {unit cost, total} from the other × / ÷ qty. Fill-blank-only,
-    # so a typed value is never overwritten and the write can't loop (once a
-    # field is filled it's no longer blank on the re-fire). manage_material owns
-    # both fields; this is an allow_duplicate writer.
-    @app.callback(
-        Output("op-mat-unit-cost", "value", allow_duplicate=True),
-        Output("op-mat-total-cost", "value", allow_duplicate=True),
-        Input("op-mat-qty", "value"),
-        Input("op-mat-unit-cost", "value"),
-        Input("op-mat-total-cost", "value"),
-        prevent_initial_call=True,
-    )
-    def op_autocalc_cost(qty, unit, total):
-        q = od._safe_qty(qty)
-        if q <= 0:
-            raise PreventUpdate
-        uv = od.parse_value(unit)
-        tv = od.parse_value(total)
-        sym = pc._currency(str(total or "") or str(unit or "")) or "$"
-        unit_blank = not str(unit or "").strip()
-        total_blank = not str(total or "").strip()
-        if total_blank and uv is not None:
-            return no_update, f"{sym}{round(uv * q, 2):.2f}"
-        if unit_blank and tv is not None:
-            return f"{sym}{round(tv / q, 2):.2f}", no_update
-        raise PreventUpdate
+    # Unit ⇄ total cost are intentionally NOT auto-populated in the form. Doing so
+    # live (fill-blank-only) baked in the default qty=1 when the price was typed
+    # before the quantity, and silently rewrote a material's fields on edit-load —
+    # both persisting wrong costs. Instead the costs are DERIVED on read:
+    # material_cost (total from unit×qty) and material_unit_cost (unit from
+    # total÷qty) feed the table, the batch rollup and the CSV, so whatever two of
+    # {qty, unit, total} you enter, the third is always computed correctly and
+    # nothing is mutated behind your back.
 
     # ---------------- Material form + table lifecycle (BIG owner) -----------
     @app.callback(
