@@ -221,6 +221,39 @@ def test_best_title_from_ocr():
         _check(f"soup abstains: {soup[:18]!r}", tr.best_title(soup) == "")
 
 
+# ---------------------------------------------------------------------------
+# Import keeps the source .html as an attachment
+# ---------------------------------------------------------------------------
+def test_import_stages_attachment():
+    try:
+        import callbacks  # needs dash installed
+        from dash import no_update
+    except Exception:
+        print("SKIP - dash unavailable; import-attachment staging test")
+        return
+    saved = []
+
+    def fake_save(contents, name, **kw):
+        saved.append(name)
+        return {"filename": f"{name}-1", "original_name": name, "kind": "html", "size": 5}
+
+    orig = callbacks.save_attachment
+    try:
+        callbacks.save_attachment = fake_save
+        payload = ("data:text/html;base64,aGk=", "listing.html")
+        out = callbacks._stage_import_attachment(payload, [])
+        _check("import stages the source as an attachment",
+               isinstance(out, list) and out[-1]["original_name"] == "listing.html")
+        # Re-importing the same-named file must not stack a duplicate.
+        again = callbacks._stage_import_attachment(payload, out)
+        _check("re-import of same file deduped", again is no_update)
+        # Nothing to attach (a URL fetch) leaves the list untouched.
+        _check("no payload -> no_update",
+               callbacks._stage_import_attachment(None, out) is no_update)
+    finally:
+        callbacks.save_attachment = orig
+
+
 def main():
     test_type_classification()
     test_type_normalised_on_load()
@@ -238,6 +271,7 @@ def main():
     test_text_relevance_specs_survive()
     test_is_placeholder_name()
     test_best_title_from_ocr()
+    test_import_stages_attachment()
     print("\nRESULT:", "ALL PASS" if _ok else "FAILURES ABOVE")
     return 0 if _ok else 1
 

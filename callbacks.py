@@ -118,6 +118,36 @@ def _schedule_ocr_writeback(item_id, new_refs, current_refs):
     threading.Thread(target=_run, name=f"ocr-writeback-{item_id}",
                      daemon=True).start()
 
+def _stage_import_attachment(attach_payload, cur_atts):
+    """Persist an imported source document (an uploaded .html or pasted HTML) and
+    return the new attachments list to stage on the form, or ``no_update`` when
+    there's nothing to add or the same file is already staged. Never raises.
+
+    ``attach_payload`` is ``(dcc-upload data-url, filename)`` or ``None``. Saving
+    here (before the item is saved) mirrors the form's own attach-document button;
+    an abandoned import is reclaimed later by ``prune_unreferenced_documents``.
+    """
+    if not attach_payload:
+        return no_update
+    try:
+        intended = (attach_payload[1] or "").strip()
+        # Dedupe by the source name so re-clicking the same file doesn't stack
+        # copies. Checked before writing so a duplicate never orphans a file.
+        if any(isinstance(a, dict) and a.get("original_name") == intended
+               for a in (cur_atts or [])):
+            return no_update
+        meta = save_attachment(attach_payload[0], attach_payload[1])
+        # A saved screenshot/PDF listing gets OCR-scanned so its text is
+        # searchable (HTML is parsed by product_import, so this is a no-op there).
+        try:
+            ocr_auto.queue_document(meta)
+        except Exception:
+            pass
+        return list(cur_atts or []) + [meta]
+    except Exception:
+        return no_update
+
+
 def _build_rows(filtered):
     out_rows = []
     for r in filtered:
@@ -2205,10 +2235,11 @@ def register_callbacks(app):
         State("item-location", "value"),
         State("item-location-code", "value"),
         State("current-images", "data"),
+        State("current-attachments", "data"),
         prevent_initial_call=True,
     )
     def apply_and_save(n, result, editing_id, cur_name, cur_desc, cur_qty,
-                       cur_cat, cur_loc, cur_code, cur_imgs):
+                       cur_cat, cur_loc, cur_code, cur_imgs, cur_atts):
         if not n or not result:
             raise PreventUpdate
         d = result.get("data") if isinstance(result, dict) else None
@@ -2262,6 +2293,11 @@ def register_callbacks(app):
                     # Only set when the lookup carried one, so we never wipe an
                     # existing source title with a blank.
                     **({"source_title": src_title} if src_title else {}),
+                    # current-attachments already holds the item's stored docs
+                    # plus any just staged by an import, so this keeps the source
+                    # .html with the item (omit when the store is empty so a
+                    # stale/blank state can't clear existing attachments).
+                    **({"attachments": cur_atts} if cur_atts else {}),
                 )
                 saved_id = editing_id
                 header, msg = "Item Updated", f'"{name}" updated from the lookup.'
@@ -2270,6 +2306,7 @@ def register_callbacks(app):
                     name, desc, qty, images, "", category=category, location=loc,
                     location_code=code, specifications=specs_text, estimated_value=value,
                     dimensions=dims, tags=tags_text, product_url=url, source_title=src_title,
+                    attachments=(cur_atts or None),
                 )
                 saved_id = row.get("id")
                 header, msg = "Item Added", f'"{name}" added from the lookup.'
@@ -2319,16 +2356,25 @@ def register_callbacks(app):
     @app.callback(
         Output("identify-body", "children", allow_duplicate=True),
         Output("identify-result", "data", allow_duplicate=True),
+        Output("current-attachments", "data", allow_duplicate=True),
         Input("import-fetch", "n_clicks"),
         Input("import-extract", "n_clicks"),
         Input("import-html-upload", "contents"),
         State("import-url", "value"),
         State("import-html", "value"),
+        State("import-html-upload", "filename"),
+        State("current-attachments", "data"),
         prevent_initial_call=True,
     )
-    def do_import(fetch_n, extract_n, upload_contents, url, html_text):
+    def do_import(fetch_n, extract_n, upload_contents, url, html_text, upload_filename, cur_atts):
         import product_import, base64
         trig = ctx.triggered_id
+
+        # A listing used to populate the fields is also KEPT as an attachment, so
+        # the source page stays with the item (previously it was parsed and
+        # discarded, which is why entries filled this way had no saved .html).
+        # ``attach_payload`` = (dcc-upload data-url, filename) to persist, or None.
+        attach_payload = None
 
         if trig == "import-fetch":
             if not (url or "").strip():
@@ -2338,6 +2384,12 @@ def register_callbacks(app):
             if not (html_text or "").strip():
                 raise PreventUpdate
             res = product_import.import_product(url=url or "", html_text=html_text or "")
+            # Persist the pasted source as an .html attachment.
+            try:
+                b64 = base64.b64encode((html_text or "").encode("utf-8")).decode("ascii")
+                attach_payload = (f"data:text/html;base64,{b64}", "pasted-listing.html")
+            except Exception:
+                attach_payload = None
         elif trig == "import-html-upload":
             if not upload_contents:
                 raise PreventUpdate
@@ -2349,6 +2401,8 @@ def register_callbacks(app):
                 text = ""
             res = (product_import.import_product(url=url or "", html_text=text)
                    if text.strip() else {"ok": False, "error": "Couldn't read that file."})
+            if text.strip():
+                attach_payload = (upload_contents, upload_filename or "listing.html")
         else:
             raise PreventUpdate
 
@@ -2373,11 +2427,16 @@ def register_callbacks(app):
             except Exception:
                 pass
 
+        # Save the source document (upload / pasted HTML) into the form's
+        # attachment list so the normal Save — or Apply & Update — keeps it with
+        # the item.
+        new_atts = _stage_import_attachment(attach_payload, cur_atts)
+
         body = _render_import(res)
         if res.get("ok"):
-            return body, {"data": res.get("data")}
+            return body, {"data": res.get("data")}, new_atts
         # Keep any prior good result on failure so Apply still has something.
-        return body, no_update
+        return body, no_update, new_atts
 
     # ======================================================================
     # Quick Add — guided capture: ① photo → ② documents → ③ review & save
