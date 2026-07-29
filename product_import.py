@@ -449,8 +449,24 @@ def _enrich_with_bs4(html_text: str) -> Dict[str, Any]:
 
 _SITE_PREFIX_RE = re.compile(
     r"^\s*(amazon(?:\.com)?|ebay|aliexpress|walmart|etsy|target|newegg)\s*[:\-–—|]\s*", re.I)
+# Marketplace tail like " | eBay", " - Walmart.com", " - AliExpress Mobile". It is
+# ANCHORED to the end so the site token has to be the last thing on the line — a
+# brand that merely starts with a site word ("Amazon Basics …") sits mid-title and
+# is left alone. (Without the anchor, ": Amazon Basics …" was eaten as if it were
+# the ": Amazon.com" site tag, collapsing the whole title to "Amazon.com".)
 _SITE_SUFFIX_RE = re.compile(
-    r"\s*[:\-–—|]\s*(amazon(?:\.com)?|ebay|aliexpress|walmart|etsy)\b.*$", re.I)
+    r"\s*[:\-–—|]\s*(?:amazon|ebay|aliexpress|walmart|etsy|newegg)(?:\.com)?"
+    r"(?:\s+mobile)?\s*$", re.I)
+# A "name" that is just the marketplace, never a product (Amazon's og:title is
+# sometimes literally "Amazon.com").
+_SITE_NAME_ONLY = {
+    "amazon", "amazon.com", "amazoncom", "ebay", "ebay.com", "aliexpress",
+    "walmart", "walmart.com", "etsy", "target", "newegg", "amazon mobile",
+}
+
+
+def _is_site_title(s: str) -> bool:
+    return re.sub(r"\s+", " ", (s or "").strip().lower()) in _SITE_NAME_ONLY
 
 
 def _short_name(full: str, limit: int = 64) -> str:
@@ -505,7 +521,19 @@ def extract_from_html(html_text: str, source_url: str = "") -> Dict[str, Any]:
                 return v.strip()
         return ""
 
-    name = base("name")
+    # NAME source order: JSON-LD → og:title/<title> → #productTitle → raw <title>,
+    # skipping any value that's just a marketplace name (Amazon's og:title is
+    # sometimes literally "Amazon.com"). The <title> is preferred over the on-page
+    # #productTitle because Amazon's #productTitle drops the brand ("4K Micro HDMI
+    # …" vs "oldboytech 4K Micro HDMI …"); _short_name cleans the "Amazon.com: …
+    # : Electronics" chrome off the title. #productTitle is the fallback for when
+    # the title is missing or is only the bare site name.
+    name = ""
+    for cand in ((prod or {}).get("name"), meta.get("name"), enr.get("name"), ex.title):
+        c = cand.strip() if isinstance(cand, str) else ""
+        if c and not _is_site_title(c):
+            name = c
+            break
     if not name:
         return {"ok": False,
                 "error": "Couldn't find product details in that page. Open the product page in "

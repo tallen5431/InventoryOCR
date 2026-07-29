@@ -152,6 +152,35 @@ def test_jsonld_image_list_of_objects():
            prod and prod.get("image_url") == "https://x/y.jpg")
 
 
+def test_short_name_brand_not_eaten():
+    # A brand that starts with a marketplace word ("Amazon Basics") must NOT be
+    # stripped as if it were the site tag — this collapsed the whole title to
+    # "Amazon.com" before the fix.
+    n = pi._short_name("Amazon.com: Amazon Basics Micro HDMI to HDMI Cable, "
+                       "18Gbps High-Speed, 6 Foot, Black : Electronics")
+    _check("Amazon Basics title -> real name (not 'Amazon.com')",
+           n == "Amazon Basics Micro HDMI to HDMI Cable")
+    # Genuine marketplace tails are still stripped.
+    _check("Walmart.com tail stripped",
+           pi._short_name("Anker USB C Cable 6ft - Walmart.com") == "Anker USB C Cable 6ft")
+    _check("eBay tail stripped",
+           pi._short_name("Some Gadget 5-Pack | eBay") == "Some Gadget 5-Pack")
+    _check("bare 'Amazon.com' flagged as a site title",
+           pi._is_site_title("Amazon.com") and not pi._is_site_title("Amazon Basics HDMI Cable"))
+
+
+def test_extract_name_skips_bare_site_title():
+    # A page whose og:title is just "Amazon.com" must fall through to the real
+    # product title rather than naming the item "Amazon.com".
+    html = ('<html><head>'
+            '<meta property="og:title" content="Amazon.com">'
+            '<title>Amazon.com: Foobrand Widget Pro, Blue Edition : Electronics</title>'
+            '</head><body></body></html>')
+    d = pi.extract_from_html(html).get("data") or {}
+    _check("bare og:title 'Amazon.com' skipped for the real name",
+           d.get("name") == "Foobrand Widget Pro")
+
+
 def test_amazon_price_skips_strikethrough():
     if not getattr(pi, "_HAS_BS4", False):
         print("SKIP - bs4 unavailable; strikethrough-price test")
@@ -262,6 +291,8 @@ def main():
     test_pack_value_any_currency()
     test_auto_organize_singular_plural()
     test_short_name_thousands_comma()
+    test_short_name_brand_not_eaten()
+    test_extract_name_skips_bare_site_title()
     test_isolate_specs_late_dimensions()
     test_jsonld_image_list_of_objects()
     test_amazon_price_skips_strikethrough()
