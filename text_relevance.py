@@ -398,3 +398,115 @@ def for_index(text: str) -> str:
 
 # Backwards-friendly alias.
 item_relevant = for_index
+
+
+# ---------------------------------------------------------------------------
+# Product-name suggestion from OCR (for auto-naming a photo-only item)
+# ---------------------------------------------------------------------------
+# Words that, leading a candidate line, mark it as a spec label or boilerplate
+# rather than a product title — so auto-naming never picks "Input Voltage".
+_TITLE_SKIP_LEAD = {
+    "input", "output", "voltage", "current", "model", "brand", "color", "colour",
+    "material", "weight", "size", "quantity", "package", "specification",
+    "specifications", "dimensions", "dimension", "capacity", "wattage", "power",
+    "warranty", "note", "notes", "feature", "features", "manufacturer", "item",
+    "asin", "upc", "sku", "battery", "rated", "type", "made", "contents",
+}
+# Whole-line phrases that never belong in a product name.
+_TITLE_SKIP_PHRASES = (
+    "made in", "thank you", "amazon", "warning", "caution", "patent", "please",
+    "customer service", "do not", "see more", "best seller", "free shipping",
+)
+# Junk tokens: an ASIN / long alphanumeric code, and character salad.
+_CODEISH_RE = re.compile(r"[A-Za-z].*\d|\d.*[A-Za-z]")
+_TRIPLE_RE = re.compile(r"(.)\1\1")
+# Letter pairs that almost never occur in real English words — a strong OCR-soup
+# tell ("wwe", "oewwe", "owwew"), so a token containing one isn't a real word.
+_JUNK_BIGRAM_RE = re.compile(r"(ww|vv|kk|jj|qq|xx|yy|hh|uu|zx|qx|jq)")
+_LONG_CONSONANT_RE = re.compile(r"[^aeiouy]{4,}")
+
+
+def _plausible_word(t: str) -> bool:
+    """A token that reads like a real word — used to tell a genuine product line
+    from OCR vowel-soup ("we wwe oewwe owwew…"). Conservative on purpose."""
+    t = t.lower()
+    if len(t) < 3 or not t.isalpha():
+        return False
+    if not _VOWEL_RE.search(t):
+        return False                       # no vowel — not a word
+    if _TRIPLE_RE.search(t):
+        return False                       # "ewww", "weeee"
+    if _JUNK_BIGRAM_RE.search(t):
+        return False                       # improbable letter pair
+    if _LONG_CONSONANT_RE.search(t):
+        return False                       # 4+ consonants in a row
+    return True
+
+
+def _title_tokens(segment: str):
+    """Clean a candidate line into display tokens, dropping OCR junk / codes."""
+    out = []
+    for tok in segment.split():
+        t = tok.strip("()[]{}.,:;|&*'\"“”‘’/\\-_=+~`")
+        if not t:
+            continue
+        # Drop ASIN-ish codes (8+ chars mixing letters and digits, e.g. B0BXDJS22V).
+        if len(t) >= 8 and _CODEISH_RE.search(t):
+            continue
+        # Drop lone junk letters (keep the words "a"/"i").
+        if len(t) == 1 and t.lower() not in ("a", "i"):
+            continue
+        out.append(t)
+    return out
+
+
+def best_title(raw: str, limit: int = 64) -> str:
+    """Best product-name-like line from OCR text, for auto-naming a photo-only
+    item. Deliberately conservative: returns "" unless a line is confidently
+    name-worthy, so a messy scan leaves the placeholder name alone rather than
+    inventing junk. Never raises.
+    """
+    try:
+        best, best_score = "", 0.0
+        for line in (raw or "").splitlines():
+            # A junk-delimited OCR line can hide a clean title between '|' bars,
+            # so consider each pipe segment as its own candidate too.
+            segments = [line] + (line.split("|") if "|" in line else [])
+            for seg in segments:
+                toks = _title_tokens(seg)
+                if not (2 <= len(toks) <= 12):
+                    continue
+                cand = " ".join(toks)
+                norm = _norm(cand)
+                if not norm or _is_ui_noise(norm) or _is_nav(cand, norm):
+                    continue
+                if any(p in norm for p in _TITLE_SKIP_PHRASES):
+                    continue
+                words = norm.split()
+                if words[0] in _TITLE_SKIP_LEAD:
+                    continue
+                alpha = [w for w in words if w.isalpha() and len(w) >= 2]
+                plausible = [w for w in alpha if _plausible_word(w)]
+                # Enough real words, and most of the alphabetic ones are real —
+                # this ratio is what rejects "we wwe oewwe … a8 seas i" soup.
+                if len(plausible) < 2 or (len(plausible) / max(1, len(alpha))) < 0.6:
+                    continue
+                # A real product label almost always carries a model/size/spec
+                # number; requiring one kills digit-less pronounceable soup
+                # ("isr rece is") that slips the word checks.
+                if not any(any(c.isdigit() for c in t) for t in toks):
+                    continue
+                if sum(c.isdigit() for c in cand) > len(cand) * 0.4:
+                    continue               # mostly a part number / measurements
+                score = len(plausible) + 0.1 * min(len(toks), 6)
+                if any(w[:1].isupper() for w in cand.split()):
+                    score += 1.0           # a Brand-ish capitalised word
+                if score > best_score:
+                    best, best_score = cand, score
+        if best_score < 3.0:               # not confident enough — abstain
+            return ""
+        if len(best) > limit:
+            best = best[:limit].rsplit(" ", 1)[0].rstrip(" -,:;|") or best[:limit]
+        return best.strip()
+    except Exception:
+        return ""

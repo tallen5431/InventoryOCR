@@ -554,6 +554,17 @@ def index_text(raw: str) -> str:
         return (raw or "").strip()
 
 
+def suggest_name(raw: str) -> str:
+    """A product-name suggestion derived from OCR text, or "" when nothing is
+    confidently name-worthy. Used to auto-name a photo-only item that's still on
+    a placeholder name (blank / "Item 0007"). Conservative — never raises."""
+    try:
+        from text_relevance import best_title
+        return best_title(raw or "")
+    except Exception:
+        return ""
+
+
 def merge_text(base: str, addition: str) -> str:
     """Append ``addition`` to ``base`` unless it's already there. Keeps the
     existing OCR text of an edited item and adds only what a new image found."""

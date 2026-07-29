@@ -97,6 +97,21 @@ def _schedule_ocr_writeback(item_id, new_refs, current_refs):
             fields = text_extract.extract(raw_all)
             data.set_ocr_text(item_id, trimmed_add, merge=True,
                               raw=raw_all, fields=fields)
+
+            # If the item is still on a placeholder name (blank / "Item 0007"),
+            # propose a real one from the OCR text. This only ever *fills* a
+            # placeholder — a name the user actually typed is never overwritten —
+            # and abstains (leaves the placeholder) when the scan is too messy to
+            # name confidently.
+            try:
+                cur = next((r for r in data.inventory()
+                            if int(r.get("id") or 0) == int(item_id)), None)
+                if cur and data.is_placeholder_name(cur.get("name", "")):
+                    suggestion = ocr_auto.suggest_name(raw_all)
+                    if suggestion:
+                        data.update_item_fields(item_id, name=suggestion)
+            except Exception:
+                pass
         except Exception:
             pass
 

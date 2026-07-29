@@ -201,6 +201,26 @@ def test_text_relevance_specs_survive():
     _check("bare 'Quantity' selector dropped", "quantity" not in lines)
 
 
+# ---------------------------------------------------------------------------
+# OCR auto-naming (fill a placeholder name from a confident OCR line)
+# ---------------------------------------------------------------------------
+def test_is_placeholder_name():
+    for nm in ("", "   ", "Item 0007", "item0007", "ITEM 12"):
+        _check(f"placeholder: {nm!r}", data.is_placeholder_name(nm) is True)
+    for nm in ("WINSINN Blower Fan", "Micro USB to USB-A", "Duct Tape"):
+        _check(f"real name kept: {nm!r}", data.is_placeholder_name(nm) is False)
+
+
+def test_best_title_from_ocr():
+    name = tr.best_title("| ( BO79BPS9Qé& WINSINN 5015 24V DC Blower Fan j | Made in China")
+    _check("clean product line -> name", "Blower Fan" in name and "WINSINN" in name)
+    _check("ASIN code dropped from name", "BO79BPS9" not in name)
+    # Garbled OCR soup must NOT produce a name (conservative abstain).
+    for soup in ("we wwe oewwe © we owwew ewww dw weeee Ol line a8 seas i",
+                 "ISR rece is", "Prat", "a ie Meee", "re pee Pe Rens ee"):
+        _check(f"soup abstains: {soup[:18]!r}", tr.best_title(soup) == "")
+
+
 def main():
     test_type_classification()
     test_type_normalised_on_load()
@@ -216,6 +236,8 @@ def main():
     test_invoice_total_due_zero()
     test_bonus_pack_quantity()
     test_text_relevance_specs_survive()
+    test_is_placeholder_name()
+    test_best_title_from_ocr()
     print("\nRESULT:", "ALL PASS" if _ok else "FAILURES ABOVE")
     return 0 if _ok else 1
 

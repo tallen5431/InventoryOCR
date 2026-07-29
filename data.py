@@ -508,6 +508,17 @@ def _derive_product_url(rec: Dict[str, Any]) -> str:
     return ""
 
 
+_PLACEHOLDER_NAME_RE = _re_date.compile(r"^\s*item\s*0*\d+\s*$", _re_date.IGNORECASE)
+
+
+def is_placeholder_name(name: str) -> bool:
+    """True when a name is blank or an auto-number stand-in ("Item 0007") — i.e.
+    the user never gave it a real name, so it's safe to replace with a better one
+    derived from OCR. A real product name (even a short one) returns False."""
+    s = (name or "").strip()
+    return not s or bool(_PLACEHOLDER_NAME_RE.match(s))
+
+
 def next_auto_name(prefix: str = "Item") -> str:
     """Next auto-number name like ``Item 0007`` — for quick photo-only capture.
 
