@@ -974,7 +974,11 @@ def _qa_apply_parsed(d, cur_name, cur_cat, cur_value, cur_extra, cur_src):
         t = "" if v is None else str(v).strip()
         return "" if t.lower() == "unknown" else t
 
-    name = (cur_name or "").strip() or _s(d.get("name"))
+    # Name: fill from the listing when the current name is a PLACEHOLDER — blank OR an
+    # auto-number like "Item 0039" (a quick-capture stand-in, not something the user typed).
+    # A real name the user entered is still preserved.
+    _parsed_name = _s(d.get("name"))
+    name = _parsed_name if (data.is_placeholder_name(cur_name or "") and _parsed_name) else (cur_name or "").strip()
     category = (cur_cat or "").strip() or _s(d.get("category"))
     value = (cur_value or "").strip() or _s(d.get("estimated_value"))
     extra = dict(cur_extra or {})
@@ -3116,7 +3120,10 @@ def register_callbacks(app):
             res = product_import.import_product(html_text=html_text)
             if res.get("ok"):
                 d = _per_unit_adjust(res.get("data") or {})
-                if not (cur_name or "").strip() and _s(d.get("name")):
+                # A placeholder name (blank OR an auto-number like "Item 0039") is a
+                # quick-capture stand-in, not a name the user typed — let the listing's
+                # product name replace it. A real typed name is left untouched.
+                if data.is_placeholder_name(cur_name or "") and _s(d.get("name")):
                     name_o = _s(d.get("name"))
                 if not (cur_cat or "").strip() and _s(d.get("category")):
                     cat_o = _s(d.get("category"))

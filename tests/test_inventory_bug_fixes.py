@@ -283,6 +283,27 @@ def test_import_stages_attachment():
         callbacks.save_attachment = orig
 
 
+def test_apply_parsed_replaces_placeholder_name():
+    """A parsed listing name must REPLACE an auto-number placeholder ("Item 0039") —
+    it is a quick-capture stand-in, not a name the user typed — while a real name the
+    user actually entered is preserved, and a placeholder is never blanked when the
+    listing has no name. Guards the "imported details left the name as Item 00NN" bug."""
+    try:
+        import callbacks  # needs dash installed
+    except Exception:
+        print("SKIP - dash unavailable; apply-parsed placeholder-name test")
+        return
+    d = {"name": "Hosyond 3.5'' ESP32 Display"}
+    name = callbacks._qa_apply_parsed(d, "Item 0039", "", "", {}, "")[0]
+    _check("auto-number placeholder replaced by parsed name", name == "Hosyond 3.5'' ESP32 Display")
+    name = callbacks._qa_apply_parsed(d, "", "", "", {}, "")[0]
+    _check("blank name filled by parsed name", name == "Hosyond 3.5'' ESP32 Display")
+    name = callbacks._qa_apply_parsed(d, "My Custom Label", "", "", {}, "")[0]
+    _check("real user name preserved (not clobbered)", name == "My Custom Label")
+    name = callbacks._qa_apply_parsed({"name": ""}, "Item 0039", "", "", {}, "")[0]
+    _check("placeholder kept when listing has no name", name == "Item 0039")
+
+
 def main():
     test_type_classification()
     test_type_normalised_on_load()
@@ -303,6 +324,7 @@ def main():
     test_is_placeholder_name()
     test_best_title_from_ocr()
     test_import_stages_attachment()
+    test_apply_parsed_replaces_placeholder_name()
     print("\nRESULT:", "ALL PASS" if _ok else "FAILURES ABOVE")
     return 0 if _ok else 1
 
