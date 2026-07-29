@@ -89,7 +89,9 @@ _DEFAULT_OCR_WHITELIST = (
 
 
 def extract_ocr_text(img: Image.Image, lang: str = "eng", psm: int = 6,
-                     whitelist: str | None = None) -> str:
+                     whitelist: str | None = None, *,
+                     timeout: float | None = None,
+                     return_conf: bool = False):
     """
     Run Tesseract OCR on a preprocessed image.
 
@@ -97,12 +99,21 @@ def extract_ocr_text(img: Image.Image, lang: str = "eng", psm: int = 6,
                this through ``run_ocr_with_cache``).
     whitelist  Characters Tesseract is allowed to emit. ``None`` keeps the
                default set; pass ``""`` to disable the whitelist entirely (useful
-               when the default is stripping characters the user needs).
+               when the default is stripping characters the user needs, e.g. the
+               ``$``/``#``/``%`` in a price or model line).
+    timeout    Seconds before Tesseract is aborted (``None`` = no limit). Honoured
+               so a pathological image can't hang the caller/UI thread.
+    return_conf  When True return ``(text, mean_conf)`` instead of just ``text``;
+               the confidence is the mean over recognised words (0.0 if unknown).
     """
+    def _ret(text: str, conf: float = 0.0):
+        return (text, conf) if return_conf else text
+
     try:
         import pytesseract
+        from pytesseract import Output
     except Exception:
-        return ""
+        return _ret("", 0.0)
     try:
         if img.mode not in ("L", "RGB"):
             img = img.convert("RGB")
@@ -112,9 +123,46 @@ def extract_ocr_text(img: Image.Image, lang: str = "eng", psm: int = 6,
         if wl:
             config_str += f" -c tessedit_char_whitelist={wl}"
 
-        text = pytesseract.image_to_string(img, lang=lang, config=config_str)
+        # image_to_data gives per-word confidences, so we can report a real mean
+        # confidence AND rebuild clean lines in one pass. Fall back to the plain
+        # string call if the data variant isn't available on this Tesseract.
+        try:
+            data = pytesseract.image_to_data(img, lang=lang, config=config_str,
+                                             timeout=timeout, output_type=Output.DICT)
+            words = data.get("text", []) or []
+            confs = data.get("conf", []) or []
+            lines: dict = {}
+            order: list = []
+            kept_confs: list = []
+            for i, word in enumerate(words):
+                w = (word or "").strip()
+                if not w:
+                    continue
 
-        # Clean up text
-        return "\n".join(line.strip() for line in text.splitlines() if line.strip())
+                def _at(col: str) -> int:
+                    try:
+                        return int(data[col][i])
+                    except (KeyError, IndexError, TypeError, ValueError):
+                        return i
+
+                key = (_at("block_num"), _at("par_num"), _at("line_num"))
+                if key not in lines:
+                    lines[key] = []
+                    order.append(key)
+                lines[key].append(w)
+                try:
+                    c = float(confs[i])
+                    if c >= 0:
+                        kept_confs.append(c)
+                except (TypeError, ValueError, IndexError):
+                    pass
+            text = "\n".join(" ".join(lines[k]) for k in order)
+            conf = (sum(kept_confs) / len(kept_confs)) if kept_confs else 0.0
+            return _ret(text, conf)
+        except Exception:
+            text = pytesseract.image_to_string(img, lang=lang, config=config_str,
+                                               timeout=timeout) or ""
+            text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
+            return _ret(text, 0.0)
     except Exception:
-        return ""
+        return _ret("", 0.0)

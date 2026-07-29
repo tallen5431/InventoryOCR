@@ -101,6 +101,16 @@ def detect_quantity(name: str, specs: Optional[List[str]] = None,
         if 1 < v <= 100000:
             candidates.append((v, unit))
 
+    # Bonus-pack "300+6Pcs" / "300 + 6 Pcs": base + bonus of the same unit. Add
+    # the SUM as a candidate so the pack reads as 306, not the 6-piece bonus the
+    # plain number+unit rule below would otherwise pick (dividing the price by 6).
+    for m in re.finditer(rf"(\d[\d,]*)\s*\+\s*(\d[\d,]*)\s*({_UNIT_WORDS})\b", text, re.I):
+        try:
+            total = int(m.group(1).replace(",", "")) + int(m.group(2).replace(",", ""))
+            _add(str(total), _norm_unit(m.group(3)))
+        except (TypeError, ValueError):
+            pass
+
     # "150PCS", "50 count", "12 pieces", "6 pack" (number then unit word)
     for m in re.finditer(rf"(\d[\d,]*)\s*(?:-|\s)?\s*({_UNIT_WORDS})\b", text, re.I):
         _add(m.group(1).replace(",", ""), _norm_unit(m.group(2)))

@@ -326,9 +326,11 @@ def inventory() -> List[Dict[str, Any]]:
                 "price_paid": _safe_str(r.get("price_paid")),
                 "seller": _safe_str(r.get("seller")),
             }
-            # Coarse Type: keep a stored/hand-edited value, else auto-classify from
-            # the category/name/tags so grouping works without a manual pass.
-            if not rec["type"]:
+            # Coarse Type: keep a stored value only when it's one of the canonical
+            # TYPE_GROUPS; blank or a stray non-canonical label (e.g. a mistaken
+            # "Label Printer") is auto-classified from the category/name/tags so
+            # grouping and the Type filter never carry an off-list value.
+            if rec["type"] not in TYPE_GROUPS:
                 rec["type"] = _classify_type(rec)
             # Backfill a reorder/verify link from an ASIN we already scraped into
             # specs — most Amazon items have one, and the field is otherwise blank.
@@ -405,7 +407,12 @@ import re as _re_auto
 # without machine-junk, and a reorder link derived from an ASIN we already have.
 
 _MONEY_RE = _re_auto.compile(r"[\d,]+(?:\.\d+)?")
-_PACK_PRICE_RE = _re_auto.compile(r"@\s*\$\s*([\d,]+(?:\.\d+)?)")
+# Pack-total note, e.g. "$0.03 each (pack of 300 @ $7.99)". Accept ANY currency
+# symbol after the "@" — not just "$" — so a £/€/¥ pack total is still recovered
+# (item_value would otherwise fall back to the per-unit cent and under-value the
+# whole pack). A symbol is still REQUIRED so a spec like "rated @ 250V" is not
+# misread as a price.
+_PACK_PRICE_RE = _re_auto.compile(r"@\s*[$£€¥₹]\s*([\d,]+(?:\.\d+)?)")
 _RANGE_RE = _re_auto.compile(r"\d\s*(?:-|–|—|to)\s*\$?\s*\d")
 
 
@@ -1254,6 +1261,12 @@ _TYPE_RULES: List[tuple] = [
         " brush", "desolder", "solder sucker", "solder removal", "sand drum",
         "mandrel", "dremel", "rotary tool", "caliper", "hex key", "allen key",
         "chisel", "hammer", "drill bit", "utility knife", "hand tool", "tool set",
+        # Hand tools the earlier list missed — these were falling through to
+        # "Other" (tweezers, wire strippers, nippers/cutters, deburring tools,
+        # meters). Leading-space forms only match at a word boundary.
+        "tweezer", "stripper", "nipper", "wire cutter", " cutter", "flush cut",
+        "deburr", "multimeter", "multi-meter", "multi meter", "clamp meter",
+        "soldering iron", "heat gun", "vise",
     ]),
     ("Consumables", [
         "cable tie", "zip tie", "fastening", "electrical tape", "duct tape",
@@ -1317,15 +1330,17 @@ def types(rows: Optional[List[Dict[str, Any]]] = None) -> List[str]:
 def assign_types(overwrite: bool = False) -> int:
     """Persist an auto-classified Type onto stored items.
 
-    By default only fills items that don't already have a stored Type (so manual
-    choices are preserved); pass ``overwrite=True`` to reclassify everything.
+    By default only fills items whose stored Type isn't already one of the
+    canonical TYPE_GROUPS (so blank items get typed and a stray off-list label
+    like "Label Printer" is repaired, while a valid manual choice is preserved);
+    pass ``overwrite=True`` to reclassify everything.
     Returns the number of items changed.
     """
     rows = _load()
     changed = 0
     for r in rows:
         current = (r.get("type") or "").strip()
-        if current and not overwrite:
+        if current in TYPE_GROUPS and not overwrite:
             continue
         new_type = _classify_type(r)
         if new_type != current:
@@ -1513,7 +1528,10 @@ def auto_organize(
 
         # Merge only DIFFERENT categories that share a word (Toggle Switches +
         # Slide Switches -> Switches); a lone category keeps its full name.
-        cat_tokens = {c: _tokenize(c) for c in cat_rows}
+        # Singularise so "Switch"/"Switches" (and "Battery"/"Batteries") count as
+        # the same shared word — without this, a singular vs plural category pair
+        # never clustered even though it obviously should.
+        cat_tokens = {c: [_singular(t) for t in _tokenize(c)] for c in cat_rows}
         cat_df: "Counter[str]" = Counter()
         for toks in cat_tokens.values():
             for t in set(toks):
@@ -1530,7 +1548,8 @@ def auto_organize(
 
         # Uncategorised items cluster among themselves by name keyword, else Misc.
         if uncat:
-            utoks = {int(r.get("id")): _tokenize(r.get("name") or "") for r in uncat}
+            utoks = {int(r.get("id")): [_singular(t) for t in _tokenize(r.get("name") or "")]
+                     for r in uncat}
             udf: "Counter[str]" = Counter()
             for ts in utoks.values():
                 for t in set(ts):
@@ -2166,15 +2185,23 @@ def item_similarity(a: Dict[str, Any], b: Dict[str, Any]) -> float:
     if same_cat and same_kind:
         score = min(1.0, score + 0.08)
 
-    # Size/model code mismatch.
+    # Size/model code mismatch. The guard has to fire whenever the two names
+    # carry a *distinguishing* code — one present on one side but not the other —
+    # not only when the code sets are fully disjoint. "M3 x 10mm" vs "M3 x 16mm"
+    # SHARE "m3" yet are different parts; the old disjoint-only test let them
+    # through and auto-merged two distinct SKUs (summing their quantities and
+    # dropping one length's name).
     ca_codes, cb_codes = _codes(a), _codes(b)
-    if ca_codes and cb_codes and not (ca_codes & cb_codes):
-        if same_cat and same_kind:
-            # Same kind, different size: keep it in the "loose" band — visible to
-            # a user who asks for near-matches, but never auto-merged by default.
+    if ca_codes and cb_codes:
+        distinguishing = ca_codes ^ cb_codes      # code on one side only
+        disjoint = not (ca_codes & cb_codes)      # no shared code at all
+        if distinguishing and same_cat and same_kind:
+            # Same kind of thing, different size/model (M3x10 vs M3x16, AA vs 9V):
+            # keep it in the "loose" band — visible to a user who explicitly asks
+            # for near-matches, but never auto-merged at the default tiers.
             score = min(score, DUP_LEVELS["balanced"] - 0.02)
-        else:
-            # Different things that also disagree on size/model — push down hard.
+        elif disjoint:
+            # Different things that also fully disagree on size/model — push hard.
             score = min(score, 0.55)
 
     return round(min(1.0, score), 3)
@@ -2300,6 +2327,10 @@ def merge_preview(items: List[Dict[str, Any]],
         "estimated_value": _first_nonempty(ordered, "estimated_value"),
         "dimensions": _first_nonempty(ordered, "dimensions"),
         "product_url": _first_nonempty(ordered, "product_url"),
+        # The full marketplace title is searchable (see _haystack) but never shown
+        # as the name; keep the first non-empty one so merging a bare-named item
+        # into (or over) a scraped one doesn't lose its searchable title.
+        "source_title": _first_nonempty(ordered, "source_title"),
         "tags": _union_list(ordered, "tags"),
         # Keep every attached document across the merged items (dedup by filename),
         # and the first non-empty purchase field — so combining two photos of the
@@ -2438,7 +2469,7 @@ def merge_group(primary_id: int, merge_ids: List[int],
     for k in ("name", "description", "category", "type", "location", "location_code", "qty",
               "reorder_at", "images", "ocr_text", "ocr_raw", "ocr_fields",
               "specifications", "estimated_value",
-              "dimensions", "product_url", "tags", "created_at",
+              "dimensions", "product_url", "source_title", "tags", "created_at",
               "attachments", "order_number", "purchase_date", "price_paid", "seller"):
         primary[k] = merged.get(k, primary.get(k))
 

@@ -53,8 +53,13 @@ _TOTAL_LABELS = [
     r"total\s*amount",
     r"total\s*charged",
     r"payment\s*total",
-    r"total\s*due",
     r"total",
+    # "total due" / "balance due" ranks AFTER plain "total": on a paid receipt
+    # these read $0.00, so a plain "Total: $23.98" must win first. The plain
+    # "total" pattern can't match "Total Due" (next char isn't a currency/amount),
+    # so ranking it earlier never steals the due line.
+    r"total\s*due",
+    r"balance\s*due",
 ]
 # The leading \b keeps "total" from matching inside "subtotal" — a receipt's
 # subtotal must never be picked over its grand total.
@@ -181,17 +186,24 @@ def _find_total(text: str) -> str:
     def _fmt(cur: Optional[str], amt: str) -> str:
         cur = (cur or "$").upper().replace("US$", "$").replace("USD", "$")
         return f"{cur}{amt}"
-    # Walk labels in trust order (grand total > … > total). For each label prefer
-    # a currency-qualified amount, then fall back to a symbol-less decimal amount
-    # with an optional trailing currency code.
+
+    def _is_zero(amt: str) -> bool:
+        try:
+            return float(amt.replace(",", "")) == 0.0
+        except ValueError:
+            return False
+
+    # Walk labels in trust order (grand total > … > total > total due). For each
+    # label prefer a currency-qualified amount, then a symbol-less decimal with an
+    # optional trailing currency code. A matched $0.00 is skipped — so a
+    # "Total Due: $0.00" on a paid receipt never wins over the real total, and a
+    # genuinely free order comes back blank (safer than a bogus $0.00) for the
+    # user to confirm.
     for i in range(len(_TOTAL_LABELS)):
-        m = _TOTAL_RES_CUR[i].search(text)
-        if m:
-            return _fmt(m.group(1), m.group(2))
-        m = _TOTAL_RES_BARE[i].search(text)
-        if m:
-            # group(1)=amount, group(2)=optional trailing currency
-            return _fmt(m.group(2), m.group(1))
+        for m, cur_i, amt_i in ((_TOTAL_RES_CUR[i].search(text), 1, 2),
+                                (_TOTAL_RES_BARE[i].search(text), 2, 1)):
+            if m and not _is_zero(m.group(amt_i)):
+                return _fmt(m.group(cur_i), m.group(amt_i))
     return ""
 
 
@@ -199,8 +211,13 @@ def _find_order(text: str) -> str:
     for m in _ORDER_RE.finditer(text):
         tok = m.group(1).strip("-")
         # Require at least one digit — pure words ("NUMBER") aren't order ids.
-        if any(c.isdigit() for c in tok):
-            return tok
+        if not any(c.isdigit() for c in tok):
+            continue
+        # A bare date right after the label ("Invoice 2026-06-14") is a date, not
+        # an order id — skip it so purchase_date isn't duplicated into order_number.
+        if _parse_one_date(tok):
+            continue
+        return tok
     return ""
 
 

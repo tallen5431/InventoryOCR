@@ -412,6 +412,9 @@ def register_ocr_lab_callbacks(app):
                 timeout=12 if profile == "fast" else 25,
                 lang=(lang or "eng"),
                 psm_list=[int(psm)] if psm else None,
+                # The preview bytes are already fully preprocessed; don't let the
+                # engine re-binarise them into something other than what's shown.
+                already_preprocessed=bool(use_preview),
             )
             res = _run_ocr_base(io.BytesIO(img_b), **kw)
             text = (res.get("text") or "").strip()
@@ -444,6 +447,8 @@ def register_ocr_lab_callbacks(app):
                 timeout=10 if profile == "fast" else 18,
                 lang=(lang or "eng"),
                 psm_list=[int(psm)] if psm else None,
+                # Auto-run always feeds the already-processed preview bytes.
+                already_preprocessed=True,
             )
             res = _run_ocr_base(io.BytesIO(img_b), **kw)
             text = (res.get("text") or "").strip()

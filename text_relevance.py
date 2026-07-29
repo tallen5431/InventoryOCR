@@ -147,7 +147,7 @@ _UI_NOISE = (
     "free shipping", "in stock", "out of stock", "bought in past month",
     "ships from", "sold by", "price history", "best price on amazon",
     "verified purchase", "people found this helpful", "person found this helpful",
-    "helpful report", "reviewed in the", "quantity", "see all reviews",
+    "helpful report", "reviewed in the", "see all reviews",
     "search this page", "click to see", "view order", "order within",
     "one time purchase", "subscribe save", "available at checkout",
     "gift options", "top reviews from", "was this review", "last purchased",
@@ -167,7 +167,14 @@ _NAV_PHRASES = (
 _PRICE_ONLY_RE = re.compile(r"^[\$£€¥]?\s?\d[\d.,]*\s?[%]?$")
 _RATING_ONLY_RE = re.compile(r"^\(?\d[\d.,]*\)?$")
 _VPRIME_RE = re.compile(r"^v?prime\b|\bvprime\b")
-_BREADCRUMB_CHARS = (">", "»", "›", "|")
+# A bare buy-box "Quantity" selector (optionally with its selected number) — drop
+# it, but ONLY when the line is essentially just that. A real spec line like
+# "Quantity: 600 pieces" must survive, so we anchor rather than substring-match.
+_QTY_SELECTOR_RE = re.compile(r"^quantity(\s+\d+)?$")
+# Breadcrumb glyphs are the arrow characters; '|' is deliberately NOT here — OCR
+# and spec sheets render tabular spec plates with pipes ("Input | 5V | 2A"), and
+# treating two pipes as a breadcrumb dropped those real spec rows from the index.
+_BREADCRUMB_CHARS = (">", "»", "›")
 
 _NORM_RE = re.compile(r"[^a-z0-9]+")
 _VOWEL_RE = re.compile(r"[aeiou]")
@@ -242,6 +249,8 @@ def _is_ui_noise(norm: str) -> bool:
     if not norm:
         return True
     if _PRICE_ONLY_RE.match(norm) or _RATING_ONLY_RE.match(norm) or _VPRIME_RE.search(norm):
+        return True
+    if _QTY_SELECTOR_RE.match(norm):
         return True
     return any(p in norm for p in _UI_NOISE)
 

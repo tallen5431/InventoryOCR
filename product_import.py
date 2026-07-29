@@ -185,10 +185,14 @@ def _product_from_jsonld(blocks: List[str]) -> Optional[Dict[str, Any]]:
             brand = brand.get("name", "")
         brand = brand if isinstance(brand, str) else ""
 
+        # image can be a str, a list of str/ImageObject, or a bare ImageObject
+        # dict. Unwrap the list FIRST, then a dict element, so a JSON-LD
+        # `image: [{"@type":"ImageObject","url":"…"}]` still yields the URL
+        # instead of collapsing to "".
         img = obj.get("image")
+        img = _first(img) if isinstance(img, list) else img
         if isinstance(img, dict):
             img = img.get("url", "")
-        img = _first(img) if isinstance(img, list) else img
         image_url = img if isinstance(img, str) else ""
 
         price, currency = "", ""
@@ -279,20 +283,37 @@ def _isolate_specs(pairs: List[tuple]):
     specs: List[str] = []
     dims = ""
     seen = set()
-    for k, v in pairs:
+
+    def _usable(k: str, v: str):
         k, v = _clean_kv(k, v)
         if not k or not v or _is_placeholder(v):
-            continue
-        kl = k.lower()
+            return None
         if len(k) > 45 or len(v) > 160:
+            return None
+        return k, v
+
+    # First pass: capture the best dimension across ALL pairs (product/item beats
+    # package). Done before the spec loop so a dimension row sitting past the
+    # 15-spec cap is still pulled into its own field instead of being lost.
+    for k, v in pairs:
+        kv = _usable(k, v)
+        if not kv:
             continue
+        k, v = kv
+        if _DIM_HINT in k.lower() and (not dims or "product" in k.lower() or "item" in k.lower()):
+            dims = v
+
+    # Second pass: collect the helpful specs (dimensions excluded), capped at 15.
+    for k, v in pairs:
+        kv = _usable(k, v)
+        if not kv:
+            continue
+        k, v = kv
+        kl = k.lower()
         if any(n in kl for n in _SPEC_NOISE):
             continue
         if _DIM_HINT in kl:
-            # dimensions get their own field; prefer product/item over package.
-            if not dims or "product" in kl or "item" in kl:
-                dims = v
-            continue
+            continue  # already captured into `dims` above
         sig = (kl, v.lower())
         if sig in seen:
             continue
@@ -325,9 +346,15 @@ def _enrich_with_bs4(html_text: str) -> Dict[str, Any]:
     out["name"] = (_text("#productTitle") or _text("h1#title") or _text("h1.product-title")
                    or _text("h1.x-item-title__mainTitle") or _text("h1[class*='item-title']"))
 
-    for sel in (".a-price .a-offscreen", "#corePrice_feature_div .a-offscreen",
+    # `.a-price:not(.a-text-price)` skips Amazon's struck-through list/basis price
+    # (class `a-text-price`), which often appears in the DOM *before* the live
+    # sale price — matching `.a-price .a-offscreen` first would grab the higher
+    # crossed-out number. The plain selector is kept only as a last-ditch fallback
+    # for pages whose sole price is a text-price. (Mirrors _listing_price_amazon.)
+    for sel in (".a-price:not(.a-text-price) .a-offscreen", "#corePrice_feature_div .a-offscreen",
                 "#priceblock_ourprice", "#priceblock_dealprice", "#price_inside_buybox",
-                ".x-price-primary span", ".x-price-primary", "[itemprop='price']"):
+                ".x-price-primary span", ".x-price-primary", "[itemprop='price']",
+                ".a-price .a-offscreen"):
         p = _text(sel)
         if p:
             out["price"] = _clean_price_text(p)
@@ -439,9 +466,12 @@ def _short_name(full: str, limit: int = 64) -> str:
         return s
     s = _SITE_SUFFIX_RE.sub("", s)
     s = _SITE_PREFIX_RE.sub("", s).strip()
-    # Cut at the earliest strong delimiter that leaves a meaningful lead.
+    # Cut at the earliest strong delimiter that leaves a meaningful lead. The
+    # comma separator requires a trailing SPACE (", ") so a thousands separator
+    # inside a number ("1,000 Pcs", "2,500mAh") isn't mistaken for a list break
+    # and doesn't chop the name to "…Kit 1".
     cuts = []
-    for sep in (",", " - ", " – ", " — ", " : ", " | ", " (", ": ", "|"):
+    for sep in (", ", " - ", " – ", " — ", " : ", " | ", " (", ": ", "|"):
         i = s.find(sep)
         if i >= 12:
             cuts.append(i)
