@@ -29,14 +29,21 @@ from urllib.parse import urlparse
 _ORDER_LABEL = r"(?:order|invoice|confirmation|receipt|transaction|reference|ref|po)"
 _ORDER_RE = re.compile(
     rf"{_ORDER_LABEL}\s*(?:number|no\.?|num|id|#)?\s*[:#]?\s*"
-    r"([A-Z0-9][A-Z0-9\-]{4,29})",
+    # The lookahead requires a digit somewhere in the candidate. Without it the
+    # IGNORECASE class matched a plain word, so "Invoice\nReceipt no: 98765432"
+    # consumed "Receipt" as the id — and finditer's non-overlapping scan then
+    # skipped straight past the real number that followed it.
+    r"(?=[A-Z0-9\-]*[0-9])([A-Z0-9][A-Z0-9\-]{4,29})",
     re.IGNORECASE,
 )
 
 # --------------------------------------------------------------------------
 # Money / totals
 # --------------------------------------------------------------------------
-_CUR = r"(?:USD|US\$|\$|£|€|CAD|AUD)"
+# Allow a space between a locale code and the symbol: "US $18.45" / "AU $5.00"
+# is how eBay and many marketplaces render a total, and the glued-only form
+# meant every total pattern missed it and price_paid came back empty.
+_CUR = r"(?:USD|(?:US|AU|CA|NZ|C)\s*\$|\$|£|€|CAD|AUD)"
 # Allow 1 OR 2 decimal places so "$5.5" isn't truncated to "$5"; still tolerates
 # a whole-number amount ("$5").
 _AMT = r"\d[\d,]*(?:\.\d{1,2})?"
@@ -122,7 +129,9 @@ _SELLER_HOSTS = {
 # blind full-text scan. They can still be resolved from the source URL or an
 # explicit "sold by …" cue, just not from an incidental mention in body text.
 _AMBIGUOUS_SELLER_KEYS = {"target"}
-_SOLD_BY_RE = re.compile(r"(?:sold\s*by|ships?\s*from|seller|vendor|store)\s*[:\-]?\s*"
+# NB: no bare "store" cue — on a brick-and-mortar receipt "Store 0123" then
+# yielded the store number as the seller name.
+_SOLD_BY_RE = re.compile(r"(?:sold\s*by|ships?\s*from|seller|vendor|store\s*name)\s*[:\-]?\s*"
                          r"([A-Z0-9][\w&'.,\- ]{1,40})", re.IGNORECASE)
 
 
@@ -184,7 +193,12 @@ def _find_date(text: str) -> str:
 
 def _find_total(text: str) -> str:
     def _fmt(cur: Optional[str], amt: str) -> str:
-        cur = (cur or "$").upper().replace("US$", "$").replace("USD", "$")
+        cur = (cur or "$").upper().strip()
+        # US/USD is the implied default -> plain "$". Other locales keep a
+        # distinguishing prefix: silently rewriting "AU $" to "$" would hide a
+        # genuinely non-USD total.
+        cur = re.sub(r"^(?:US|USD)\s*\$?$", "$", cur)
+        cur = re.sub(r"^(AU|CA|NZ|C)\s*\$$", r"\1$", cur)
         return f"{cur}{amt}"
 
     def _is_zero(amt: str) -> bool:
@@ -241,6 +255,7 @@ def _find_seller(text: str, source_url: str = "") -> str:
         if s:
             return s
     low = text.lower()
+    hits: List[tuple] = []
     for key, name in _SELLER_HOSTS.items():
         # This is a blind full-text scan, so match conservatively:
         #  * exclude brand names that are also common English words ("target") —
@@ -250,15 +265,23 @@ def _find_seller(text: str, source_url: str = "") -> str:
         #    "etsy-style" / "amazon-compatible" don't count as the seller.
         if key in _AMBIGUOUS_SELLER_KEYS:
             continue
-        if re.search(rf"(?<![\w-]){re.escape(key)}(?![\w-])", low):
-            return name
+        m = re.search(rf"(?<![\w-]){re.escape(key)}(?![\w-])", low)
+        if m:
+            hits.append((m.start(), name))
+    if hits:
+        # Earliest mention wins. Returning the first key in *dict order* meant an
+        # incidental brand mention in the body outranked the marketplace named in
+        # the header.
+        return min(hits)[1]
     m = _SOLD_BY_RE.search(text)
     if m:
         val = _clean(m.group(1))
         # Trim trailing noise (a following label word).
         val = re.split(r"\b(?:order|invoice|total|qty|quantity|price)\b", val, 1,
                        flags=re.IGNORECASE)[0].strip(" .,-")
-        if 2 <= len(val) <= 40:
+        # Require two consecutive letters so a bare number ("1234") is rejected
+        # while real names that start with a digit ("3M", "1-800-Flowers") pass.
+        if 2 <= len(val) <= 40 and re.search(r"[A-Za-z]{2}", val):
             return val
     return ""
 

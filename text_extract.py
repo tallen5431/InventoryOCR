@@ -81,7 +81,11 @@ _GTIN_RE = re.compile(r"(?<!\d)(\d[\d\s\-]{10,16}\d)(?!\d)")
 _MEASURE: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     ("Voltage", re.compile(r"\b\d{1,4}(?:\.\d+)?\s?v(?:olts?)?\b", re.I)),
     ("Wattage", re.compile(r"\b\d{1,5}(?:\.\d+)?\s?w(?:atts?)?\b", re.I)),
-    ("Current", re.compile(r"\b\d{1,4}(?:\.\d+)?\s?m?a(?:mps?)?\b", re.I)),
+    # Case-SENSITIVE on purpose (no re.I): the bare-unit branch requires an
+    # attached capital "A", because a space-separated lowercase "a" is the
+    # English article — "Pack of 2 a piece" was being stored as a current.
+    ("Current", re.compile(r"\b\d{1,4}(?:\.\d+)?\s?(?:ma|mA|amps?|milliamps?)\b"
+                           r"|\b\d{1,4}(?:\.\d+)?A\b")),
     ("Capacity", re.compile(r"\b\d{2,6}\s?m?ah\b", re.I)),
     ("Frequency", re.compile(r"\b\d{1,5}(?:\.\d+)?\s?[kmg]?hz\b", re.I)),
     ("Storage", re.compile(r"\b\d{1,4}\s?(?:gb|tb|mb)\b", re.I)),
@@ -93,6 +97,19 @@ def _norm(s: str) -> str:
     s = unicodedata.normalize("NFKD", (s or "").lower())
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"[^a-z0-9]+", " ", s).strip()
+
+
+def _norm_label(s: str) -> str:
+    """``_norm`` but keeping '#', which is part of several real label spellings.
+
+    The generic normalizer folds '#' away, so the "part #" / "item #" aliases
+    could never match and the very common ``Part #: 55-1234`` line yielded no
+    field. Adding bare "part"/"item" aliases instead would be wrong — ``Item:
+    Cordless Drill 20V`` is an equally common line and would be stored as a SKU.
+    """
+    s = unicodedata.normalize("NFKD", (s or "").lower())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9#]+", " ", s).strip()
 
 
 def _gtin_check(digits: str) -> bool:
@@ -118,7 +135,7 @@ def _labelled_field(line: str) -> Optional[Tuple[str, str]]:
     m = _KV_RE.match(line)
     if not m:
         return None
-    key_norm = _norm(m.group(1))
+    key_norm = _norm_label(m.group(1))
     val = _clean_value(m.group(2))
     if not val or len(val) > _MAX_VALUE_LEN:
         return None

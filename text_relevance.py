@@ -155,11 +155,16 @@ _UI_NOISE = (
 )
 # Site chrome that appears in the pre-section preamble; used to reject nav lines
 # so they never reach the index (a title's own words never contain these).
+# Matched *positionally* by _is_nav (whole line, or a prefix of a short line) —
+# not as a bare substring. Several of these double as brand or category names on
+# a product's own label ("Amazon Basics High-Speed HDMI Cable", "Kindle
+# Paperwhite Case"), and substring-matching them deleted the item's own title
+# from the search index. The store-nav spellings are used where they exist.
 _NAV_PHRASES = (
-    "prime video", "kindle", "whole foods", "best sellers", "bestsellers",
-    "gift cards", "gift ideas", "todays deals", "deals and savings",
-    "customer service", "deliver to", "browsing history", "new releases",
-    "video games", "medical care", "amazon basics", "your account", "sign in",
+    "prime video", "kindle store", "kindle books", "whole foods", "best sellers",
+    "bestsellers", "gift cards", "gift ideas", "todays deals",
+    "deals and savings", "customer service", "deliver to", "browsing history",
+    "new releases", "video games", "medical care", "your account", "sign in",
     "departments", "same day delivery", "buy again", "keep shopping for",
     "shop by room", "launchpad", "add to cart",
 )
@@ -256,9 +261,17 @@ def _is_ui_noise(norm: str) -> bool:
 
 
 def _is_nav(raw: str, norm: str) -> bool:
-    """Site navigation / breadcrumb chrome — never the item's own text."""
-    if any(p in norm for p in _NAV_PHRASES):
-        return True
+    """Site navigation / breadcrumb chrome — never the item's own text.
+
+    Positional, like ``_match_header``: a nav phrase counts when it IS the line,
+    or when it opens a short (<= 4 word) line. A bare substring test deleted
+    real product titles that happen to contain a store-section name.
+    """
+    if norm:
+        nw = len(norm.split())
+        for p in _NAV_PHRASES:
+            if norm == p or (nw <= 4 and norm.startswith(p)):
+                return True
     return sum(raw.count(c) for c in _BREADCRUMB_CHARS) >= 2
 
 
@@ -378,7 +391,11 @@ def for_index(text: str) -> str:
         lines = text.splitlines()
         kept, n_keep = _run_primary(lines)
         primary = _cap("\n".join(_dedupe(kept)))
-        if n_keep >= 1 and len(primary) >= 40:
+        # A recognised item section is authoritative however short it is. The
+        # old >= 40 char floor discarded it and ran the fallback, which then
+        # indexed an unrelated cross-sell product instead — strictly worse than
+        # a short-but-correct result.
+        if n_keep >= 1 and primary:
             return primary
         fallback = _cap("\n".join(_dedupe(_run_fallback(lines))))
         if fallback:

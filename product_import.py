@@ -110,6 +110,7 @@ class _Extractor(HTMLParser):
         self.title = ""
         self._in_ld = False
         self._in_title = False
+        self._svg_depth = 0
         self._buf: List[str] = []
 
     def handle_starttag(self, tag, attrs):
@@ -118,15 +119,26 @@ class _Extractor(HTMLParser):
             self._in_ld, self._buf = True, []
         elif tag == "meta":
             self.metas.append(a)
-        elif tag == "title":
+        elif tag == "svg":
+            self._svg_depth += 1
+        elif tag == "title" and not self._svg_depth:
+            # <title> inside an <svg> is an accessibility label for an icon, not
+            # the page title.
             self._in_title, self._buf = True, []
 
     def handle_endtag(self, tag):
         if tag == "script" and self._in_ld:
             self.jsonld.append("".join(self._buf))
             self._in_ld, self._buf = False, []
+        elif tag == "svg":
+            self._svg_depth = max(0, self._svg_depth - 1)
         elif tag == "title" and self._in_title:
-            self.title = "".join(self._buf).strip()
+            # First non-empty title wins. Overwriting on every </title> meant a
+            # later one further down the page — an inline SVG icon, a sprite
+            # sheet — replaced the real page title and became the product name.
+            t = "".join(self._buf).strip()
+            if t and not self.title:
+                self.title = t
             self._in_title, self._buf = False, []
 
     def handle_data(self, data):
