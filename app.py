@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, socket, json, traceback
+import os, socket, json, sys, traceback
 from dash import Dash, html, dcc, Input, Output, State, ctx, ALL
 import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
@@ -225,7 +225,22 @@ server.wsgi_app = ProxyFix(
 # must present them — which is what lets you safely put the app on the public
 # internet via Tailscale Funnel / a Cloudflare Tunnel. /healthz stays open so a
 # tunnel or uptime monitor can probe without credentials.
+# Set INVENTORY_DEBUG=1 to surface server tracebacks in the browser. Off by
+# default: this app is designed to be reachable from the internet.
+DEBUG = os.getenv("INVENTORY_DEBUG", "").strip() in ("1", "true", "yes")
+
 AUTH_ENABLED = authz.auth_enabled()
+if not AUTH_ENABLED and any(
+        (os.environ.get(_v) or "").strip()
+        for _v in ("INVENTORY_AUTH_USER", "INVENTORY_AUTH_PASSWORD", "INVENTORY_AUTH")):
+    # Half-configured auth used to boot silently unauthenticated, which is the
+    # worst possible outcome for someone who believed they had turned it on.
+    # Test for non-empty values so an explicit `INVENTORY_AUTH_USER=` (the same
+    # idiom Start.sh uses to blank URL_PREFIX) still means "off, deliberately".
+    print("[Auth] WARNING: authentication credentials are only half configured, so "
+          "auth is OFF. Set BOTH INVENTORY_AUTH_USER and INVENTORY_AUTH_PASSWORD "
+          "(or INVENTORY_AUTH='user:password'). Do not expose this app publicly "
+          "until the banner below reads 'Auth: ON'.", file=sys.stderr)
 if AUTH_ENABLED:
     _AUTH_REALM = os.environ.get("INVENTORY_AUTH_REALM", "Inventory Manager")
 
@@ -281,7 +296,12 @@ def _serve_cached(directory, filename: str, *, as_attachment: bool = False):
     resp = send_from_directory(str(directory), filename, as_attachment=as_attachment,
                                max_age=ASSET_CACHE_MAX_AGE)
     # Add "immutable" so browsers don't even conditionally re-check within the TTL.
-    resp.headers["Cache-Control"] = f"public, max-age={ASSET_CACHE_MAX_AGE}, immutable"
+    # "public" would let a shared/edge cache store the response and later replay
+    # it to a client that never authenticated, so when auth is on the photos are
+    # marked "private" — that still gives the full browser-cache win (which is
+    # what the note above is after), it only excludes *shared* caches.
+    _scope = "private" if AUTH_ENABLED else "public"
+    resp.headers["Cache-Control"] = f"{_scope}, max-age={ASSET_CACHE_MAX_AGE}, immutable"
     return resp
 
 
@@ -307,11 +327,30 @@ def serve_image(filename: str):
 # them out of any shared/intermediary cache and forces revalidation, so a stale
 # invoice can't be served from cache to a different/logged-out user on a shared
 # machine. (Content-stamped filenames still make the conditional check cheap.)
+# Extensions a browser will execute as same-origin code if it renders them
+# inline. A saved product page is untrusted third-party HTML (it arrives full of
+# retailer script tags), so serving one inline would run that script with full
+# access to this app's origin — its DOM, its cookies, and every request it can
+# make as the logged-in user. These are always sent as a download.
+_EXECUTABLE_DOC_EXTS = {"html", "htm", "xhtml", "shtml", "xml", "svg", "js", "mjs", "css"}
+
+
 @server.route(f"{URL_PREFIX}/assets/documents/<path:filename>")
 def serve_document(filename: str):
     dl = request.args.get("download") in ("1", "true", "yes")
-    resp = send_from_directory(str(ASSET_DOCS_PATH), filename, as_attachment=dl)
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    executable = ext in _EXECUTABLE_DOC_EXTS
+    resp = send_from_directory(str(ASSET_DOCS_PATH), filename,
+                               as_attachment=dl or executable)
     resp.headers["Cache-Control"] = "private, no-cache"
+    # Never let a browser sniff a stored file into something executable.
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    if executable:
+        # Belt and braces alongside the forced download: if a browser renders it
+        # anyway, the sandbox denies it script, forms, and same-origin access.
+        # Scoped to these types only — a blanket sandbox would also disable the
+        # browser's built-in (script-based) PDF viewer.
+        resp.headers["Content-Security-Policy"] = "sandbox"
     return resp
 
 # ---------- Navbar ----------
@@ -462,7 +501,15 @@ def display_page(pathname):
             return operations_layout()
         return dashboard_layout()
     except Exception:
-        return html.Pre("display_page error:\n" + traceback.format_exc())
+        # Always record it server-side; only show the traceback to the browser
+        # when the operator asked for it. A public deployment would otherwise
+        # hand every visitor the server's file paths and code structure.
+        traceback.print_exc()
+        if DEBUG:
+            return html.Pre("display_page error:\n" + traceback.format_exc())
+        return html.Div(
+            "Sorry — this page failed to load. Check the server log for details.",
+            className="text-danger p-3")
 
 # ---------- Theme switcher ----------
 @app.callback(
@@ -594,4 +641,4 @@ if __name__ == "__main__":
               "before exposing to the internet")
     print("=" * 60)
 
-    serve(server, host=host, port=port, expose_tracebacks=True)
+    serve(server, host=host, port=port, expose_tracebacks=DEBUG)

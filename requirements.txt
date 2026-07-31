@@ -17,7 +17,7 @@ pytesseract~=0.3.13
 PyMuPDF~=1.24
 
 # Prod server (optional; your StartApp.bat supports it)
-waitress~=2.1
+waitress>=3.0.2,<4
 
 # Compatibility for older Python versions
 typing-extensions>=4.8 ; python_version < "3.11"

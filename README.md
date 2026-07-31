@@ -463,11 +463,17 @@ badge with the number of likely duplicate groups whenever some are detected.
 - Your storage containers (for **Fit to my bins**) are stored in
   `containers.json`.
 - **Price Compare** history is stored in `price_compare.json`.
-- Photos and thumbnails are saved under `assets/images/` and
-  `assets/thumbnails/`.
+- Photos, previews and thumbnails are saved under `userdata/images/`,
+  `userdata/previews/` and `userdata/thumbnails/`.
 - Attached documents (invoices, saved product pages, receipts, manuals) are
-  saved under `assets/documents/` and linked from the item that owns them.
+  saved under `userdata/documents/` and linked from the item that owns them.
 - These are git‑ignored so your data stays local and survives app updates.
+
+> **Note:** these four folders used to live under `assets/`. They were moved out
+> because Dash auto‑loads *every* `.js`/`.css` it finds in `assets/` into the
+> page — so attaching a file named `spec sheet.js` to an item was enough to get
+> it executed on every page load. The app moves them for you on first start;
+> filenames and URLs are unchanged, so nothing in your inventory needs updating.
 
 Old data files are migrated automatically: a legacy single `image_filename`
 becomes the `images` list, and items without a category/location just show up as

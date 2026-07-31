@@ -23,11 +23,15 @@ def configured_credentials(env: Optional[Mapping[str, str]] = None) -> Tuple[str
     env = env if env is not None else os.environ
     user = (env.get("INVENTORY_AUTH_USER") or "").strip()
     pw = env.get("INVENTORY_AUTH_PASSWORD") or ""
-    if not user:
-        combined = env.get("INVENTORY_AUTH") or ""
-        if ":" in combined:
-            user, pw = combined.split(":", 1)
-            user = user.strip()
+    # Fill in whichever half is missing from the shorthand. Gating the whole
+    # shorthand on ``if not user`` meant that setting INVENTORY_AUTH_USER alone
+    # — a natural half-configuration — made the correctly-set INVENTORY_AUTH
+    # shorthand invisible, and auth then silently stayed OFF.
+    combined = env.get("INVENTORY_AUTH") or ""
+    if ":" in combined:
+        s_user, s_pw = combined.split(":", 1)
+        user = user or s_user.strip()
+        pw = pw or s_pw
     return user, pw
 
 
@@ -48,7 +52,10 @@ def credentials_match(username: Optional[str], password: Optional[str],
     if not (user and pw):
         return False
     # Compare both fields in constant time; AND the results so timing can't
-    # reveal which of the two was wrong.
-    user_ok = hmac.compare_digest(username or "", user)
-    pw_ok = hmac.compare_digest(password or "", pw)
+    # reveal which of the two was wrong. Compare *bytes*: compare_digest raises
+    # TypeError on a str containing any non-ASCII character, which turned a
+    # perfectly reasonable passphrase into an unhandled 500 on every request
+    # (and locked the operator out of their own app).
+    user_ok = hmac.compare_digest((username or "").encode("utf-8"), user.encode("utf-8"))
+    pw_ok = hmac.compare_digest((password or "").encode("utf-8"), pw.encode("utf-8"))
     return user_ok and pw_ok

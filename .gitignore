@@ -1,6 +1,9 @@
 Tesseract-OCR/
-# Ignore the user-data asset subdirs (photos, previews, thumbnails, uploaded
-# documents), but keep top-level asset CODE tracked (custom.css, camera.js).
+# User data (photos, previews, thumbnails, uploaded documents). These live
+# outside assets/ so Dash never auto-injects an uploaded .js/.css into the page;
+# assets/ itself holds only tracked app CODE (custom.css, camera.js).
+userdata/
+# Pre-migration locations, kept so an upgraded checkout stays clean.
 # NB: a blanket `assets/` can't be undone by `!assets/*.css` — git won't
 # re-include a file whose parent dir is excluded — so target the subdirs.
 assets/images/

@@ -5,15 +5,27 @@ import os
 # ---------- Paths ----------
 BASE_DIR: Path = Path(__file__).resolve().parent
 ASSETS_DIR: Path = BASE_DIR / "assets"
-IMAGE_DIR: Path = ASSETS_DIR / "images"
-THUMB_DIR: Path = ASSETS_DIR / "thumbnails"
+
+# User-uploaded files live OUTSIDE the Dash assets tree, in userdata/.
+#
+# This is a security boundary, not organisation. Dash walks its assets folder
+# recursively at startup and auto-injects every *.js into a <script> tag and
+# every *.css into a <link> on every page. While uploads lived in
+# assets/documents/, attaching a file named "spec sheet.js" to an item was
+# enough to get it executed on every page load of the app — the uploader keeps
+# the user's extension verbatim. Serving is unaffected: app.py has explicit
+# /assets/<kind>/<file> routes for all four directories, so browser URLs and
+# every stored filename stay exactly as they were.
+USER_DATA_DIR: Path = BASE_DIR / "userdata"
+IMAGE_DIR: Path = USER_DATA_DIR / "images"
+THUMB_DIR: Path = USER_DATA_DIR / "thumbnails"
 # Attached documents (invoices, saved product pages, receipts, manuals…). Any
 # file type is kept here as a record; images/HTML are also parsed to fill fields.
-DOCS_DIR: Path = ASSETS_DIR / "documents"
+DOCS_DIR: Path = USER_DATA_DIR / "documents"
 # Medium-size "preview" images for fast lightbox loads over the internet / on a
 # phone. The full-resolution original is always kept in IMAGE_DIR and stays one
 # tap away; the preview is what the photo viewer loads by default.
-PREVIEW_DIR: Path = ASSETS_DIR / "previews"
+PREVIEW_DIR: Path = USER_DATA_DIR / "previews"
 DATA_FILE: Path = BASE_DIR / "inventory.json"
 # Operations module data. Materials (boards, packaging, shipping supplies,
 # marketing…) and the production Batches they roll up into live in their own
@@ -22,8 +34,30 @@ DATA_FILE: Path = BASE_DIR / "inventory.json"
 MATERIALS_FILE: Path = BASE_DIR / "materials.json"
 BATCHES_FILE: Path = BASE_DIR / "batches.json"
 
+# Migrate an existing install: the four user-data dirs used to live under
+# assets/. Move them the first time this version starts so nobody loses their
+# photos or invoices. Existing filenames (and therefore every URL and every
+# reference stored in inventory.json) are unchanged by the move.
+for _name in ("images", "thumbnails", "previews", "documents"):
+    _old = ASSETS_DIR / _name
+    _new = USER_DATA_DIR / _name
+    if _old.is_dir() and not _new.exists():
+        _new.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            _old.rename(_new)
+            print(f"[Config] Moved {_old} -> {_new} (user data now lives outside assets/)")
+        except OSError as _e:
+            # Cross-device or permissions: fall back to copying file by file so
+            # a failed move can never look like data loss.
+            import shutil as _shutil
+            try:
+                _shutil.copytree(_old, _new, dirs_exist_ok=True)
+                print(f"[Config] Copied {_old} -> {_new}; the old copy is safe to delete")
+            except OSError:
+                print(f"[Config] Warning: could not migrate {_old} to {_new}: {_e}")
+
 # Ensure folders exist
-for p in (ASSETS_DIR, IMAGE_DIR, THUMB_DIR, DOCS_DIR, PREVIEW_DIR):
+for p in (ASSETS_DIR, USER_DATA_DIR, IMAGE_DIR, THUMB_DIR, DOCS_DIR, PREVIEW_DIR):
     p.mkdir(parents=True, exist_ok=True)
 for _f in (DATA_FILE, MATERIALS_FILE, BATCHES_FILE):
     if not _f.exists():
