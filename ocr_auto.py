@@ -279,7 +279,18 @@ def extract_document_text(source) -> str:
     except Exception:
         return ""
 
-    # Deskew (opt-in) before prep so a sideways label photo reads at all; a no-op
+    # Apply the EXIF orientation FIRST. _prep also calls exif_transpose (it is
+    # reached directly from extract_pdf_text), but Image.rotate carries
+    # info["exif"] forward, so deskewing before that call meant the orientation
+    # was re-applied on top of the deskew and undid it — exactly on the phone
+    # photos deskew exists for. exif_transpose clears tag 274, so the later call
+    # in _prep is a harmless no-op.
+    try:
+        img = ImageOps.exif_transpose(img)
+    except Exception:
+        pass
+
+    # Deskew (opt-in) after that so a sideways label photo reads at all; a no-op
     # for the common upright screenshot.
     img = _deskew(img)
     img = _prep(img)
@@ -296,12 +307,39 @@ def extract_document_text(source) -> str:
         while top < h:
             bottom = min(top + _TILE_HEIGHT, h)
             tile = img.crop((0, top, w, bottom))
-            lines.extend(_tesseract_string(tile, psm=6).splitlines())
+            tile_lines = _tesseract_string(tile, psm=6).splitlines()
+            lines.extend(_strip_seam_overlap(lines, tile_lines))
             if bottom >= h:
                 break
             top += step
 
     return _cap("\n".join(_dedupe_lines(lines)))
+
+
+# The tallest run of repeated lines a tile seam can produce: the overlap band is
+# _TILE_OVERLAP px and a legible OCR line is ~13px at minimum.
+_MAX_SEAM_LINES = max(1, _TILE_OVERLAP // 13)
+
+
+def _strip_seam_overlap(acc: List[str], new: List[str]) -> List[str]:
+    """Drop the leading run of ``new`` that repeats the tail of ``acc``.
+
+    Tiles overlap by _TILE_OVERLAP px so no line is cut in half, which means
+    every line inside the band is OCR'd twice. _dedupe_lines only collapses
+    *consecutive* duplicates, and a repeated block is not consecutive, so the
+    band ended up stored twice in the item's OCR text.
+
+    Deliberately seam-local rather than a global "seen" set: invoices and spec
+    tables legitimately repeat identical rows ("1 EA 10.00"), and dropping those
+    would corrupt the raw scan that invoice_parse reads.
+    """
+    if not acc or not new:
+        return new
+    limit = min(_MAX_SEAM_LINES, len(acc), len(new))
+    for n in range(limit, 0, -1):
+        if [l.strip() for l in acc[-n:]] == [l.strip() for l in new[:n]]:
+            return new[n:]
+    return new
 
 
 def _cap(text: str) -> str:

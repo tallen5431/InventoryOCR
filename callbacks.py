@@ -1255,6 +1255,12 @@ def register_callbacks(app):
             Output("action-toast", "header"),
             Output("action-toast", "icon"),
             Output("action-toast", "children"),
+            # Gallery mode renders from its own callback keyed on refresh-seq, so
+            # without this bump the tile grid kept showing deleted/stale items
+            # after a Save or Delete. Only the mutating branches set it —
+            # refresh-seq is also an Input here, so bumping unconditionally would
+            # make this callback re-trigger itself on every rebuild.
+            Output("refresh-seq", "data", allow_duplicate=True),
         ],
         [
             Input("url", "pathname"),               # ensures initial population
@@ -1297,7 +1303,10 @@ def register_callbacks(app):
             State("auto-ocr", "value"),
             State("ocr-auto-preview", "value"),
         ],
-        prevent_initial_call=False,
+        # "initial_duplicate" keeps the initial call (this callback does the first
+        # table population) while satisfying Dash's requirement that any
+        # allow_duplicate output come with prevent_initial_call set.
+        prevent_initial_call="initial_duplicate",
     )
     def manage_table(pathname, save_clicks, save_next_clicks, delete_clicks, sel_rows, cancel_clicks,
                      search, filter_type, filter_cat, filter_loc, filter_bin, sort_by, _refresh_seq,
@@ -1316,6 +1325,7 @@ def register_callbacks(app):
         next_name = next_desc = next_qty = next_type = next_category = next_location = no_update
         next_code = next_specs = next_value = next_dims = next_tags = next_url = no_update
         next_editing = next_images = next_upload = next_reorder = no_update
+        next_refresh = no_update
 
         def _clear_form(keep_location=False):
             """Reset the form. When keep_location, the type/category/location/bin stay
@@ -1442,6 +1452,7 @@ def register_callbacks(app):
                     _clear_form(keep_location=(triggered == "save-next-button"))
                     # refresh items for table build
                     items = data.inventory()
+                    next_refresh = time.time()
 
         # Delete
         elif triggered == "delete-button":
@@ -1453,6 +1464,7 @@ def register_callbacks(app):
                 data.prune_unreferenced_images()  # reclaim the deleted item's photos
                 data.prune_unreferenced_documents()  # …and its attachments
                 items = data.inventory()
+                next_refresh = time.time()
 
         # Cancel clears form (and reclaims any just-taken photos that weren't saved)
         elif triggered == "cancel-button":
@@ -1505,7 +1517,7 @@ def register_callbacks(app):
             next_category, next_location,
             next_code, next_specs, next_value, next_dims, next_tags, next_url,
             next_editing, next_images, next_upload,
-            toast_open, toast_header, toast_icon, toast_msg
+            toast_open, toast_header, toast_icon, toast_msg, next_refresh
         ]
 
     # ---------- Collapsible dashboard sections (expand-for-detail cards) ----------
@@ -1882,12 +1894,17 @@ def register_callbacks(app):
         Output("image-modal-title", "children"),
         Output("image-carousel", "items"),
         Output("image-modal-fullres", "children"),
+        # Clearing active_cell is what lets the SAME thumbnail be tapped again:
+        # this callback fires on a *change* to active_cell, and closing the modal
+        # left it set, so a second tap on the same cell was a no-op. Reset here
+        # rather than on the close button — the modal also closes via the header
+        # × and ESC, neither of which fires that button's n_clicks.
+        Output("inventory-table", "active_cell"),
         Input("inventory-table", "active_cell"),
         State("inventory-table", "data"),
-        State("image-modal", "is_open"),
         prevent_initial_call=True,
     )
-    def open_image_modal(cell, rows, is_open):
+    def open_image_modal(cell, rows):
         if not cell or cell.get("column_id") != "image":
             raise PreventUpdate
         row_id = cell.get("row_id")
@@ -1915,7 +1932,7 @@ def register_callbacks(app):
             for i, img_url in enumerate(previews)
         ]
 
-        return True, row.get("name", ""), carousel_items, _fullres_links(originals)
+        return True, row.get("name", ""), carousel_items, _fullres_links(originals), None
 
     @app.callback(
         Output("image-modal", "is_open", allow_duplicate=True),
@@ -2435,8 +2452,12 @@ def register_callbacks(app):
         body = _render_import(res)
         if res.get("ok"):
             return body, {"data": res.get("data")}, new_atts
-        # Keep any prior good result on failure so Apply still has something.
-        return body, no_update, new_atts
+        # Clear the store on failure. Keeping the previous good result meant
+        # that after "Couldn't import that page", Apply & Update silently wrote
+        # the *earlier* product's name and price onto the current item. Both
+        # consumers (apply_identify, apply_and_save) already bail on an empty
+        # store, so this just makes Apply a no-op until the next good import.
+        return body, None, new_atts
 
     # ======================================================================
     # Quick Add — guided capture: ① photo → ② documents → ③ review & save

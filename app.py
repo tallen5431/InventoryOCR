@@ -357,13 +357,17 @@ def serve_document(filename: str):
 navbar = dbc.Navbar(
     dbc.Container(
         [
-            dbc.NavbarBrand("📦 Inventory Manager", href="/"),
+            # get_relative_path prefixes each link with requests_pathname_prefix.
+            # Hard-coded "/…" paths dropped the URL_PREFIX from the address bar,
+            # so under the default /inventory every reload, bookmark or shared
+            # link 404'd.
+            dbc.NavbarBrand("📦 Inventory Manager", href=app.get_relative_path("/")),
             dbc.Nav(
                 [
-                    dbc.NavItem(dbc.NavLink("Dashboard", href="/", external_link=False)),
-                    dbc.NavItem(dbc.NavLink("🏭 Operations", href="/operations", external_link=False)),
-                    dbc.NavItem(dbc.NavLink("🧪 OCR Lab", href="/ocr-lab", external_link=False)),
-                    dbc.NavItem(dbc.NavLink("💲 Price Compare", href="/price-compare", external_link=False)),
+                    dbc.NavItem(dbc.NavLink("Dashboard", href=app.get_relative_path("/"), external_link=False)),
+                    dbc.NavItem(dbc.NavLink("🏭 Operations", href=app.get_relative_path("/operations"), external_link=False)),
+                    dbc.NavItem(dbc.NavLink("🧪 OCR Lab", href=app.get_relative_path("/ocr-lab"), external_link=False)),
+                    dbc.NavItem(dbc.NavLink("💲 Price Compare", href=app.get_relative_path("/price-compare"), external_link=False)),
                 ],
                 className="ms-3",
                 navbar=True,

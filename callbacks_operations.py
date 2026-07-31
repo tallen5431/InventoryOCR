@@ -522,8 +522,12 @@ def register_operations_callbacks(app):
 
         prod_total = (f"{cur_sym}{pv['list_price']:.2f}"
                       if pv.get("list_price") is not None else None)
-        prod_unit = (f"{cur_sym}{pv['unit_price']:.2f}"
-                     if pv.get("unit_price") is not None else None)
+        # NB: no prod_unit here. qty and total are both filled below, and
+        # material_unit_cost derives total÷qty at full precision — but it
+        # *prefers* an explicit unit_cost when one is set, so pre-filling a 2dp
+        # rounding permanently replaced the exact value. A 100-pack at $10.90
+        # rounds to $0.11/unit; a 1000-pack rounds to $0.00 and the material
+        # then contributed nothing to any batch cost.
         specs_text = "\n".join(prod.get("specs") or []) or None
         tags_text = ", ".join(prod.get("tags") or []) or None
 
@@ -532,7 +536,7 @@ def register_operations_callbacks(app):
         new_date = _fill(cur_date, parsed_all.get("purchase_date"))
         new_total = _fill(cur_total, parsed_all.get("price_paid") or prod_total)
         new_order = _fill(cur_order, parsed_all.get("order_number"))
-        new_unit = _fill(cur_unit, prod_unit)
+        new_unit = no_update
         new_desc = _fill(cur_desc, prod.get("desc"))
         new_specs = _fill(cur_specs, specs_text)
         new_tags = _fill(cur_tags, tags_text)
@@ -722,7 +726,17 @@ def register_operations_callbacks(app):
                     # Omit name when blank so the existing name is preserved (_KEEP).
                     if nm:
                         common["name"] = nm
-                    od.update_material(editing_id, **common)
+                    saved = od.update_material(editing_id, **common)
+                    if saved is None:
+                        # The record was deleted (another tab, the bulk bar)
+                        # between opening the form and saving. Reporting success
+                        # here silently threw the user's edit away.
+                        _toast("Not saved", "danger",
+                               "That material no longer exists — it may have been deleted.")
+                        _clear()
+                        out["open"] = False
+                        _bump()
+                        return _pack(out)
                     _toast("Material updated", "success", f'"{nm or "Material"}" saved.')
                 else:
                     created = od.add_material(name=nm, **common)
@@ -732,6 +746,12 @@ def register_operations_callbacks(app):
                 return _pack(out)
             # Keep type + batch sticky so a run of materials for one batch is fast.
             _clear(keep_group=True)
+            # A batch created by typing its name was never pushed back into the
+            # dropdown, so the next material in the run silently saved as
+            # unassigned. Set it AFTER _clear so this doesn't depend on
+            # keep_group happening to skip the batch field.
+            if bid:
+                out["batch"] = bid
             out["open"] = True
             _bump()
             return _pack(out)
@@ -978,8 +998,14 @@ def register_operations_callbacks(app):
                                            "Give the batch a name.")
             token = _token()
             if editing_id:
-                od.update_batch(editing_id, name=nm, product=product,
-                                units_produced=units, date=date, notes=notes)
+                saved = od.update_batch(editing_id, name=nm, product=product,
+                                        units_produced=units, date=date, notes=notes)
+                if saved is None:
+                    # Deleted between opening the form and saving — don't report
+                    # success for an edit that was thrown away. Still bump the
+                    # token so the card list re-renders without the stale batch.
+                    return (*blank, token, True, "Not saved", "danger",
+                            "That batch no longer exists — it may have been deleted.")
                 msg = f'Batch "{nm}" updated.'
             else:
                 od.add_batch(nm, product=product, units_produced=units, date=date, notes=notes)

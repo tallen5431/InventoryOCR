@@ -995,12 +995,29 @@ _PATCHABLE = {"name", "description", "category", "type", "location", "location_c
 
 
 def update_item_fields(item_id: int, **fields: Any) -> Optional[Dict[str, Any]]:
-    """Patch specific fields on one item (e.g. write a price back). Returns it."""
+    """Patch specific fields on one item (e.g. write a price back). Returns it.
+
+    Enforces the same unique-by-name invariant as ``add_item``/``update_item``:
+    a rename that would collide is dropped (the other fields still apply). The
+    check has to live here rather than in the caller — background OCR runs one
+    thread per save, and two of them can both read the inventory and see no
+    conflict before either writes. Mutators are serialized by ``_WRITE_LOCK``,
+    so only a check inside this function is atomic. Two items sharing a name
+    then become mutually un-editable, since every edit path rejects the clash.
+    """
     rows = inventory()
     found = None
     for r in rows:
         if int(r.get("id") or 0) == int(item_id):
             for k, v in fields.items():
+                if k == "name" and v is not None:
+                    key = str(v).strip().lower()
+                    if key and any(
+                        int(o.get("id") or 0) != int(item_id)
+                        and (o.get("name", "").strip().lower() == key)
+                        for o in rows
+                    ):
+                        continue
                 if k in _PATCHABLE and v is not None:
                     if k == "reorder_at":
                         r[k] = _coerce_reorder(v)
@@ -1853,7 +1870,12 @@ def make_bins(count: Any, prefix: str = "BIN", capacity: Any = 25,
     out: List[Dict[str, Any]] = []
     for i in range(start, start + count):
         code = f"{prefix}-{str(i).zfill(width)}"
-        out.append({"code": code, "name": f"{prefix.title()} {i}",
+        # Name it "Bin-01", not "Bin 1". The row editor only carries names —
+        # codes are re-derived from them on save — and _derive_code keeps a
+        # hyphenated single token verbatim while it reduces "Bin 1"/"Bin 2" to
+        # the initials "B1"/"B2", which then collide once there are 10+ bins
+        # (B1, B1-2, B1-3 …) and lose the zero padding that makes codes sort.
+        out.append({"code": code, "name": f"{prefix.title()}-{str(i).zfill(width)}",
                     "capacity": capacity, "bags": list(bag_list)})
     return out
 
