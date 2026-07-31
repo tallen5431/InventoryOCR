@@ -211,6 +211,44 @@ def _safe_qty(v: Any) -> int:
         return 0
 
 
+# Fields whose stored value is a plain list of strings/dicts. On the malformed-record
+# path these are salvaged verbatim rather than blanked — losing every photo and
+# invoice because some *other* field failed to coerce is far worse than keeping a
+# slightly-off value.
+_SALVAGE_LIST_FIELDS = ("images", "specifications", "tags", "attachments", "ocr_fields")
+_SALVAGE_STR_FIELDS = ("category", "location", "location_code", "estimated_value",
+                       "dimensions", "product_url", "source_title", "order_number",
+                       "purchase_date", "price_paid", "seller", "created_at")
+
+
+def _salvage_record(rid: Optional[int], r: Dict[str, Any]) -> Dict[str, Any]:
+    """``_min_record`` plus every field that can still be read individually.
+
+    The normalization above runs as one big try/except, so a single unparseable
+    value used to drop the record to ``_min_record`` — blanking category,
+    location, photos, specs, tags and attachments — and the next save wrote that
+    stripped record to disk permanently. Degrade one field, not the whole row.
+    """
+    rec = _min_record(rid, r)
+    for key in _SALVAGE_STR_FIELDS:
+        try:
+            rec[key] = _safe_str(r.get(key))
+        except Exception:
+            pass
+    for key in _SALVAGE_LIST_FIELDS:
+        try:
+            val = r.get(key)
+            if isinstance(val, list):
+                rec[key] = list(val)
+        except Exception:
+            pass
+    try:
+        rec["type"] = _classify_type(rec)
+    except Exception:
+        pass
+    return rec
+
+
 def _min_record(rid: Optional[int], r: Dict[str, Any]) -> Dict[str, Any]:
     """Last-resort normalized row for a record too malformed to process, so one
     bad entry can't take down the whole inventory read. Keeps id/name/qty."""
@@ -339,7 +377,7 @@ def inventory() -> List[Dict[str, Any]]:
             # When it was added: keep the stored value, else derive from the images.
             rec["created_at"] = _safe_str(r.get("created_at")) or _derive_created_at(rec)
         except Exception:
-            rec = _min_record(rid, r)
+            rec = _salvage_record(rid, r)
         norm.append(rec)
     return norm
 
@@ -375,7 +413,9 @@ def _norm_attachments(v: Any) -> List[Dict[str, Any]]:
             "filename": fn,
             "original_name": str(a.get("original_name") or fn).strip(),
             "kind": str(a.get("kind") or "other").strip(),
-            "size": int(a.get("size") or 0),
+            # Tolerant like every other coercion here: a stored "12 KB" used to
+            # raise, and the caller's except-clause then blanked the WHOLE record.
+            "size": _safe_qty(a.get("size")),
             "uploaded_at": str(a.get("uploaded_at") or "").strip(),
             "url": str(a.get("url") or "").strip(),
         })
@@ -414,6 +454,13 @@ _MONEY_RE = _re_auto.compile(r"[\d,]+(?:\.\d+)?")
 # misread as a price.
 _PACK_PRICE_RE = _re_auto.compile(r"@\s*[$£€¥₹]\s*([\d,]+(?:\.\d+)?)")
 _RANGE_RE = _re_auto.compile(r"\d\s*(?:-|–|—|to)\s*\$?\s*\d")
+# A number that is actually attached to a currency symbol. Checked before the
+# bare-number regex so a value that *leads* with a pack count or a spec
+# ("100pcs - $14.99", "12V 2A - $9.99") is read as its price rather than as the
+# count. The range form comes first so "$20-30" stays a midpoint.
+_CUR_RANGE_RE = _re_auto.compile(
+    r"[$£€¥₹]\s*([\d,]+(?:\.\d+)?)\s*(?:-|–|—|to)\s*[$£€¥₹]?\s*([\d,]+(?:\.\d+)?)")
+_CUR_MONEY_RE = _re_auto.compile(r"[$£€¥₹]\s*([\d,]+(?:\.\d+)?)")
 
 
 def _to_float(s: Any) -> Optional[float]:
@@ -436,6 +483,19 @@ def parse_value(s: Any) -> Optional[float]:
     m = _PACK_PRICE_RE.search(txt)
     if m:
         return _to_float(m.group(1))
+    # Prefer a number that carries a currency symbol, so a leading pack count or
+    # spec ("100pcs - $14.99") can't be mistaken for the price.
+    m = _CUR_RANGE_RE.search(txt)
+    if m:
+        lo, hi = _to_float(m.group(1)), _to_float(m.group(2))
+        if lo is not None and hi is not None:
+            return round((lo + hi) / 2, 2)
+    m = _CUR_MONEY_RE.search(txt)
+    if m:
+        v = _to_float(m.group(1))
+        if v is not None:
+            return v
+    # No currency symbol anywhere — fall back to bare numbers ("15.99 USD").
     nums = [n for n in (_to_float(x) for x in _MONEY_RE.findall(txt)) if n is not None]
     if not nums:
         return None
@@ -1268,7 +1328,7 @@ TYPE_GROUPS = ["Tools", "Components", "Cables & Adapters", "Devices",
 _TYPE_RULES: List[tuple] = [
     ("Tools", [
         "tape measure", "measuring tool", "wrench", "socket", "screwdriver",
-        "plier", "scalpel", "lab knife", " knife", "blade", "wire brush",
+        "plier", "scalpel", "lab knife", " knife", " blade", "wire brush",
         " brush", "desolder", "solder sucker", "solder removal", "sand drum",
         "mandrel", "dremel", "rotary tool", "caliper", "hex key", "allen key",
         "chisel", "hammer", "drill bit", "utility knife", "hand tool", "tool set",
@@ -1308,6 +1368,26 @@ _TYPE_RULES: List[tuple] = [
 ]
 
 
+@functools.lru_cache(maxsize=512)
+def _kw_pattern(kw: str):
+    """Word-boundary matcher for a leading-space keyword.
+
+    The leading space only ever guarded the LEFT edge, so " brush" happily
+    matched "brushless" (a motor classified as a Tool) and " tape" matched
+    "tapered". Anchor the right edge too, while still allowing the ordinary
+    inflections the substring test used to catch (brushes, brushed, brushing).
+    """
+    return _re_auto.compile(r"(?<!\w)" + _re_auto.escape(kw.strip()) + r"(?:e?s|ed|ing)?(?!\w)")
+
+
+def _kw_matches(kw: str, hay: str) -> bool:
+    # Space-prefixed keywords are the ones documented as word-boundary-only;
+    # multi-word keywords ("tape measure") stay a plain substring test.
+    if kw.startswith(" ") and " " not in kw.strip():
+        return _kw_pattern(kw).search(hay) is not None
+    return kw in hay
+
+
 def _classify_type(row: Dict[str, Any]) -> str:
     """Best-guess TYPE_GROUP for an item from its category, name, and tags.
 
@@ -1322,7 +1402,7 @@ def _classify_type(row: Dict[str, Any]) -> str:
     # Pad so a leading-space keyword can also match a term at the very start.
     hay = " " + hay
     for group, keywords in _TYPE_RULES:
-        if any(kw in hay for kw in keywords):
+        if any(_kw_matches(kw, hay) for kw in keywords):
             return group
     return "Other"
 
@@ -1484,7 +1564,9 @@ def _sum_group_value(rows: List[Dict[str, Any]]) -> float:
     for r in rows:
         v = item_value(r)
         if v is not None:
-            total += v * max(1, int(r.get("qty") or 1))
+            # `r.get("qty") or 1` promoted a genuine 0 to 1, so an item that
+            # is out of stock was still counted as one unit in the KPI total.
+            total += v * max(0, _safe_qty(r.get("qty", 1)))
             found = True
     return round(total, 2) if found else 0.0
 
@@ -1578,6 +1660,10 @@ def auto_organize(
     next_num = _next_bin_number(list(reserved))
 
     plan: List[Dict[str, Any]] = []
+    # Codes already handed out by *this* plan. An existing code is only reused
+    # when it's still free, otherwise two groups that were previously filed in
+    # the same bin would both propose it and the plan would contain duplicates.
+    claimed: set = set()
     for key in sorted(buckets.keys(), key=lambda k: (k == "\x00misc", k)):
         b = buckets[key]
         group_rows = b["rows"]
@@ -1588,7 +1674,7 @@ def auto_organize(
             if c:
                 existing_code = c
                 break
-        if existing_code:
+        if existing_code and existing_code not in claimed:
             code = existing_code
         else:
             code = f"{prefix}-{next_num:02d}"
@@ -1597,6 +1683,7 @@ def auto_organize(
                 code = f"{prefix}-{next_num:02d}"
             next_num += 1
         reserved.add(code)
+        claimed.add(code)
 
         plan.append({
             "group": b["name"],
@@ -2025,7 +2112,15 @@ def fit_to_containers(
 
 
 def apply_fit(plan: Dict[str, Any]) -> int:
-    """Persist a fit_to_containers plan: set each item's bin code + location name."""
+    """Persist a fit_to_containers plan: set each item's bin code + location name.
+
+    Only *fills in* an empty location name, matching :func:`apply_organization`.
+    An item's ``location`` doubles as its bag / sub-compartment label inside the
+    bin — the location type-ahead offers each container's bag names for exactly
+    that — and ``storage_overview`` reports those labels as ``used_bags``.
+    Overwriting them with the container name destroyed that (with no undo), and
+    collapsed the storage map's bags-in-use to one entry per bin.
+    """
     rows = inventory()
     by_id = {int(r.get("id")): r for r in rows}
     updated = 0
@@ -2035,7 +2130,8 @@ def apply_fit(plan: Dict[str, Any]) -> int:
             if not r:
                 continue
             r["location_code"] = a["code"]
-            r["location"] = a["name"]
+            if not (r.get("location") or "").strip():
+                r["location"] = a["name"]
             updated += 1
     if updated:
         _save(rows)
@@ -2071,13 +2167,26 @@ def _norm_url(url: str) -> str:
 _DEDUP_SIZE_WORDS = {"aa", "aaa", "aaaa"}
 
 
+# Singular nouns that already end in -s. Listed so they stem to themselves
+# ("lens" -> "lens", not "len") and so their plurals land on the same stem.
+_S_SINGULARS = {"lens", "bus", "gas", "iris", "axis", "bias", "atlas"}
+
+
 def _singular(t: str) -> str:
     """Cheap stemmer so 'batteries'/'cables'/'switches' match their singulars."""
     if len(t) <= 3:
         return t
+    if t in _S_SINGULARS:
+        return t
     if t.endswith("ies"):
         return t[:-3] + "y"
-    if t.endswith(("ches", "shes", "ses", "xes", "zes")):
+    if t.endswith("ses"):
+        # Strip two only when the base is itself an -s/-ss word ("glasses" ->
+        # "glass", "lenses" -> "lens"); otherwise strip one, so the very common
+        # -se nouns pair with their plurals ("cases" -> "case", not "cas").
+        base = t[:-2]
+        return base if (base in _S_SINGULARS or base.endswith("ss")) else t[:-1]
+    if t.endswith(("ches", "shes", "xes", "zes")):
         return t[:-2]
     if t.endswith("s") and not t.endswith("ss"):
         return t[:-1]

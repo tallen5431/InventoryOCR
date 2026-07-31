@@ -232,12 +232,18 @@ def get_thumbnail_url(filename: str | None) -> str:
         return ""
     t = ASSET_THUMB_PATH / filename
     if not t.exists():
-        # Best effort on-demand recreation if the full image exists
+        # Best effort on-demand recreation if the full image exists. Guarded like
+        # its sibling get_preview_url: this runs inside the dashboard's main
+        # table/form callback, so one truncated or undecodable file in the photo
+        # folder used to blow up the whole page on every load.
         full = ASSET_IMAGE_PATH / filename
         if full.exists():
-            img = _ensure_pil(full.read_bytes())
-            img.thumbnail((320, 320))
-            _save_image_bytes(img, t)
+            try:
+                img = _ensure_pil(full.read_bytes())
+                img.thumbnail((320, 320))
+                _save_image_bytes(img, t)
+            except Exception:
+                pass
     return _asset_url("thumbnails", filename) if t.exists() else ""
 
 

@@ -188,7 +188,9 @@ def _norm_attachments(v: Any) -> List[Dict[str, Any]]:
             "filename": fn,
             "original_name": str(a.get("original_name") or fn).strip(),
             "kind": str(a.get("kind") or "other").strip(),
-            "size": int(a.get("size") or 0),
+            # Tolerant like every other coercion here: a stored "12 KB" used to
+            # raise, and the caller's except-clause then blanked the WHOLE record.
+            "size": _safe_qty(a.get("size")),
             "uploaded_at": str(a.get("uploaded_at") or "").strip(),
             "url": str(a.get("url") or "").strip(),
         })

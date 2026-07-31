@@ -229,12 +229,21 @@ def _make_product(source: str, name: str, price_text: str, url: str = "",
                   image_url: str = "", category: str = "",
                   tags: Optional[List[str]] = None,
                   specs: Optional[List[str]] = None, description: str = "",
-                  rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                  rows: Optional[List[Dict[str, Any]]] = None,
+                  qty_text: str = "") -> Dict[str, Any]:
     """Build one ranked-product entry: parse price, detect pack size, tie back to
-    inventory. Shared by the single-page and multi-listing paths."""
+    inventory. Shared by the single-page and multi-listing paths.
+
+    ``qty_text`` is where the pack size is *looked for*, separately from the
+    display ``name``: the "150PCS" often sits past the comma that the short
+    display name trims off, so detecting on the short name silently ranks a
+    bulk listing as a single unit. Inventory matching deliberately stays on the
+    short name — a full marketplace title floods the token-overlap score with
+    generic words.
+    """
     price_text = (price_text or "").strip()
     pv = _parse_price(price_text)
-    qty, unit = detect_quantity(name, specs, description)
+    qty, unit = detect_quantity(qty_text or name, specs, description)
     unit_price = round(pv / qty, 4) if (pv is not None and qty) else None
     mid, mname = match_inventory(name, tags, rows)
     return {
@@ -302,7 +311,8 @@ def analyze_htmls(files: List[Tuple[str, str]]) -> Dict[str, Any]:
             fname, name, price_text, url=d.get("product_url", ""),
             image_url=d.get("image_url", ""), category=d.get("category", ""),
             tags=d.get("tags", []), specs=d.get("specifications", []),
-            description=d.get("what_it_is", ""), rows=rows))
+            description=d.get("what_it_is", ""), rows=rows,
+            qty_text=d.get("source_title") or name))
 
     ranked = _rank(products)
     best = next((p for p in ranked if p.get("best")), None)
