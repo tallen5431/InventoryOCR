@@ -223,7 +223,9 @@ def _build_rows(filtered):
     return out_rows
 
 def _apply_filters(items, search, filter_cat, filter_loc, filter_type=None, filter_bin=None):
-    filtered = data.search(search) if search else items
+    # search_rows filters the list we were handed; data.search would discard it
+    # and re-read + re-normalise the whole inventory file from disk.
+    filtered = data.search_rows(items, search) if search else items
     if filter_type:
         filtered = [r for r in filtered if (r.get("type") or "").strip() == filter_type]
     if filter_cat:
@@ -3519,6 +3521,21 @@ def register_callbacks(app):
             return (no_update,) * 5 + (True, "Nothing selected", "warning",
                                        "Toggle on at least one group to merge.")
 
+        # Pre-validate every requested name BEFORE touching anything.
+        # merge_group enforces the unique-name invariant by raising, and this
+        # runs as a loop after snapshot_inventory — so failing partway would
+        # leave a half-applied merge paired with a stale undo snapshot.
+        taken = {(r.get("name") or "").strip().lower(): int(r.get("id") or 0)
+                 for r in data.inventory()}
+        for primary_id, merge_ids, overrides in jobs:
+            nm = ((overrides or {}).get("name") or "").strip().lower()
+            owner = taken.get(nm)
+            if nm and owner is not None and owner != primary_id and owner not in merge_ids:
+                return (no_update,) * 5 + (
+                    True, "Name already used", "warning",
+                    f'Another item is already called "{(overrides or {})["name"]}" — '
+                    "pick a different name after merge.")
+
         data.snapshot_inventory()  # enable one-click undo
         groups = removed = 0
         for primary_id, merge_ids, overrides in jobs:
@@ -3535,12 +3552,13 @@ def register_callbacks(app):
     @app.callback(
         Output("dup-count-badge", "children"),
         Input("refresh-seq", "data"),
-        Input("url", "pathname"),
         prevent_initial_call=False,
     )
-    def dup_badge(_seq, _path):
+    def dup_badge(_seq):
         try:
-            n = len(data.find_duplicate_groups(level="balanced"))
+            # Memoized on the inventory file's identity: the underlying scan is
+            # pairwise (~10 s at 1000 items) and this fires on every refresh.
+            n = data.duplicate_group_count(level="balanced")
         except Exception:
             n = 0
         if not n:

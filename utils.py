@@ -125,8 +125,17 @@ def save_image(
 
     stamp = int(time.time() * 1000)
     stem = _slugify(base_name or f"item-{stamp}")
+    # Multi-photo uploads save every file with the same base_name in a tight
+    # loop, so two can land in the same millisecond — the second then silently
+    # overwrote the first and both item entries pointed at one image. Bump the
+    # stamp instead of adding a suffix: data._STAMP_RE parses the trailing
+    # 13-digit stamp to backfill created_at, so it has to stay last.
     filename = f"{stem}-{stamp}.{ext}"
     out_path = out_dir / filename
+    while out_path.exists():
+        stamp += 1
+        filename = f"{stem}-{stamp}.{ext}"
+        out_path = out_dir / filename
 
     _save_image_bytes(img, out_path)
 
@@ -181,9 +190,12 @@ def save_attachment(contents: str, original_name: str,
     ext = src.suffix.lower().lstrip(".")
     ext = re.sub(r"[^a-z0-9]+", "", ext)[:8]  # keep the extension, sanitised
     stamp = int(time.time() * 1000)
-    filename = f"{stem}-{stamp}.{ext}" if ext else f"{stem}-{stamp}"
-
     out_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{stem}-{stamp}.{ext}" if ext else f"{stem}-{stamp}"
+    while (out_dir / filename).exists():   # same-millisecond collision (see save_image)
+        stamp += 1
+        filename = f"{stem}-{stamp}.{ext}" if ext else f"{stem}-{stamp}"
+
     (out_dir / filename).write_bytes(raw)
 
     return {

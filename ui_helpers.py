@@ -187,10 +187,16 @@ def doc_viewer_body(filename: str, kind: str):
                                         "margin": "0 auto"})
     if kind in ("pdf", "html"):
         # Same-origin iframe: PDFs use the browser's built-in viewer; saved HTML
-        # pages render inline. Sandbox keeps a saved page's scripts from running.
-        sandbox = "" if kind == "pdf" else "allow-same-origin"
-        return html.Iframe(src=url, style={"width": "100%", "height": "78vh", "border": "none"},
-                           sandbox=sandbox)
+        style = {"width": "100%", "height": "78vh", "border": "none"}
+        if kind == "pdf":
+            # No sandbox attribute at all. sandbox="" is the MAXIMALLY
+            # restrictive value, not "off" — it denies scripts, so it disabled
+            # the browser's own script-based PDF viewer and the preview showed
+            # a blank frame or a download prompt.
+            return html.Iframe(src=url, style=style)
+        # A saved product page is untrusted third-party HTML; the sandbox is what
+        # stops its scripts running with this app's origin.
+        return html.Iframe(src=url, style=style, sandbox="allow-same-origin")
     return html.Div(
         [html.I(className="bi bi-info-circle me-2"),
          "No inline preview for this file type — use Download or Open in new tab."],

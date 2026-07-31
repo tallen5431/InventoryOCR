@@ -1067,11 +1067,18 @@ def register_operations_callbacks(app):
         prevent_initial_call=True,
     )
     def set_bom_qty(values, ids):
-        changed = False
+        # Read materials.json ONCE. This used to call od.get_material() per
+        # rendered input, and each of those re-reads and re-normalises the whole
+        # file — so every render of the batch list cost
+        # O(assigned materials x total materials) file parses.
+        # Keys go through _safe_id because component ids come back from the
+        # browser and may arrive as strings.
+        by_id = {od._safe_id(m.get("id")): m for m in od.materials()}
+        pending = []
         for v, i in zip(values or [], ids or []):
             if not isinstance(i, dict):
                 continue
-            m = od.get_material(i.get("index"))
+            m = by_id.get(od._safe_id(i.get("index")))
             if m is None:
                 continue
             try:
@@ -1080,10 +1087,11 @@ def register_operations_callbacks(app):
                 continue
             if newv < 0 or abs(newv - od.material_qty_per_unit(m)) < 1e-9:
                 continue  # unchanged (or a re-render echo) — don't rewrite or loop
-            od.update_material(i.get("index"), qty_per_unit=newv)
-            changed = True
-        if not changed:
+            pending.append((i.get("index"), newv))
+        if not pending:
             raise PreventUpdate
+        for mid, newv in pending:
+            od.update_material(mid, qty_per_unit=newv)
         return _token()
 
     # ---------------- Add materials to a batch -----------------------------

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import os
+import time
 import tempfile
 import threading
 import functools
@@ -882,6 +883,62 @@ def remove_item(item_id: int) -> Optional[Dict[str, Any]]:
     return removed
 
 
+# How recently a file must have been written to be treated as "still being
+# staged" rather than an orphan. Photos and attachments hit disk the instant
+# they are chosen, before the item exists, so a prune triggered from ANOTHER
+# surface (closing Quick Add / Batch Add, cancelling a different form) used to
+# delete what the user had just staged in the form they were still filling in.
+_PRUNE_GRACE_SECONDS = 30 * 60
+
+
+def _undo_referenced(images: bool) -> set:
+    """Filenames referenced by the pending undo snapshot, if there is one.
+
+    Undo restores deleted *records*, but it can't restore files. Without this,
+    an orphan prune between a delete and its Undo permanently unlinked the
+    photos and attachments, and Undo then reported success while restoring rows
+    that point at missing files.
+    """
+    out: set = set()
+    p = _undo_path()
+    try:
+        if not p.exists():
+            return out
+        rows = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return out
+    if not isinstance(rows, list):
+        return out
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        if images:
+            imgs = r.get("images", [])
+            if isinstance(imgs, str):
+                imgs = [imgs]
+            for fn in imgs or []:
+                if str(fn).strip():
+                    out.add(str(fn).strip())
+            old = str(r.get("image_filename") or "").strip()
+            if old:
+                out.add(old)
+        else:
+            atts = r.get("attachments")
+            if isinstance(atts, list):
+                for a in atts:
+                    if isinstance(a, dict) and str(a.get("filename") or "").strip():
+                        out.add(str(a["filename"]).strip())
+    return out
+
+
+def _is_prunable(f: Path) -> bool:
+    """True when ``f`` is old enough that nothing can still be staging it."""
+    try:
+        return f.stat().st_mtime <= time.time() - _PRUNE_GRACE_SECONDS
+    except OSError:
+        return False
+
+
 def prune_unreferenced_images() -> int:
     """Delete image/thumbnail files not referenced by any inventory item.
 
@@ -921,13 +978,14 @@ def prune_unreferenced_images() -> int:
     if mat_refs is None:
         return 0
     referenced |= mat_refs
+    referenced |= _undo_referenced(images=True)
 
     removed = 0
     for directory in (Path(ASSET_IMAGE_PATH), Path(ASSET_THUMB_PATH), Path(ASSET_PREVIEW_PATH)):
         if not directory.exists():
             continue
         for f in directory.iterdir():
-            if f.is_file() and f.name not in referenced:
+            if f.is_file() and f.name not in referenced and _is_prunable(f):
                 try:
                     f.unlink()
                     removed += 1
@@ -964,12 +1022,13 @@ def prune_unreferenced_documents() -> int:
     if mat_refs is None:
         return 0
     referenced |= mat_refs
+    referenced |= _undo_referenced(images=False)
 
     removed = 0
     directory = Path(ASSET_DOCS_PATH)
     if directory.exists():
         for f in directory.iterdir():
-            if f.is_file() and f.name not in referenced:
+            if f.is_file() and f.name not in referenced and _is_prunable(f):
                 try:
                     f.unlink()
                     removed += 1
@@ -1279,19 +1338,24 @@ def _haystack(r: Dict[str, Any]) -> str:
         str(r.get("purchase_date", "")),
     ]).lower()
 
-def search(q: str) -> List[Dict[str, Any]]:
+def search_rows(rows: List[Dict[str, Any]], q: str) -> List[Dict[str, Any]]:
+    """Filter ``rows`` by a free-text query, without touching the disk.
+
+    Split out from :func:`search` so a caller that already holds a normalised
+    row list (the dashboard, which has just built one) doesn't re-read and
+    re-normalise the whole inventory file to apply a search term.
+    """
     q = (q or "").strip().lower()
     if not q:
-        return inventory()
+        return rows
     # Match every whitespace-separated term (AND search) so "drill garage"
     # narrows instead of widening — better for "where did I put the X" lookups.
     terms = [t for t in q.split() if t]
-    out = []
-    for r in inventory():
-        hay = _haystack(r)
-        if all(t in hay for t in terms):
-            out.append(r)
-    return out
+    return [r for r in rows if all(t in _haystack(r) for t in terms)]
+
+
+def search(q: str) -> List[Dict[str, Any]]:
+    return search_rows(inventory(), q)
 
 # --------------------------------------------------------------------
 # Organization helpers (categories / locations / summaries)
@@ -2486,6 +2550,33 @@ def find_duplicate_groups(
     return plans
 
 
+# Cached duplicate-group COUNT, keyed on the inventory file's identity.
+#
+# The Merge-duplicates badge asks for this on every page load, every navigation
+# and every refresh-seq bump, and the scan behind it is pairwise: ~10 s at 1000
+# items, ~56 s at 1500. Only the count is cached — find_duplicate_groups returns
+# dicts holding live row objects, so handing a cached plan to a later caller
+# would alias them. st_mtime_ns (not st_mtime) so two writes in the same second
+# are never conflated.
+_dup_count_cache: tuple = (None, 0)
+
+
+@_synchronized
+def duplicate_group_count(level: str = "balanced") -> int:
+    """Number of duplicate groups currently detected, memoized on file identity."""
+    global _dup_count_cache
+    try:
+        st = Path(INVENTORY_JSON).stat()
+        key = (st.st_mtime_ns, st.st_size, level)
+    except OSError:
+        return 0
+    cached_key, cached_val = _dup_count_cache
+    if cached_key == key:
+        return cached_val
+    val = len(find_duplicate_groups(level=level))
+    _dup_count_cache = (key, val)
+    return val
+
 def merge_group(primary_id: int, merge_ids: List[int],
                 overrides: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Combine ``merge_ids`` into ``primary_id`` and delete the merged rows.
@@ -2505,6 +2596,17 @@ def merge_group(primary_id: int, merge_ids: List[int],
     merged = merge_preview(group, primary=primary)
     if overrides:
         merged.update(overrides)
+
+    # Same unique-by-name invariant add_item/update_item enforce. The merge
+    # modal's "Name after merge" field wrote straight through, and two items
+    # sharing a name are then mutually un-editable — every edit path rejects the
+    # clash. Checked BEFORE any write so a rejection can't leave a half-merge.
+    new_key = str(merged.get("name") or "").strip().lower()
+    if new_key:
+        merging = {int(primary_id), *ids}
+        if any(int(r.get("id") or 0) not in merging
+               and (r.get("name", "").strip().lower() == new_key) for r in rows):
+            raise ValueError("An item with this name already exists.")
 
     # Write the merged fields onto the primary row (keep its id), drop the rest.
     for k in ("name", "description", "category", "type", "location", "location_code", "qty",
