@@ -31,9 +31,19 @@ _ok = True
 
 
 def _check(name, cond):
+    """Record and print a check, then *fail the test* when it didn't hold.
+
+    The ``assert`` is load-bearing: pytest collects the ``test_*`` functions in
+    this file directly, so without it a failing check would only print "FAIL"
+    into pytest's captured (and, for a passing test, discarded) stdout and the
+    regression would ship under a green suite. ``main()`` below still catches
+    the AssertionError per function so the standalone run keeps printing the
+    full transcript instead of stopping at the first failure.
+    """
     global _ok
     print(("PASS" if cond else "FAIL"), "-", name)
     _ok = cond and _ok
+    assert cond, name
 
 
 # ---------------------------------------------------------------------------
@@ -284,25 +294,33 @@ def test_import_stages_attachment():
 
 
 def main():
-    test_type_classification()
-    test_type_normalised_on_load()
-    test_merge_size_guard()
-    test_merge_keeps_source_title()
-    test_pack_value_any_currency()
-    test_auto_organize_singular_plural()
-    test_short_name_thousands_comma()
-    test_short_name_brand_not_eaten()
-    test_extract_name_skips_bare_site_title()
-    test_isolate_specs_late_dimensions()
-    test_jsonld_image_list_of_objects()
-    test_amazon_price_skips_strikethrough()
-    test_invoice_order_vs_date()
-    test_invoice_total_due_zero()
-    test_bonus_pack_quantity()
-    test_text_relevance_specs_survive()
-    test_is_placeholder_name()
-    test_best_title_from_ocr()
-    test_import_stages_attachment()
+    # Each test is run in isolation so one failing check doesn't abort the run
+    # — the point of the print-every-check style is the full transcript.
+    for fn in (
+        test_type_classification,
+        test_type_normalised_on_load,
+        test_merge_size_guard,
+        test_merge_keeps_source_title,
+        test_pack_value_any_currency,
+        test_auto_organize_singular_plural,
+        test_short_name_thousands_comma,
+        test_short_name_brand_not_eaten,
+        test_extract_name_skips_bare_site_title,
+        test_isolate_specs_late_dimensions,
+        test_jsonld_image_list_of_objects,
+        test_amazon_price_skips_strikethrough,
+        test_invoice_order_vs_date,
+        test_invoice_total_due_zero,
+        test_bonus_pack_quantity,
+        test_text_relevance_specs_survive,
+        test_is_placeholder_name,
+        test_best_title_from_ocr,
+        test_import_stages_attachment,
+    ):
+        try:
+            fn()
+        except AssertionError:
+            pass  # _check already printed FAIL and cleared _ok
     print("\nRESULT:", "ALL PASS" if _ok else "FAILURES ABOVE")
     return 0 if _ok else 1
 

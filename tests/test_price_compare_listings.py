@@ -66,7 +66,6 @@ def main():
     prods = res["products"]
     _check("three comparable products", len(prods) == 3)
 
-    by_asin = {p["name"][:20]: p for p in prods}
     ten = next(p for p in prods if p["quantity"] == 10)
     five = next(p for p in prods if p["quantity"] == 5)
     one = next(p for p in prods if p["quantity"] == 1)
@@ -124,6 +123,16 @@ def main():
 
     print("\nRESULT:", "ALL PASS" if _ok else "SOME FAILED")
     return 0 if _ok else 1
+
+
+def test_main():
+    """Expose the standalone ``main()`` transcript to pytest.
+
+    Without this, pytest collects nothing from this file — every check lives
+    inside ``main()`` behind ``if __name__ == "__main__"`` — so a regression
+    here would pass a full `pytest tests/` run silently.
+    """
+    assert main() == 0
 
 
 if __name__ == "__main__":

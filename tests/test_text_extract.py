@@ -71,5 +71,15 @@ Capacity 5000mAh
     return 0 if _ok else 1
 
 
+def test_main():
+    """Expose the standalone ``main()`` transcript to pytest.
+
+    Without this, pytest collects nothing from this file — every check lives
+    inside ``main()`` behind ``if __name__ == "__main__"`` — so a regression
+    here would pass a full `pytest tests/` run silently.
+    """
+    assert main() == 0
+
+
 if __name__ == "__main__":
     sys.exit(main())

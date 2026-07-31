@@ -6,6 +6,7 @@ feeds many units, so no order needs re-entering per unit.
 
 Run: python3 tests/test_operations_bom.py
 """
+import atexit
 import os
 import sys
 import tempfile
@@ -23,6 +24,18 @@ config.BATCHES_JSON = _bat.name
 import operations_data as od
 od.MATERIALS_JSON = _mat.name
 od.BATCHES_JSON = _bat.name
+
+
+def _silent_unlink(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+# Clean up via atexit rather than only in the __main__ block: under pytest the
+# __main__ block never runs, so these temp files used to be leaked every run.
+atexit.register(lambda: [_silent_unlink(p) for p in (_mat.name, _bat.name)])
 
 _ok = True
 
@@ -93,13 +106,15 @@ def main():
     return 0 if _ok else 1
 
 
+def test_main():
+    """Expose the standalone ``main()`` transcript to pytest.
+
+    Without this, pytest collects nothing from this file — every check lives
+    inside ``main()`` behind ``if __name__ == "__main__"`` — so a regression
+    here would pass a full `pytest tests/` run silently.
+    """
+    assert main() == 0
+
+
 if __name__ == "__main__":
-    try:
-        code = main()
-    finally:
-        for f in (_mat.name, _bat.name):
-            try:
-                os.unlink(f)
-            except OSError:
-                pass
-    sys.exit(code)
+    sys.exit(main())   # temp files removed by the atexit hook above
