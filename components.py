@@ -2,42 +2,17 @@ from __future__ import annotations
 from dash import html, dcc, dash_table
 import dash_bootstrap_components as dbc
 from config import DATATABLE_PAGE_SIZE, TOAST_DURATION
-from ui_helpers import camera_upload
-
-
-def _kpi_card(icon, color, label, value_id):
-    return dbc.Col(
-        dbc.Card(
-            dbc.CardBody(
-                [
-                    html.Div(
-                        [
-                            html.I(className=f"bi {icon} me-2 {color}"),
-                            html.Span(label, className="kpi-sub"),
-                        ],
-                        className="d-flex align-items-center",
-                    ),
-                    html.Div(id=value_id, className=f"kpi-number mt-1 {color}"),
-                ]
-            ),
-            className="h-100 shadow-sm",
-        ),
-        xs=6,
-        sm=6,
-        md=3,
-        lg=3,
-        className="mb-3",
-    )
+from ui_helpers import kpi_card, camera_upload
 
 
 def kpi_bar():
     return dbc.Row(
         [
-            _kpi_card("bi-box-seam", "text-primary", "Total Items", "kpi-total"),
-            _kpi_card("bi-123", "text-success", "Total Quantity", "kpi-qty"),
-            _kpi_card("bi-exclamation-triangle-fill", "text-warning", "Needs Reorder", "kpi-low"),
-            _kpi_card("bi-tags-fill", "text-info", "Categories", "kpi-cat"),
-            _kpi_card("bi-cash-stack", "text-success", "Est. Value", "kpi-value"),
+            kpi_card("bi-box-seam", "text-primary", "Total Items", "kpi-total"),
+            kpi_card("bi-123", "text-success", "Total Quantity", "kpi-qty"),
+            kpi_card("bi-exclamation-triangle-fill", "text-warning", "Needs Reorder", "kpi-low"),
+            kpi_card("bi-tags-fill", "text-info", "Categories", "kpi-cat"),
+            kpi_card("bi-cash-stack", "text-success", "Est. Value", "kpi-value"),
         ],
         className="g-3 mb-2",
     )

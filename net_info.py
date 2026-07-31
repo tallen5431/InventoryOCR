@@ -9,7 +9,6 @@ your phone.
 Pure stdlib: parses ``ip``/``ipconfig`` where available, with socket fallbacks.
 """
 from __future__ import annotations
-import os
 import re
 import socket
 import subprocess

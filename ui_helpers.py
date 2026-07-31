@@ -11,19 +11,14 @@ allows a hand-edited negative), so they are intentionally not shared.
 """
 from __future__ import annotations
 
-import os
-
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 
 from utils import get_thumbnail_url
 
-# Asset URL base — mirrors utils/app so document links resolve behind a reverse
-# proxy that mounts the app under a prefix (e.g. /inventory).
-URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
-if URL_PREFIX and not URL_PREFIX.startswith("/"):
-    URL_PREFIX = "/" + URL_PREFIX
-ASSET_URL_BASE = f"{URL_PREFIX}/assets" if URL_PREFIX else "/assets"
+# Asset URL base — defined once in config so document links resolve behind a
+# reverse proxy that mounts the app under a prefix (e.g. /inventory).
+from config import ASSET_URL_BASE
 
 # Bootstrap icon per attachment kind (see utils.attachment_kind).
 ATTACH_ICON = {"image": "bi-file-image", "html": "bi-filetype-html",
@@ -224,3 +219,24 @@ def photo_gallery(images, remove_type, *, labels=True, empty_msg="No photos yet.
     if not items:
         return html.Div(empty_msg, className="text-muted small")
     return html.Div(items, className="image-gallery-grid")
+
+
+def kpi_card(icon, color, label, value_id):
+    """One KPI tile for the dashboard / Operations stat rows.
+
+    Shared so the two stat bars can't drift apart — this was defined twice,
+    identically apart from line wrapping.
+    """
+    return dbc.Col(
+        dbc.Card(
+            dbc.CardBody([
+                html.Div([
+                    html.I(className=f"bi {icon} me-2 {color}"),
+                    html.Span(label, className="kpi-sub"),
+                ], className="d-flex align-items-center"),
+                html.Div(id=value_id, className=f"kpi-number mt-1 {color}"),
+            ]),
+            className="h-100 shadow-sm",
+        ),
+        xs=6, sm=6, md=3, lg=3, className="mb-3",
+    )

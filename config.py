@@ -123,6 +123,18 @@ except Exception as e:
 # True when OCR is actually usable, so the UI can tell the user if it isn't.
 OCR_AVAILABLE = bool(_TESS_CMD) and pytesseract is not None
 
+# ---------- URL prefix ----------
+# Base path the app is served under behind a reverse proxy (e.g. /inventory);
+# empty means the site root. Defined here, once: five modules used to each
+# re-read and re-normalise the env var themselves, so any change to prefix
+# handling had to be made in five places or the app's routes and its generated
+# URLs would silently disagree.
+URL_PREFIX: str = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
+if URL_PREFIX and not URL_PREFIX.startswith("/"):
+    URL_PREFIX = "/" + URL_PREFIX
+ASSET_URL_BASE: str = f"{URL_PREFIX}/assets" if URL_PREFIX else "/assets"
+
+
 # ---------- UI / Theme ----------
 THEME_LIGHT = "https://cdn.jsdelivr.net/npm/bootswatch@5.3.3/dist/flatly/bootstrap.min.css"
 THEME_DARK = "https://cdn.jsdelivr.net/npm/bootswatch@5.3.3/dist/darkly/bootstrap.min.css"

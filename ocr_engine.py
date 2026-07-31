@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from typing import Dict, Any, Optional, List, Union
 from PIL import Image
 from image_processing import verify_and_normalize_image, preprocess_for_ocr, extract_ocr_text
@@ -70,6 +71,3 @@ def run_ocr_with_cache(
         "debug": {},
     }
 
-def clear_cache() -> None:
-    # Placeholder for parity with previous versions; no-op here.
-    return

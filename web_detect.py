@@ -35,15 +35,12 @@ No extra dependencies: stdlib urllib + Pillow (already used elsewhere).
 """
 from __future__ import annotations
 import os
-import io
 import json
-import base64
 import urllib.request
 import urllib.parse
 import urllib.error
 from typing import Dict, Any, List, Union, Optional
 
-from PIL import Image, ImageOps
 
 _DEFAULT_VISION_ENDPOINT = "https://vision.googleapis.com/v1/images:annotate"
 _DEFAULT_SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
@@ -100,31 +97,8 @@ def _opener():
 # Image helpers (shared)
 # ---------------------------------------------------------------------------
 
-def _to_bytes(image: Union[bytes, bytearray, str]) -> bytes:
-    """Accept raw bytes or a data URL / base64 string and return bytes."""
-    if isinstance(image, (bytes, bytearray)):
-        return bytes(image)
-    if isinstance(image, str):
-        s = image
-        if "," in s and s.strip().lower().startswith("data:"):
-            s = s.split(",", 1)[1]
-        return base64.b64decode(s)
-    raise TypeError(f"Unsupported image type: {type(image)}")
-
-
-def _downscale_to_b64(image_bytes: bytes, max_side: int = 1024, quality: int = 85) -> str:
-    """Downscale (web detection doesn't need full-res) and return base64 JPEG."""
-    img = Image.open(io.BytesIO(image_bytes))
-    try:
-        img = ImageOps.exif_transpose(img)
-    except Exception:
-        pass
-    if img.mode not in ("RGB", "L"):
-        img = img.convert("RGB")
-    img.thumbnail((max_side, max_side))
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=quality)
-    return base64.b64encode(buf.getvalue()).decode("ascii")
+# Image payload helpers are shared with vision_lookup — see utils.
+from utils import image_to_bytes as _to_bytes, downscale_to_b64 as _downscale_to_b64
 
 
 def _dedupe(seq: List[str], limit: int) -> List[str]:

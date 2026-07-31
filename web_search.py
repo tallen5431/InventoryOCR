@@ -25,9 +25,7 @@ from urllib.parse import quote, quote_plus
 
 # URL prefix this app is mounted under (mirrors app.py / utils.py logic) so the
 # public image URL we hand to Google matches the route that actually serves it.
-_URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
-if _URL_PREFIX and not _URL_PREFIX.startswith("/"):
-    _URL_PREFIX = "/" + _URL_PREFIX
+from config import URL_PREFIX as _URL_PREFIX
 
 
 def public_base() -> str:

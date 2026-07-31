@@ -20,9 +20,7 @@ from ui_helpers import (
 )
 from config import ASSET_IMAGE_PATH, OCR_TEXT_MAX_CHARS
 
-URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
-if URL_PREFIX and not URL_PREFIX.startswith("/"):
-    URL_PREFIX = "/" + URL_PREFIX
+from config import URL_PREFIX
 
 # How much of the description to show inline before truncating (full text + the
 # extracted specs live in the row's hover tooltip).
@@ -1670,35 +1668,16 @@ def register_callbacks(app):
         return tips
 
     def _render_gallery(img_list):
-        """Thumbnails for the current photo set, each with a remove (×) button."""
-        from dash import html as h
-        items = []
-        for i, img_filename in enumerate(img_list or []):
-            thumb_url = get_thumbnail_url(img_filename)
-            if not thumb_url:
-                continue
-            items.append(
-                h.Div(
-                    [
-                        h.Img(src=thumb_url, className="gallery-thumb"),
-                        h.Button(
-                            "×",
-                            id={"type": "delete-image", "index": i},
-                            className="btn btn-sm btn-danger delete-img-btn",
-                            title="Remove photo",
-                            n_clicks=0,
-                        ),
-                        h.Div(f"Photo {i + 1}", className="text-muted small text-center"),
-                    ],
-                    className="gallery-item",
-                )
-            )
-        if not items:
-            return h.Div(
-                "No photos yet. Take a photo or choose files — add as many as you like.",
-                className="text-muted small",
-            )
-        return h.Div(items, className="image-gallery-grid")
+        """Thumbnails for the current photo set, each with a remove (×) button.
+
+        Thin wrapper over the shared ui_helpers.photo_gallery — this used to be a
+        line-for-line reimplementation of it, in the module that already imports
+        from ui_helpers.
+        """
+        return photo_gallery(
+            img_list, "delete-image",
+            empty_msg="No photos yet. Take a photo or choose files — add as many as you like.",
+        )
 
     # ---------- Image gallery display ----------
     # Each capture/selection is saved and appended immediately, so repeated camera

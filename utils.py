@@ -1,11 +1,11 @@
 from __future__ import annotations
-import os, base64, io, re, time
+import base64, io, re, time
 from pathlib import Path
 from typing import Dict, Any, Optional
 from PIL import Image, ImageOps
 from config import (
     ASSET_IMAGE_PATH, ASSET_THUMB_PATH, ASSET_DOCS_PATH, ASSET_PREVIEW_PATH,
-    PREVIEW_MAX_EDGE, PREVIEW_QUALITY,
+    PREVIEW_MAX_EDGE, PREVIEW_QUALITY, ASSET_URL_BASE,
 )
 
 # --------------------------------------------------------------------
@@ -21,14 +21,8 @@ from config import (
 # When running locally without a prefix, this cleanly falls back to:
 #   /assets/images/<file>, etc.
 # --------------------------------------------------------------------
-URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
-if URL_PREFIX and not URL_PREFIX.startswith("/"):
-    URL_PREFIX = "/" + URL_PREFIX
-
-if URL_PREFIX:
-    ASSET_URL_BASE = f"{URL_PREFIX}/assets"
-else:
-    ASSET_URL_BASE = "/assets"
+# ASSET_URL_BASE is defined once in config (alongside URL_PREFIX) so the app's
+# routes and the URLs generated here can never drift apart.
 
 
 def _decode_upload(contents: str) -> tuple[bytes, str]:
@@ -271,22 +265,34 @@ def get_preview_url(filename: str | None) -> str:
     return _asset_url("previews", filename) if p.exists() else get_image_url(filename)
 
 
-def get_all_thumbnail_urls(filenames: list[str] | None) -> list[str]:
-    """Get thumbnail URLs for a list of filenames."""
-    if not filenames:
-        return []
-    return [get_thumbnail_url(f) for f in filenames if f]
+# --------------------------------------------------------------------
+# Image payload helpers, shared by the lookup clients
+# --------------------------------------------------------------------
+# Used by both vision_lookup (Ollama) and web_detect (SerpApi / Google Vision).
+# They lived as byte-identical copies in each of those modules.
+
+def image_to_bytes(image) -> bytes:
+    """Accept raw bytes or a data URL / base64 string and return bytes."""
+    if isinstance(image, (bytes, bytearray)):
+        return bytes(image)
+    if isinstance(image, str):
+        s = image
+        if "," in s and s.strip().lower().startswith("data:"):
+            s = s.split(",", 1)[1]
+        return base64.b64decode(s)
+    raise TypeError(f"Unsupported image type: {type(image)}")
 
 
-def get_all_image_urls(filenames: list[str] | None) -> list[str]:
-    """Get full-size image URLs for a list of filenames."""
-    if not filenames:
-        return []
-    return [get_image_url(f) for f in filenames if f]
-
-
-def get_all_preview_urls(filenames: list[str] | None) -> list[str]:
-    """Get preview URLs for a list of filenames."""
-    if not filenames:
-        return []
-    return [get_preview_url(f) for f in filenames if f]
+def downscale_to_b64(image_bytes: bytes, max_side: int = 1024, quality: int = 85) -> str:
+    """Downscale (a lookup doesn't need full-res) and return base64 JPEG."""
+    img = Image.open(io.BytesIO(image_bytes))
+    try:
+        img = ImageOps.exif_transpose(img)
+    except Exception:
+        pass
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    img.thumbnail((max_side, max_side))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    return base64.b64encode(buf.getvalue()).decode("ascii")

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 # Cap the number of detected fields so a pathological page can't bloat the row.
 _MAX_FIELDS = 40

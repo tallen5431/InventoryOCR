@@ -12,13 +12,11 @@ from dash.exceptions import PreventUpdate
 # Data layer
 import data
 
-# OCR engine (prefer cache wrapper if available)
-try:
-    from ocr_engine import run_ocr_with_cache as _run_ocr_base  # type: ignore
-    HAVE_CACHE = True
-except Exception:
-    from ocr_engine import run_ocr as _run_ocr_base  # type: ignore
-    HAVE_CACHE = False
+# OCR engine. (The old try/except fallback here imported ocr_engine.run_ocr,
+# which has never existed, so the except branch could only ever raise — and the
+# HAVE_CACHE flag it set was a constant True driving a "Cache:on" readout for a
+# wrapper that caches nothing.)
+from ocr_engine import run_ocr_with_cache as _run_ocr_base
 
 
 def _decode_data_url_to_bytes(contents: str) -> bytes:
@@ -419,8 +417,9 @@ def register_ocr_lab_callbacks(app):
             res = _run_ocr_base(io.BytesIO(img_b), **kw)
             text = (res.get("text") or "").strip()
             conf = res.get("mean_conf", 0.0)
-            roi_count = res.get("roi_count", 0)
-            meta = f"Confidence: {conf:.1f} — ROIs: {roi_count} — Cache:{'on' if HAVE_CACHE else 'off'}"
+            # ROI count and cache state used to be reported here; both were
+            # hard-coded constants, not measurements. Elapsed time is real.
+            meta = f"Confidence: {conf:.1f} — {time.perf_counter() - t0:.2f}s"
             return text, meta, html.Div(["OCR complete. ", html.Code(meta)]), "text"
         except Exception:
             return "", "", html.Pre("OCR error:\n" + traceback.format_exc()), no_update
@@ -453,8 +452,7 @@ def register_ocr_lab_callbacks(app):
             res = _run_ocr_base(io.BytesIO(img_b), **kw)
             text = (res.get("text") or "").strip()
             conf = res.get("mean_conf", 0.0)
-            roi_count = res.get("roi_count", 0)
-            meta = f"(Auto) Conf: {conf:.1f} — ROIs: {roi_count} — Cache:{'on' if HAVE_CACHE else 'off'}"
+            meta = f"(Auto) Conf: {conf:.1f}"
             return text, meta, html.Div(["Auto OCR complete. ", html.Code(meta)])
         except Exception:
             return no_update, no_update, html.Pre("Auto OCR error:\n" + traceback.format_exc())

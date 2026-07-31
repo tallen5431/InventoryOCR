@@ -14,39 +14,20 @@ from dash import dash_table, dcc, html
 import dash_bootstrap_components as dbc
 
 from config import DATATABLE_PAGE_SIZE
-from ui_helpers import camera_upload
+from ui_helpers import kpi_card, camera_upload
 
 
 # --------------------------------------------------------------------
 # KPI bar
 # --------------------------------------------------------------------
 
-def _kpi_card(icon, color, label, value_id):
-    return dbc.Col(
-        dbc.Card(
-            dbc.CardBody(
-                [
-                    html.Div(
-                        [html.I(className=f"bi {icon} me-2 {color}"),
-                         html.Span(label, className="kpi-sub")],
-                        className="d-flex align-items-center",
-                    ),
-                    html.Div(id=value_id, className=f"kpi-number mt-1 {color}"),
-                ]
-            ),
-            className="h-100 shadow-sm",
-        ),
-        xs=6, sm=6, md=3, lg=3, className="mb-3",
-    )
-
-
 def _op_kpi_bar():
     return dbc.Row(
         [
-            _kpi_card("bi-boxes", "text-primary", "Materials", "op-kpi-materials"),
-            _kpi_card("bi-cash-stack", "text-success", "Total Spend", "op-kpi-spend"),
-            _kpi_card("bi-collection", "text-info", "Batches", "op-kpi-batches"),
-            _kpi_card("bi-cash-coin", "text-warning", "Avg Cost / Unit", "op-kpi-perunit"),
+            kpi_card("bi-boxes", "text-primary", "Materials", "op-kpi-materials"),
+            kpi_card("bi-cash-stack", "text-success", "Total Spend", "op-kpi-spend"),
+            kpi_card("bi-collection", "text-info", "Batches", "op-kpi-batches"),
+            kpi_card("bi-cash-coin", "text-warning", "Avg Cost / Unit", "op-kpi-perunit"),
         ],
         className="g-3 mb-2",
     )

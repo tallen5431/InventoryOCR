@@ -30,7 +30,6 @@ from components import (
     kpi_bar,
     breakdown_card,
     filter_card,
-    search_box,
     dashboard_toolbar,
     action_toast,
     identify_modal,
@@ -59,9 +58,7 @@ BOOTSTRAP_ICONS = "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/boot
 # Base URL prefix when served behind a reverse proxy (e.g. /inventory).
 # Set URL_PREFIX="" (empty) to serve the app at the site root — this is how the
 # HTTP_Server manager runs it, accessed directly at http://<host>:<port>/.
-URL_PREFIX = os.getenv("URL_PREFIX", "/inventory").strip().rstrip("/")
-if URL_PREFIX and not URL_PREFIX.startswith("/"):
-    URL_PREFIX = "/" + URL_PREFIX
+from config import URL_PREFIX
 # Dash requires pathname prefixes to start and end with "/". At the site root
 # that means a bare "/", otherwise "<prefix>/".
 PATHNAME_PREFIX = (URL_PREFIX + "/") if URL_PREFIX else "/"
@@ -112,8 +109,6 @@ def get_external_url(host: str, port: int, url_prefix: str) -> tuple[str, list[s
     Automatically determine the correct external URL(s) for accessing the application.
     Returns (primary_url, list_of_additional_urls)
     """
-    urls = []
-
     # 1. Check for PUBLIC_BASE environment variable (highest priority)
     public_base = os.environ.get("PUBLIC_BASE", "").rstrip("/")
     if public_base:
