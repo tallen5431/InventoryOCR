@@ -190,8 +190,19 @@ def _earliest_created(items: List[Dict[str, Any]]) -> str:
 
 def _safe_str(v: Any) -> str:
     """Coerce any stored value to a trimmed string, tolerating a JSON number/bool
-    where a string was expected (hand-edited files) instead of raising."""
-    return str(v or "").strip()
+    where a string was expected (hand-edited files) instead of raising.
+
+    ``str(v or "")`` contradicted that docstring: it blanked a stored ``0`` /
+    ``0.0`` / ``False`` instead of converting them, and it had silently drifted
+    from operations_data._safe_str, which does convert. (The sibling _safe_qty
+    pair diverges on purpose — materials clamp to >= 0, inventory allows a
+    hand-edited negative — and that stays as it is.)
+    """
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v.strip()
+    return str(v).strip()
 
 
 def _safe_qty(v: Any) -> int:
