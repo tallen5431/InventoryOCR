@@ -733,6 +733,12 @@ def add_photo_items(filenames: List[str], prefix: str = "Item") -> List[Dict[str
                 pass
     taken = {(r.get("name", "").strip().lower()) for r in rows}
     next_id = _next_id(rows)
+    # Allocate label codes from the same monotonic counter add_item uses. This
+    # builds rows directly rather than calling add_item, so without this the
+    # whole Batch Add path produced items with no code — unlabellable until the
+    # next restart ran ensure_item_codes(). One high-water read for the batch,
+    # then a single persist at the end (add_photo_items holds the write lock).
+    next_code = _code_high_water(rows)
     created: List[Dict[str, Any]] = []
     for fn in filenames or []:
         fn = (fn or "").strip()
@@ -769,12 +775,16 @@ def add_photo_items(filenames: List[str], prefix: str = "Item") -> List[Dict[str
             "purchase_date": "",
             "price_paid": "",
             "seller": "",
+            "code": str(next_code + 1).zfill(CODE_WIDTH),
+            "alt_codes": [],
         }
+        next_code += 1
         row["type"] = _classify_type(row)
         rows.append(row)
         created.append(row)
         next_id += 1
     if created:
+        _set_code_high_water(next_code)
         _save(rows)
     return created
 

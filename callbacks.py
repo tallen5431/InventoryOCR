@@ -1993,7 +1993,10 @@ def register_callbacks(app):
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow([
-            "id", "name", "type", "category", "location", "bin", "qty", "reorder_at",
+            # "code" is the label printed on the item's QR sticker — the
+            # identifier a person actually reads off a shelf, so it belongs in
+            # an export next to the internal id.
+            "id", "code", "name", "type", "category", "location", "bin", "qty", "reorder_at",
             "added", "description",
             "specifications", "estimated_value", "dimensions", "tags",
             "product_url", "ocr_text", "images",
@@ -2006,6 +2009,7 @@ def register_callbacks(app):
             atts = r.get("attachments") or []
             writer.writerow([
                 r.get("id"),
+                r.get("code", ""),
                 r.get("name", ""),
                 r.get("type", ""),
                 r.get("category", ""),

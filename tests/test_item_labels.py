@@ -100,6 +100,24 @@ def main():
         _check("backfill numbers in creation order (oldest first)",
                got == {"Older": "0001", "Newer": "0002"})
 
+        # ---- Every creation path must assign a code ----------------------
+        # add_photo_items (Batch Add) builds rows directly instead of calling
+        # add_item, so it needs its own allocation — it originally produced
+        # code-less, unlabellable items until the next restart.
+        _reset(d)
+        first = data.add_item("Typed In", "", 1, [], "")
+        batch = data.add_photo_items(["p1.jpg", "p2.jpg", "p3.jpg"])
+        _check("batch-added photos all get a code",
+               all(r.get("code") for r in batch))
+        every = [r["code"] for r in data.inventory()]
+        _check("batch codes don't collide with each other or existing items",
+               len(set(every)) == len(every) == 4)
+        _check("batch allocation continues from the counter",
+               sorted(r["code"] for r in batch) == ["0002", "0003", "0004"])
+        nxt = data.add_item("Typed In Later", "", 1, [], "")
+        _check("a later add_item doesn't reuse a batch code",
+               nxt["code"] not in [r["code"] for r in batch] + [first["code"]])
+
         # ---- A merge must not orphan the absorbed item's printed label ----
         # Merging duplicates is part of the documented workflow, so a QR already
         # stuck on the absorbed item has to keep resolving.
