@@ -519,7 +519,7 @@ def search_box():
             dbc.InputGroupText(html.I(className="bi bi-search")),
             dbc.Input(
                 id="search-bar",
-                placeholder="Search name, type, category, bin, notes…",
+                placeholder="Search name, code, type, category, bin, notes…",
                 debounce=True,
             ),
         ]
@@ -557,6 +557,15 @@ def dashboard_toolbar():
                     [html.I(className="bi bi-images me-1"), "Batch"],
                     id="open-batch-add", color="info", outline=True, n_clicks=0, className="w-100",
                     title="Drop a set of photos — each becomes its own item with a generic name",
+                ),
+                xs=12, sm="auto",
+            ),
+            dbc.Col(
+                dbc.Button(
+                    [html.I(className="bi bi-qr-code me-1"), "Labels"],
+                    id="open-qr-labels", color="info", outline=True, n_clicks=0,
+                    className="w-100",
+                    title="Print QR labels — scan one with your phone to see where the item goes back",
                 ),
                 xs=12, sm="auto",
             ),
@@ -691,6 +700,10 @@ def inventory_table():
     columns = [
         {"name": "Photo", "id": "image", "presentation": "markdown"},
         {"name": "Name", "id": "name"},
+        # The short code printed on the item's QR label — searchable and
+        # sortable, so typing a code you read off a scuffed label finds the item
+        # even when the QR itself won't scan.
+        {"name": "Code", "id": "code", "hideable": True},
         {"name": "Qty", "id": "qty", "type": "numeric"},
         {"name": "Reorder at", "id": "reorder_at", "type": "numeric", "hideable": True},
         {"name": "Added", "id": "added", "hideable": True},
@@ -1648,5 +1661,84 @@ def detail_panel():
                 centered=True,
                 backdrop="static",
             ),
+        ]
+    )
+
+
+def qr_labels_modal():
+    """Pick a set of items, preview their QR labels, and print them.
+
+    The base-URL picker is the important control here, not decoration: a printed
+    label is permanent, so it has to encode an address that will still resolve
+    in a year. item_labels ranks the options by durability and defaults to the
+    best one; the note under the dropdown says what each choice costs.
+    """
+    return html.Div(
+        [
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(dbc.ModalTitle(
+                        [html.I(className="bi bi-qr-code me-2"), "Print QR labels"])),
+                    dbc.ModalBody(
+                        [
+                            html.P(
+                                "Stick a label on the item or its bag. Scanning it opens a page "
+                                "showing exactly which bin it goes back in.",
+                                className="text-muted small",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Which items", size="sm"),
+                                            dbc.Select(
+                                                id="qr-scope",
+                                                options=[
+                                                    {"label": "Selected rows", "value": "selected"},
+                                                    {"label": "Everything matching the current filters",
+                                                     "value": "filtered"},
+                                                ],
+                                                value="selected",
+                                            ),
+                                        ], xs=12, md=4,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("QR points at", size="sm"),
+                                            dbc.Select(id="qr-base", options=[], value=None),
+                                            html.Div(id="qr-base-note", className="text-muted small mt-1"),
+                                        ], xs=12, md=5,
+                                    ),
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Per row", size="sm"),
+                                            dbc.Select(
+                                                id="qr-columns",
+                                                options=[{"label": str(n), "value": str(n)}
+                                                         for n in (2, 3, 4, 5)],
+                                                value="3",
+                                            ),
+                                        ], xs=6, md=3,
+                                    ),
+                                ], className="g-2 mb-3",
+                            ),
+                            html.Div(id="qr-labels-status", className="small mb-2"),
+                            dcc.Loading(html.Div(id="qr-labels-preview"), type="default"),
+                        ]
+                    ),
+                    dbc.ModalFooter(
+                        [
+                            html.Div(id="qr-labels-count", className="me-auto text-muted small"),
+                            dbc.Button([html.I(className="bi bi-printer me-1"), "Print"],
+                                       id="qr-labels-print", color="primary", n_clicks=0),
+                            dbc.Button("Close", id="qr-labels-close", color="secondary",
+                                       outline=True, n_clicks=0, className="ms-2"),
+                        ]
+                    ),
+                ],
+                id="qr-labels-modal", is_open=False, size="xl", scrollable=True,
+            ),
+            # Sink for the clientside window.print() call (see callbacks_labels).
+            html.Div(id="qr-print-sink", style={"display": "none"}),
         ]
     )

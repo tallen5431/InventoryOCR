@@ -18,6 +18,7 @@ from config import (
 )
 from flask import send_from_directory, request, Response
 import authz
+import data
 from version_info import VERSION_INFO, version_label, version_tooltip
 from ui_helpers import doc_viewer_modal, doc_viewer_body, doc_url
 
@@ -40,18 +41,22 @@ from components import (
     bins_modal,
     duplicates_modal,
     connect_modal,
+    qr_labels_modal,
 )
 
 # Page layouts
 from components_ocr_lab import ocr_lab_layout
 from components_price_compare import price_compare_layout
 from components_operations import operations_layout
+from components_scan import scan_layout
 
 # Callback registrars
 from callbacks import register_callbacks
 from callbacks_ocr_lab import register_ocr_lab_callbacks
 from callbacks_price_compare import register_price_compare_callbacks
 from callbacks_operations import register_operations_callbacks
+from callbacks_scan import register_scan_callbacks
+from callbacks_labels import register_label_callbacks
 
 BOOTSTRAP_ICONS = "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
 
@@ -465,6 +470,9 @@ app.layout = html.Div(
         ),
         navbar,
         connect_modal(),
+        # Label printing is reachable from the dashboard toolbar but lives in the
+        # shell so the print stylesheet has one predictable place to target.
+        qr_labels_modal(),
         # Global in-app document previewer (opened from any attachment list, on
         # any page — dashboard or Operations).
         doc_viewer_modal(),
@@ -485,7 +493,8 @@ app.layout = html.Div(
 
 # Important: let Dash see all components/IDs across pages
 app.validation_layout = html.Div([dashboard_layout(), ocr_lab_layout(),
-                                  price_compare_layout(), operations_layout()])
+                                  price_compare_layout(), operations_layout(),
+                                  scan_layout()])
 
 # ---------- Router ----------
 @app.callback(Output("page-content", "children"), Input("url", "pathname"), prevent_initial_call=False)
@@ -498,6 +507,11 @@ def display_page(pathname):
             return price_compare_layout()
         if key == "/operations":
             return operations_layout()
+        # Scanned QR label: /i/<code>. Kept short because the whole URL goes
+        # inside the QR, and fewer characters means a coarser, more forgiving
+        # code at the same printed size.
+        if key.startswith("/i/"):
+            return scan_layout(key[3:])
         return dashboard_layout()
     except Exception:
         # Always record it server-side; only show the traceback to the browser
@@ -599,10 +613,21 @@ def _diag(_, path):
         return "diag-error"
 
 # ---------- Register feature callbacks ----------
+# Give every item a QR label code, assigning them to any that predate the
+# feature. One pass at startup; a no-op once every item has one.
+try:
+    _new_codes = data.ensure_item_codes()
+    if _new_codes:
+        print(f"[Config] Assigned QR label codes to {_new_codes} item(s)")
+except Exception as _e:
+    print("[Config] Warning: could not assign item label codes:", _e)
+
 register_callbacks(app)
 register_ocr_lab_callbacks(app)
 register_price_compare_callbacks(app)
 register_operations_callbacks(app)
+register_scan_callbacks(app)
+register_label_callbacks(app)
 
 if __name__ == "__main__":
     from waitress import serve

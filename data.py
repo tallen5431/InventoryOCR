@@ -266,6 +266,7 @@ def _min_record(rid: Optional[int], r: Dict[str, Any]) -> Dict[str, Any]:
         "product_url": "", "tags": [], "source_title": "",
         "attachments": [], "order_number": "", "purchase_date": "",
         "price_paid": "", "seller": "", "created_at": "",
+        "code": _norm_code(r.get("code")), "alt_codes": [],
     }
 
 
@@ -358,6 +359,16 @@ def inventory() -> List[Dict[str, Any]]:
                 # Raw marketplace title kept when the display name was condensed, so
                 # the original stays searchable without cluttering the name/tags.
                 "source_title": _safe_str(r.get("source_title")),
+                # Short, human-typeable label code (see _next_code / ensure_item_codes).
+                # Distinct from ``id``: ids are max+1 and so get REUSED after the
+                # highest item is deleted, which would silently repoint a printed
+                # label at a different thing. Codes are never reused.
+                "code": _norm_code(r.get("code")),
+                # Codes of items merged INTO this one. Kept so labels printed
+                # before a merge still resolve (see merge_group / item_by_code).
+                "alt_codes": [c for c in
+                              (_norm_code(x) for x in (r.get("alt_codes") or []))
+                              if c],
                 # Attached documents (invoices, saved product pages, receipts, …) and
                 # the purchase details read off them. All optional / free-text.
                 "attachments": _norm_attachments(r.get("attachments")),
@@ -690,6 +701,7 @@ def add_item(
         "purchase_date": (purchase_date or "").strip(),
         "price_paid": (price_paid or "").strip(),
         "seller": (seller or "").strip(),
+        "code": _next_code(rows),
     }
     # Use the given Type, else auto-classify so new items are grouped on entry.
     row["type"] = (item_type or "").strip() or _classify_type(row)
@@ -1334,6 +1346,7 @@ def _haystack(r: Dict[str, Any]) -> str:
         str(r.get("type", "")),
         str(r.get("location", "")),
         str(r.get("location_code", "")),
+        str(r.get("code", "")),
         str(r.get("ocr_text", "")),
         # Detected fields (UPC/EAN, brand, model, measurements) are high-signal
         # exact-match search anchors — kept searchable, unlike raw ocr_raw.
@@ -1367,6 +1380,115 @@ def search_rows(rows: List[Dict[str, Any]], q: str) -> List[Dict[str, Any]]:
 
 def search(q: str) -> List[Dict[str, Any]]:
     return search_rows(inventory(), q)
+
+# --------------------------------------------------------------------
+# Item label codes (for printed QR tags)
+# --------------------------------------------------------------------
+# A short, human-typeable identifier printed on an item's QR label, e.g. 0042.
+#
+# Deliberately NOT the ``id``: _next_id is max+1, so deleting the highest item
+# frees its id for the next one added. A printed label is permanent, so a reused
+# identifier would silently point at a different object — the one failure this
+# whole feature cannot have. Codes come from a monotonic counter that only ever
+# goes up, and a code is never reissued even after its item is deleted.
+#
+# Four digits is the display width, not a limit: item 12345 simply prints as
+# 12345. Zero-padding keeps short codes visually consistent and sortable.
+CODE_WIDTH = 4
+CODE_SEQ_FILE = Path(INVENTORY_JSON).parent / "item_codes.json"
+
+
+def _norm_code(v: Any) -> str:
+    """Normalise a stored or typed code to its canonical form, or "".
+
+    Accepts what a person would actually type or say: "#42", " 42 ", "0042".
+    """
+    s = str(v if v is not None else "").strip().lstrip("#").strip()
+    if not s.isdigit():
+        return ""
+    n = int(s)
+    return str(n).zfill(CODE_WIDTH) if n > 0 else ""
+
+
+def _code_high_water(rows: Optional[List[Dict[str, Any]]] = None) -> int:
+    """Highest code ever issued: the counter file, floored by what's in use.
+
+    The floor matters — if the counter file is lost or restored from an older
+    backup, falling back to max-in-use keeps us from reissuing a code that is
+    currently on a printed label.
+    """
+    stored = 0
+    try:
+        raw = json.loads(CODE_SEQ_FILE.read_text(encoding="utf-8"))
+        stored = int(raw.get("last", 0))
+    except Exception:
+        stored = 0
+    in_use = 0
+    for r in (rows if rows is not None else []):
+        try:
+            for raw in [r.get("code")] + list(r.get("alt_codes") or []):
+                c = _norm_code(raw)
+                if c:
+                    in_use = max(in_use, int(c))
+        except Exception:
+            pass
+    return max(stored, in_use)
+
+
+def _set_code_high_water(n: int) -> None:
+    try:
+        atomic_write_text(CODE_SEQ_FILE, json.dumps({"last": int(n)}, indent=2))
+    except Exception:
+        # Losing the counter is recoverable (see _code_high_water's floor), so a
+        # read-only data dir must not break saving an item.
+        pass
+
+
+def _next_code(rows: List[Dict[str, Any]]) -> str:
+    """Allocate the next unused code and persist the counter."""
+    n = _code_high_water(rows) + 1
+    _set_code_high_water(n)
+    return str(n).zfill(CODE_WIDTH)
+
+
+@_synchronized
+def ensure_item_codes() -> int:
+    """Give every item a code, assigning them to any that lack one.
+
+    Called once at startup so an inventory built before this feature existed
+    gets codes in a single pass. Returns how many were newly assigned. Items are
+    numbered in creation order, so the oldest item gets the lowest code.
+    """
+    rows = _load()
+    missing = [r for r in rows if isinstance(r, dict) and not _norm_code(r.get("code"))]
+    if not missing:
+        return 0
+    n = _code_high_water([r for r in rows if isinstance(r, dict)])
+    missing.sort(key=lambda r: (str(r.get("created_at") or ""), int(r.get("id") or 0)))
+    for r in missing:
+        n += 1
+        r["code"] = str(n).zfill(CODE_WIDTH)
+    _set_code_high_water(n)
+    _save(rows)
+    return len(missing)
+
+
+def item_by_code(code: Any) -> Optional[Dict[str, Any]]:
+    """Look up one item by its label code. Returns None when nothing matches."""
+    want = _norm_code(code)
+    if not want:
+        return None
+    rows = inventory()
+    for r in rows:
+        if r.get("code") == want:
+            return r
+    # Then labels printed for an item that has since been merged into this one.
+    # Checked second so a live code can never be shadowed by a stale alias.
+    for r in rows:
+        if want in (r.get("alt_codes") or []):
+            return r
+    return None
+
 
 # --------------------------------------------------------------------
 # Organization helpers (categories / locations / summaries)
@@ -2626,6 +2748,20 @@ def merge_group(primary_id: int, merge_ids: List[int],
               "dimensions", "product_url", "source_title", "tags", "created_at",
               "attachments", "order_number", "purchase_date", "price_paid", "seller"):
         primary[k] = merged.get(k, primary.get(k))
+
+    # Inherit the absorbed items' label codes as aliases. Merging duplicates is
+    # a documented part of the workflow, and without this every QR already stuck
+    # on the absorbed items would 404 the moment they were merged away. The
+    # survivor's own code stays primary — that's what new labels print.
+    aliases = list(primary.get("alt_codes") or [])
+    for r in group:
+        if r is primary:
+            continue
+        for c in [r.get("code")] + list(r.get("alt_codes") or []):
+            c = _norm_code(c)
+            if c and c != primary.get("code") and c not in aliases:
+                aliases.append(c)
+    primary["alt_codes"] = aliases
 
     kept = [r for r in rows if int(r.get("id")) not in ids]
     _save(kept)

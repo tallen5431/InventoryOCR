@@ -65,6 +65,10 @@ def main():
         "ocr-lab": A.ocr_lab_layout(),
         "price-compare": A.price_compare_layout(),
         "operations": A.operations_layout(),
+        # The not-found variant: enough to catch duplicate ids in the shared
+        # chrome. The populated variant needs a real item, so its ids are picked
+        # up by the source scan below instead.
+        "scan": A.scan_layout(),
         "shell": A.app.layout,
     }
 
@@ -112,7 +116,8 @@ def main():
         for cid in [getattr(out, "component_id", None)]
         if isinstance(cid, str) and cid and cid not in all_ids
     )
-    print(f"      ({len(dynamic)} output id(s) built at runtime, not in a static layout)")
+    print(f"      ({len(dynamic)} output id(s) built at runtime, not in a static layout: "
+          f"{', '.join(dynamic) if dynamic else 'none'})")
 
     print("\nRESULT:", "ALL PASS" if _ok else "SOME FAILED")
     return 0 if _ok else 1

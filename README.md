@@ -87,6 +87,11 @@ to find something or restock.
   many), ranks the best deal, and can **track prices over time** across repeat
   runs. If a listing matches something you own, one click **writes the best unit
   price + link back** onto that item.
+- 🏷️ **QR labels** — every item gets a short **ID** (`0042`) and a printable
+  **QR code**. Stick one on the item or its bag; scanning it with your phone
+  opens a page that says, in large type, **which bin it goes back in** — plus
+  ±1 buttons for the count and a "moved it" box. Print a sheet of labels for
+  the rows you tick, or for everything matching your current filters.
 - 🧺 **Storage system** — set up your storage in a **simple row editor** (no
   syntax): each container — any box, drawer, tote, bag or shelf — is a row with a
   **Name** and, optionally, the **bags** inside it. Click **Add container** for
@@ -425,6 +430,36 @@ A good workflow for a big scan‑in:
 > to combine anything entered twice, then **Smart Organize** once at the end to
 > bin everything.
 
+## QR labels — scan an item to see where it goes back
+
+The hardest part of an inventory isn't putting things *in*, it's putting them
+*back*. Every item carries a short ID (`0042`) and a QR code that encodes it.
+
+1. Tick the rows you want (or leave the scope on **Everything matching the
+   current filters**) and press **🏷️ Labels** in the toolbar.
+2. Check the **QR points at** address — see the warning below — and press
+   **Print**. You get a grid of ~1‑inch labels, each with the QR, the item name
+   and its ID. Stick them on the items, bags, or bin fronts.
+3. Later, point your phone's camera at a label. It opens a page showing the
+   **bin and bag** the item belongs in, its photo and count, with **−/+**
+   buttons if you're using some up and a **Change location** box if it now
+   lives somewhere else.
+
+The ID is also searchable, so if a label gets scuffed you can just type `0042`
+into the search box.
+
+> ⚠️ **Which address to print.** A label is permanent; the URL inside it has to
+> keep resolving. The picker defaults to the most durable address available —
+> `PUBLIC_BASE` → Tailscale Funnel → your Tailscale IP → your LAN IP — and warns
+> you when you pick a LAN address, because a router reboot or a new DHCP lease
+> silently kills **every label you already printed**. If you run Tailscale, use
+> the Tailscale address: it keeps working from anywhere and never changes.
+
+**IDs are never reused.** Deleting an item does not free its ID for the next
+one, so a label can never quietly start pointing at a different object. Merging
+duplicates is safe too: the surviving item inherits the merged-away IDs, so
+labels printed before the merge still scan to the right place.
+
 ## Clean up duplicates
 
 When you scan fast, the same item lands in the list more than once — sometimes
@@ -463,6 +498,10 @@ badge with the number of likely duplicate groups whenever some are detected.
 - Your storage containers (for **Fit to my bins**) are stored in
   `containers.json`.
 - **Price Compare** history is stored in `price_compare.json`.
+- The QR label ID counter is stored in `item_codes.json`. It only ever counts
+  up — that is what guarantees a printed label is never reissued to a different
+  item. (Lose the file and the app resumes from the highest ID in use, so
+  existing labels stay safe.)
 - Photos, previews and thumbnails are saved under `userdata/images/`,
   `userdata/previews/` and `userdata/thumbnails/`.
 - Attached documents (invoices, saved product pages, receipts, manuals) are
@@ -501,6 +540,9 @@ This app ships as a bundled card in
 | `invoice_parse.py` | Read order # · date · total · seller from receipt/order text (OCR'd image or HTML) |
 | `price_compare.py` | Price‑per‑unit comparison across saved listings + price‑over‑time history |
 | `net_info.py` | Enumerates reachable URLs (LAN / Tailscale) + QR codes for the Connect panel |
+| `item_labels.py` | QR label URLs + the durability ranking of addresses to print |
+| `components_scan.py` / `callbacks_scan.py` | The page a phone lands on after scanning a label |
+| `callbacks_labels.py` | The "Print QR labels" sheet |
 | `utils.py` | Image saving, thumbnails, asset URLs |
 | `image_processing.py` / `ocr_engine.py` | OCR preprocessing & extraction |
 | `components_ocr_lab.py` / `callbacks_ocr_lab.py` | OCR Lab page |

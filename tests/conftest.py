@@ -40,6 +40,7 @@ def _isolated_data_stores(tmp_path_factory):
     targets = [
         (data, "INVENTORY_JSON", tmp / "inventory.json"),
         (data, "CONTAINERS_FILE", tmp / "containers.json"),
+        (data, "CODE_SEQ_FILE", tmp / "item_codes.json"),
         (config, "MATERIALS_JSON", tmp / "materials.json"),
         (config, "BATCHES_JSON", tmp / "batches.json"),
         (operations_data, "MATERIALS_JSON", tmp / "materials.json"),

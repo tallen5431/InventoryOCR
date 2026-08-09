@@ -1869,6 +1869,23 @@ def register_callbacks(app):
 
         raise PreventUpdate
 
+
+    # ---------- Deep link: /?q=<text> seeds the search box ----------
+    # How the scan page's "Open full item" button works: it links to
+    # /?q=<code>, and because the code is part of the search haystack that lands
+    # on exactly one row. Also makes any search shareable as a URL.
+    @app.callback(
+        Output("search-bar", "value"),
+        Input("url", "search"),
+        prevent_initial_call=False,
+    )
+    def seed_search_from_url(query):
+        from urllib.parse import parse_qs
+        q = (parse_qs((query or "").lstrip("?")).get("q") or [""])[0].strip()
+        if not q:
+            raise PreventUpdate
+        return q
+
     # ---------- Full image modal ----------
     @app.callback(
         Output("image-modal", "is_open"),
