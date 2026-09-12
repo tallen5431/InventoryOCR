@@ -41,8 +41,18 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-import cv2
-import numpy as np
+try:
+    import cv2
+    import numpy as np
+except ImportError as _e:                                       # pragma: no cover
+    import sys as _sys
+    _sys.exit(
+        f"error: {_e.name} isn't available to this Python.\n\n"
+        "This needs the same interpreter the app runs on, which has opencv and\n"
+        "numpy installed. Use the project's virtualenv:\n\n"
+        "    Linux/macOS:  .venv/bin/python tools/visual_spike.py ...\n"
+        "    Windows:      .venv\\Scripts\\python.exe tools\\visual_spike.py ...\n\n"
+        "If there's no .venv yet, run ./Start.sh (or Start.bat) once to create it.")
 
 EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
